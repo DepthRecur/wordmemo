@@ -359,3 +359,44 @@ export interface ProviderSpec {
 - GUI 里的四个页面没有逐个点击（等价性：IPC 处理器调的就是上面这些函数）；如需补一次纯点击验证，按 HANDOFF §5.2 走。
 
 **下一步**：P1（接 OpenAI / Gemini / GLM + 设置页四张卡片 + `settings.ai` 深合并 + `secrets.v2` 多 Key），步骤见 [HANDOFF.md](HANDOFF.md) §5 与本文 §8 P1、§9.1。
+
+### 2026-11-18　P1：四家供应商 + 设置页四张卡片
+
+**范围**：只动 P1 必需的 9 个源文件（`shared/types`、`ai/providers`、`settings`、`ai/client`、`ai/import`、`ipc`、`preload`、`SettingsPage`、测试），没有顺手改别的模块。
+
+**配置与 Key**
+
+| 项 | 实现 |
+|---|---|
+| `Settings.ai` | `{ default: {provider, model?}, vision: {provider, model?} \| null, showCost, providers: { [id]: {baseUrl?, model?} } }`；`Settings.merge()` 里给 `ai` 补了深合并（`mergeAi()`），`vision` 的 `null` 与"缺省"分开处理 |
+| 老配置兼容 | 顶层 `model` / `baseUrl` 保留不动，DeepSeek 的模型与端点仍回落到它们——**不需要迁移 settings.json** |
+| Key 存储 | `secrets.bin`（单 Key）→ `secrets.v2.json`（`{version:2, providers:{...}}`，整份用 `safeStorage.encryptString`；临时文件 + `rename` 原子替换），旧的 `secrets.bin` 在首次读 Key 时自动迁移成 `providers.deepseek`，旧文件保留到用户点「清除全部」 |
+| `apiKeySet` | 语义改成「**默认角色那家**有没有 Key」，所以 `App.tsx` / `Notes.tsx` / `ImportPage.tsx` 里已有的禁用逻辑不用改 |
+
+**路由与降级**
+
+- `client.ts`：`resolveTarget(role)` → `{ spec, baseUrl, model }`；`role = 'default' | 'vision'`，vision 为 `null` 时跟随默认。`ocrImage()` 传 `role: 'vision'`（`import.ts` 只改了 1 行 + 一句文案）。
+- 每家按自己的 Key 取用（`getApiKey(spec.id)`）；没 Key、没填模型分别给不同的可读错误，且都不发请求。
+- **400 未知参数 → 去掉被点名的参数重试一次**：`thinking`（改 compat，不再发这个字段）、`response_format`、`temperature`、`image_url.detail`；两次都 400 才抛错。400 不再走外层重试（重试同一个坏请求没意义）。
+- 价格：`PRICES[provider][model]`，P1 只有 DeepSeek 有内置价；**其他家按 0 记**（不是错价，是不计价，P2 接 models.dev）。
+- 设置页的 `aiProviderInfo()` 只回 `{id,label,baseUrl,model,keySet,vision,unverified}`，**不含 Key**；`unverified` 来自 `providers.ts`（deepseek `false`，其余三家 `true`，等真机跑通再改，见 §9.1）。
+
+**设置页**：四张供应商卡片（名称 / 未验证徽标 / Key 状态 / 当前模型 / 「配置」展开：Key、模型、Base URL、「保存并测试」带延迟与模型回显、清除）+「AI 角色与预算」面板（默认模型、图片识别单独指定、每月预算、AI 校验、AI 判分、显示费用）。
+
+**验证（2026-11-18）**
+
+- `npx tsc --noEmit` → **0 错误**。
+- `npx vitest run` → **8 个文件 80 项全绿**（providers 15 / core 25 / ai-client 13 / drafts 10 / ai-db 5 / settings-secrets 5 / settings-ai 4 / phonetic 3）。新增覆盖：默认角色切 GLM 的端点与模型、vision 独立路由、没填模型不发请求、400 降级只重试一次、401/402 不重试、旧 `secrets.bin` 迁移与多 Key 并存、`ai` 深合并与 `apiKeySet` 跟随。
+- **真机（本机 `.data` 真库 + 真 DeepSeek Key）**：
+
+| 验收项 | 结果 |
+|---|---|
+| 旧 Key 迁移 | `secrets.v2.json` 生成，`secrets.bin` 仍在；解出的 Key 长度 35（DPAPI 正常） |
+| 四家状态 | deepseek `keySet:true / unverified:false`，其余 `keySet:false / unverified:true` |
+| 「保存并测试」DeepSeek | `ok:true`「连接成功，Key 可用」，**827 ms** |
+| 未配置家的测试 | GLM → 「还没有填写 API Key」，不报错不崩 |
+| 默认角色真实调用 | 走旧 `settings.model` 回落路径，真实返回 |
+| 应用启动 | `app-start` + 托盘检查正常（迁移后的真实 1.3 MB 库） |
+| 设置页渲染 | 隐藏窗口里加载构建产物、点进「设置」：四张卡片 + 角色区 + 「未验证」/「已配置」徽标都在，**console 无错误** |
+
+**留下的欠账（P2 / P3）**：`ai_cache` 唯一键仍是 `(kind, cache_key)`；非 DeepSeek 家不记金额；`ai_usage` 缺 `cost_source` / `priced_at`；模型仍手填（P2 接 `/models`）；`App.tsx:287` 与 `db/importDrafts.ts:338` 的「DeepSeek API Key」文案还没改（P3 统一中文化）；README 的供应商状态表还没加。

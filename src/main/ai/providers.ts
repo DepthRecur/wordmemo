@@ -4,7 +4,10 @@
  * 只放"数据"，不放请求逻辑——请求在 transport.ts 里统一处理。
  * 加一家供应商 = 在这里加一条，不需要改 transport。
  */
-export type ProviderId = 'deepseek' | 'openai' | 'gemini' | 'glm'
+import type { AiProviderId } from '@shared/types'
+
+/** 供应商 id 的唯一定义在 @shared/types（设置与 UI 也要用），这里只是别名 */
+export type ProviderId = AiProviderId
 
 export interface ReasoningCompat {
   /** thinking: `{ thinking: { type } }`；effort: `reasoning_effort: low|high` */
@@ -17,6 +20,11 @@ export interface ProviderSpec {
   label: string
   baseUrl: string
   paths: { chat: string; models: string }
+  /**
+   * 作者没有在真机上验证过这一家（没有该地区的账号/Key，见 PLAN-PROVIDERS §9.1）。
+   * 只影响 UI 徽标与文档状态表；等真实用户反馈跑通后改成 false。
+   */
+  unverified?: boolean
   capabilities: {
     /** 能否接收 image_url（base64 data URL） */
     vision: boolean
@@ -55,6 +63,8 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: 'openai',
     label: 'OpenAI',
     baseUrl: 'https://api.openai.com/v1',
+    // 作者没有 OpenAI 账号：请求形状按官方文档写，未真机验证
+    unverified: true,
     paths: { chat: '/chat/completions', models: '/models' },
     capabilities: { vision: true },
     compat: {
@@ -71,6 +81,8 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     label: 'Gemini',
     // 官方 OpenAI 兼容层；换 native 协议不在计划内
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    // 作者没有 Gemini 账号：兼容层是否接受 image_url / response_format 都没实测
+    unverified: true,
     paths: { chat: '/chat/completions', models: '/models' },
     capabilities: { vision: true },
     compat: {
@@ -87,6 +99,8 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: 'glm',
     label: '智谱 GLM',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    // 作者还没有 GLM 的免费额度 Key：形状照官方文档，未真机验证
+    unverified: true,
     paths: { chat: '/chat/completions', models: '/models' },
     capabilities: { vision: true },
     compat: {

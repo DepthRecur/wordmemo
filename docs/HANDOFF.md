@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0 已做完并验证**：传输层 + `client.ts` 已接线 + 缓存/用量带 `provider` 列，行为仍是「只用 DeepSeek、和以前完全一样」。下一步是 **P1：接 OpenAI / Gemini / GLM + 设置页四张卡片**。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0 + P1 已完成并验证**：四家都能配 Key、角色路由（默认/视觉）生效、设置页是四张卡片；剩下 P2（模型目录 + 价格自动化）与 P3（打磨）。
 
 ---
 
@@ -17,7 +17,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，6 个测试文件（64 项）必须全绿
+npm test             # vitest，8 个测试文件（80 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -65,61 +65,60 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 
 ```
 src/main/ai/
-  providers.ts     ← 四家的声明式描述（端点/compat/能力位），无 if(provider)
+  providers.ts     ← 四家的声明式描述（端点/compat/能力位/unverified），无 if(provider)
   transport.ts     ← buildChatBody / parseChatResponse / normalizeHttpError / requestChat
-  client.ts        ← 已接 transport：ACTIVE_PROVIDER = deepseek，价格表按 provider 分组
-  import.ts        ← 7 个调用点里的 OCR/结构化/校验/补搭配/音标
+  client.ts        ← 角色路由（default/vision）+ 按家取 Key + 400 降级重试 + 价格表
+  import.ts        ← 7 个调用点里的 OCR/结构化/校验/补搭配/音标（OCR 走 vision 角色）
   prompts.ts       ← 提示词，不动
+src/main/settings.ts ← settings.ai 深合并 + secrets.v2.json（多 Key，safeStorage 整份加密）
 src/main/db/
   schema.ts        ← 表结构（ai_cache / ai_usage 已有 provider 列）
   connection.ts    ← migrate()，含 addColumnIfMissing()；加列和迁移写在这里
   ai.ts            ← 缓存/用量/月度费用（读写都按 provider 分区）
   notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
 src/main/index.ts  ← 启动、托盘、提醒、备份；注意 22-26 行的 dev 数据目录逻辑
+src/renderer/src/pages/SettingsPage.tsx ← 四张供应商卡片 + AI 角色区
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 tests/
-  providers.test.ts  ← 15 项：传输层/供应商表/错误归一化
-  ai-client.test.ts  ← 6 项：client 接线（stub fetch，不联网）
-  ai-db.test.ts      ← 5 项：provider 列 + 老库迁移回填
+  providers.test.ts     ← 15 项：传输层/供应商表/错误归一化
+  ai-client.test.ts     ← 13 项：client 接线 + 角色路由 + 400 降级（stub fetch，不联网）
+  ai-db.test.ts         ← 5 项：provider 列 + 老库迁移回填
+  settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存
+  settings-ai.test.ts   ← 4 项：ai 深合并 + apiKeySet 跟随默认角色
   core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 10 / 3 项）
 docs/               ← 四份计划 + 调研 + 本文件
 ```
 
 ---
 
-## 5. 下一步：P1（四家供应商 + 设置页）
+## 5. 下一步：P2（模型目录与价格自动化）
 
-**P0 已完成并验证**（传输层 + `client.ts` 接线 + `provider` 列；typecheck 0 错误、`npm test` 6 文件 64 项全绿、DeepSeek 真机四项通过）。细节见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md) 的两条 2026-11-18 记录。
+**P0 + P1 已完成并验证**：四家都能配 Key、设置页四张卡片可用、角色路由（default/vision）生效、`secrets.v2` 多 Key。typecheck 0 错误、`npm test` 8 文件 80 项全绿、真机（迁移 + DeepSeek 测试 + 设置页渲染）通过。细节见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md) 的三条 2026-11-18 记录。
 
-### 5.1 P1 要做的四件事（按这个顺序）
+### 5.1 P2 要做的三件事（PLAN-PROVIDERS §8 P2）
 
-1. **`settings.ai` 深合并 + 多 Key**（`src/main/settings.ts`、`src/shared/types.ts`）
-   - `Settings.merge()` 现在是浅合并，`ai` 必须补深合并，否则老配置一升级就丢字段（PLAN-PROVIDERS §5）。
-   - `secrets.bin` → `secrets.v2.json`（整份 JSON 用 `safeStorage.encryptString`；临时文件 + rename 保证原子）；旧文件迁移成 `providers.deepseek`，旧文件保留到用户点「清除全部」。
-2. **角色路由**：把 `client.ts` 的 `ACTIVE_PROVIDER` 换成 `settings.ai.default` / `settings.ai.vision`；`testApiKey(provider)` 加参数，旧签名默认 `deepseek`。
-3. **接另外三家**：只改 `providers.ts` 的能力位与 `chat()` 的传参；`400` 未知参数用 `AiError.unknownParam` 去掉该参数重试一次；`image_url.detail` 按 `spec.compat.imageDetail` 发不发（`src/main/ai/import.ts:47`）。**不要**写 `if (provider === ...)`。
-4. **设置页四张卡片**（`src/renderer/src/pages/SettingsPage.tsx`）：Key 状态 / 模型（可搜索下拉 + 手填）/「保存并测试」/ 未验证徽标（OpenAI、Gemini）/ 本月费用一行。
+1. **`catalog.ts`**（新文件）：`GET {baseUrl}/models` 拉模型列表 + `ai_catalog(provider, model_id, json, etag, fetched_at)` 缓存；TTL 24h、启动 30 秒后与打开设置页时后台刷新、失败保留上次成功结果（语义抄 DSH 的 `listing-cache.ts`，MIT）。设置页的模型输入改成「可搜索下拉 + 永远允许手填」。
+2. **`pricing.ts`**（新文件）+ `scripts/gen-pricing.mjs`：models.dev 快照（构建时只裁 4 家，约 30 KB）+ 远程刷新（TTL 7 天）；**未知模型一律 `priced:false` + 「费用未知 · N tokens」，绝不回落到别家价格**（修掉 `client.ts` 现在按 deepseek-flash 兜底的 bug）。
+3. **`ai_usage` 补 `cost_source` / `priced_at`**（`provider`/`catalog`/`snapshot`/`none`），预算在有未定价调用时降级成 token 上限。
 
-### 5.2 验收（PLAN-PROVIDERS §8 P1 + §9.1）
+### 5.2 顺便要收的欠账
+
+- `ai_cache` 唯一键 `(kind, cache_key)` → `(provider, kind, cache_key)`（旧索引先 drop 再建，旧行已回填 `deepseek`）。
+- 非 DeepSeek 家现在按 0 记价（P2 用 models.dev 补上）。
+
+### 5.3 验收（PLAN-PROVIDERS §8 P2）
 
 ```powershell
 npm run typecheck   # 0 错误
 npm test            # 全绿（普通 PowerShell；沙箱内 vitest 会 spawn EPERM）
 ```
 
-- DeepSeek（有 Key）真机：设置页测试、导入、判分通过；GLM 申请到免费额度就一起测。
-- OpenAI / Gemini 没有 Key：用 `tests/fixtures/` 的录制样例跑请求构造与响应解析，UI 标「未验证」。
-- 某家 401 只让那张卡片变红，不影响别家。
+- 断网启动用快照并标注日期；`/models` 指向坏地址时保留旧列表；不在目录里的模型显示「费用未知」。
 
-### 5.3 完成后
+### 5.4 P3 的欠账（别丢）
 
-- 在 `docs/PLAN-PROVIDERS.md` §13 追加实现记录，`git commit -s -m "feat(ai): four providers + settings cards"`，再进 P2（目录与价格自动化）。
-
-### 5.4 P0 留下的欠账（P1/P2 一起收）
-
-- 唯一键仍是 `(kind, cache_key)` → P1 换成 `(provider, kind, cache_key)`（drop 再建）。
-- 未知模型仍按 `deepseek-flash` 的价格算钱（PLAN-NEXT §7 第 8 条）→ P2 改成 `priced:false` + 「费用未知」。
-- `ai_usage` 还缺 `cost_source` / `priced_at` → P2 加。
+- 错误中文化：`src/renderer/src/App.tsx:287`、`src/main/db/importDrafts.ts:338` 还写着「DeepSeek API Key」。
+- README 的供应商状态表（DeepSeek 已验证 / OpenAI·Gemini·GLM 未验证）；`scripts/ai-smoke.mjs`（4 调用点 × 4 家，没 Key 的自动 SKIP）。
 
 ---
 
@@ -190,14 +189,15 @@ npm test            # 全绿（普通 PowerShell；沙箱内 vitest 会 spawn EP
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度）
 
-当前状态：git 已 init（master），多供应商的 P0 已做完并验证（providers.ts +
-transport.ts + client.ts 接线 + ai_cache/ai_usage 的 provider 列；typecheck
-0 错误、npm test 6 文件 64 项全绿、DeepSeek 真机四项通过）。现在仍然只走
-DeepSeek，行为与以前一致。
+当前状态：git 已 init（master），多供应商 P0 + P1 已完成并验证：四家（DeepSeek /
+OpenAI / Gemini / GLM）都能配 Key，角色路由 default/vision，设置页四张卡片，
+secrets.v2 多 Key（旧 secrets.bin 自动迁移）。typecheck 0 错误、npm test 8 文件
+80 项全绿、真机（迁移 + DeepSeek 测试 + 设置页渲染）通过。
 
-下一步：按 HANDOFF §5 做 P1 —— settings.ai 深合并 + secrets.v2 多 Key + 角色路由
-+ 接 OpenAI/Gemini/GLM + 设置页四张卡片；验收 = typecheck 0 错误 + npm test 全绿 +
-DeepSeek（有 Key）真机 + OpenAI/Gemini 用夹具标「未验证」。做完在 PLAN-PROVIDERS
+下一步：按 HANDOFF §5 做 P2 —— catalog.ts（/models + 缓存 + TTL）、pricing.ts +
+scripts/gen-pricing.mjs（models.dev 快照 + 未知模型 priced:false）、ai_usage 补
+cost_source/priced_at、ai_cache 唯一键换成 (provider, kind, cache_key)。验收 =
+断网用快照 + 坏地址保留旧列表 + 未知模型显示「费用未知」。做完在 PLAN-PROVIDERS
 §13 记一笔并 commit（git commit -s）。
 ```
 

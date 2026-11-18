@@ -21,13 +21,14 @@ import { dashboardStats } from './db/stats'
 import { ingestFile } from './importers/ingest'
 import { fillPhoneticsForDraft, fillPhoneticsForDrafts, refreshNotePhonetics } from './importers/phonetics'
 import { judgeAnswer } from './judge'
-import { clearApiKey, getSettings, setApiKey, updateSettings } from './settings'
+import { clearAllApiKeys, clearApiKey, getSettings, setApiKey, updateSettings } from './settings'
 import { clearTtsCache, getTts, ttsCacheSize } from './media/tts'
 import { enrichNote } from './enrich'
 import { semanticSearch } from './search'
 import { lookupPhonetic } from './media/phonetic'
 import { getDb } from './db/connection'
-import { testApiKey } from './ai/client'
+import { testApiKey, aiProviderInfo } from './ai/client'
+import { isProviderId, type ProviderId } from './ai/providers'
 import { getDiagnostics } from './diagnostics'
 import {
   commitAllDrafts,
@@ -53,6 +54,11 @@ function dataDir(): string {
 /** 图片草稿缩略图缓存：文件按 sha 命名，内容不会变 */
 const thumbCache = new Map<string, string | null>()
 
+/** IPC 里来的 provider 一律当不可信字符串：不认识就退回 deepseek */
+function asProviderId(value: unknown): ProviderId {
+  return typeof value === 'string' && isProviderId(value) ? value : 'deepseek'
+}
+
 export function registerIpc(): void {
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:update', (_e, patch: SettingsPatch) => {
@@ -62,16 +68,23 @@ export function registerIpc(): void {
     }
     return next
   })
-  ipcMain.handle('settings:setApiKey', (_e, key: string) => {
-    const ok = setApiKey(key)
+  ipcMain.handle('settings:setApiKey', (_e, provider: string, key: string) => {
+    const ok = setApiKey(asProviderId(provider), typeof key === 'string' ? key : '')
     if (ok) updateSettings({})
     return ok
   })
-  ipcMain.handle('settings:clearApiKey', () => {
-    clearApiKey()
+  ipcMain.handle('settings:clearApiKey', (_e, provider?: string) => {
+    clearApiKey(asProviderId(provider))
     updateSettings({})
   })
-  ipcMain.handle('settings:testApiKey', (_e, key?: string) => testApiKey(key))
+  ipcMain.handle('settings:clearAllApiKeys', () => {
+    clearAllApiKeys()
+    updateSettings({})
+  })
+  ipcMain.handle('settings:testApiKey', (_e, provider?: string, key?: string) =>
+    testApiKey(asProviderId(provider), typeof key === 'string' ? key : undefined)
+  )
+  ipcMain.handle('settings:aiProviders', () => aiProviderInfo())
 
   ipcMain.handle('notes:list', (_e, query?: NoteQuery) => listNotes(query ?? {}))
   ipcMain.handle('notes:get', (_e, id: number) => getNote(id))

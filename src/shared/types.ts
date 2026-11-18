@@ -313,10 +313,39 @@ export interface DashboardStats {
   aiCallsMonth: number
 }
 
+export type AiProviderId = 'deepseek' | 'openai' | 'gemini' | 'glm'
+
+/**
+ * 角色 → 用哪家（PLAN-PROVIDERS §3.1）。
+ * `model` 留空就用该供应商卡片里配的模型；只有想给同一个角色单独挑模型时才填。
+ */
+export interface AiRoleConfig {
+  provider: AiProviderId
+  model?: string
+}
+
+/**
+ * 每个供应商自己的端点与模型。字段全空 = 用内置官方端点；
+ * DeepSeek 还会回落到旧的 `Settings.model` / `Settings.baseUrl`，老配置不用迁移。
+ */
+export interface AiProviderConfig {
+  baseUrl?: string
+  model?: string
+}
+
+export interface AiSettings {
+  default: AiRoleConfig
+  /** null = 图片识别跟随 default */
+  vision: AiRoleConfig | null
+  showCost: boolean
+  providers: Partial<Record<AiProviderId, AiProviderConfig>>
+}
+
 export interface Settings {
   apiKeySet: boolean
   model: string
   baseUrl: string
+  ai: AiSettings
   longTermRetention: number
   examRetention: number
   newPerDay: number
@@ -347,6 +376,21 @@ export interface AiTestResult {
   ok: boolean
   message: string
   model?: string
+  provider?: AiProviderId
+  latencyMs?: number
+}
+
+/** 设置页的供应商卡片：配置只读视图，不包含 Key 本身 */
+export interface AiProviderInfo {
+  id: AiProviderId
+  label: string
+  baseUrl: string
+  /** 实际会用的模型名（可能为空：还没填） */
+  model: string
+  keySet: boolean
+  vision: boolean
+  /** 作者没有真机验证过这一家（PLAN-PROVIDERS §9.1），UI 上要标「未验证」 */
+  unverified: boolean
 }
 
 export type IntegrityLevel = 'low' | 'medium' | 'high' | 'system' | 'unknown'
@@ -374,9 +418,14 @@ export interface WordmemoApi {
   settings: {
     get(): Promise<Settings>
     update(patch: SettingsPatch): Promise<Settings>
-    setApiKey(key: string): Promise<boolean>
-    clearApiKey(): Promise<void>
-    testApiKey(): Promise<AiTestResult>
+    /** 每家一把 Key；provider 省略 = deepseek（旧签名兼容） */
+    setApiKey(provider: AiProviderId | undefined, key: string): Promise<boolean>
+    clearApiKey(provider?: AiProviderId): Promise<void>
+    /** 清掉全部 Key（含旧的 secrets.bin） */
+    clearAllApiKeys(): Promise<void>
+    testApiKey(provider?: AiProviderId, key?: string): Promise<AiTestResult>
+    /** 设置页四张卡片的只读视图 */
+    aiProviders(): Promise<AiProviderInfo[]>
   }
   notes: {
     list(query?: NoteQuery): Promise<NoteSummary[]>
@@ -476,6 +525,12 @@ export const DEFAULT_SETTINGS: Settings = {
   apiKeySet: false,
   model: 'deepseek-flash',
   baseUrl: 'https://api.deepseek.com',
+  ai: {
+    default: { provider: 'deepseek' },
+    vision: null,
+    showCost: true,
+    providers: {}
+  },
   longTermRetention: 0.9,
   examRetention: 0.95,
   newPerDay: 20,

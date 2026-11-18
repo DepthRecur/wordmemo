@@ -15,9 +15,11 @@ const api: WordmemoApi = {
   settings: {
     get: () => ipcRenderer.invoke('settings:get'),
     update: (patch: SettingsPatch) => ipcRenderer.invoke('settings:update', patch),
-    setApiKey: (key: string) => ipcRenderer.invoke('settings:setApiKey', key),
-    clearApiKey: () => ipcRenderer.invoke('settings:clearApiKey'),
-    testApiKey: () => ipcRenderer.invoke('settings:testApiKey')
+    setApiKey: (provider, key) => ipcRenderer.invoke('settings:setApiKey', provider, key),
+    clearApiKey: (provider) => ipcRenderer.invoke('settings:clearApiKey', provider),
+    clearAllApiKeys: () => ipcRenderer.invoke('settings:clearAllApiKeys'),
+    testApiKey: (provider, key) => ipcRenderer.invoke('settings:testApiKey', provider, key),
+    aiProviders: () => ipcRenderer.invoke('settings:aiProviders')
   },
   notes: {
     list: (query?: NoteQuery) => ipcRenderer.invoke('notes:list', query),

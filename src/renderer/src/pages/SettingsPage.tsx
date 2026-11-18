@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, Database, FolderOpen, Power, Volume2 } from 'lucide-react'
-import type { BuildInfo, Settings } from '@shared/types'
+import type {
+  AiProviderConfig,
+  AiProviderId,
+  AiProviderInfo,
+  AiTestResult,
+  BuildInfo,
+  Settings
+} from '@shared/types'
 import { Badge, Button, Field, Toggle } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { formatBytes } from '../lib/utils'
@@ -17,6 +24,14 @@ const SOURCE_LABEL: Record<string, string> = {
   youdao: '有道词典',
   baidu: '百度翻译',
   freedict: 'Free Dictionary API'
+}
+
+/** Key 申请地址（只做提示，不预设任何账号信息） */
+const KEY_HINT: Record<string, string> = {
+  deepseek: '在 platform.deepseek.com 申请。只保存在本机。',
+  openai: '在 platform.openai.com 申请；大陆地区可能要走代理才能测试成功。',
+  gemini: '在 aistudio.google.com 申请；走官方 OpenAI 兼容层。',
+  glm: '在 open.bigmodel.cn 申请，国内可直连。'
 }
 
 function formatBuild(iso: string | null | undefined): string {
@@ -45,13 +60,25 @@ const INTEGRITY_LABEL: Record<string, string> = {
 
 export default function SettingsPage({ notify, settings, refreshSettings }: Props) {
   const [draft, setDraft] = useState<Settings>(settings)
-  const [apiKey, setApiKey] = useState('')
-  const [testing, setTesting] = useState(false)
-  const [testMsg, setTestMsg] = useState('')
   const [saving, setSaving] = useState(false)
   const [cache, setCache] = useState({ files: 0, bytes: 0 })
   const [version, setVersion] = useState('')
   const [build, setBuild] = useState<BuildInfo | null>(null)
+
+  // 四张供应商卡片：卡片数据只读，Key 只回显"已配置"
+  const [providers, setProviders] = useState<AiProviderInfo[]>([])
+  const [expanded, setExpanded] = useState<AiProviderId | null>(null)
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
+  const [busy, setBusy] = useState<Record<string, boolean>>({})
+  const [results, setResults] = useState<Record<string, AiTestResult | undefined>>({})
+
+  const loadProviders = async () => {
+    try {
+      setProviders(await window.api.settings.aiProviders())
+    } catch {
+      /* 读不到就当没有配置 */
+    }
+  }
 
   useEffect(() => {
     setDraft(settings)
@@ -61,10 +88,41 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     void window.api.tts.cacheSize().then(setCache)
     void window.api.system.appVersion().then(setVersion)
     void window.api.system.buildInfo().then(setBuild)
+    void loadProviders()
   }, [])
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setDraft((d) => ({ ...d, [key]: value }))
+  }
+
+  const providerCfg = (id: AiProviderId): AiProviderConfig => draft.ai.providers[id] ?? {}
+
+  const patchProvider = (id: AiProviderId, patch: AiProviderConfig) => {
+    setDraft((d) => ({
+      ...d,
+      ai: {
+        ...d.ai,
+        providers: { ...d.ai.providers, [id]: { ...(d.ai.providers[id] ?? {}), ...patch } }
+      }
+    }))
+  }
+
+  const setDefaultRole = (id: AiProviderId) => {
+    setDraft((d) => ({ ...d, ai: { ...d.ai, default: { ...d.ai.default, provider: id } } }))
+  }
+
+  const setVisionEnabled = (on: boolean) => {
+    setDraft((d) => ({
+      ...d,
+      ai: { ...d.ai, vision: on ? { provider: d.ai.vision?.provider ?? d.ai.default.provider } : null }
+    }))
+  }
+
+  const setVisionRole = (id: AiProviderId) => {
+    setDraft((d) => ({
+      ...d,
+      ai: { ...d.ai, vision: { provider: id, model: d.ai.vision?.model } }
+    }))
   }
 
   const save = async () => {
@@ -73,6 +131,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
       const s = await window.api.settings.update({
         model: draft.model,
         baseUrl: draft.baseUrl,
+        ai: draft.ai,
         longTermRetention: draft.longTermRetention,
         examRetention: draft.examRetention,
         newPerDay: draft.newPerDay,
@@ -100,29 +159,58 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     }
   }
 
-  const saveKey = async () => {
-    if (!apiKey.trim()) {
+  const saveProviderKey = async (p: AiProviderInfo) => {
+    const key = (keyDrafts[p.id] ?? '').trim()
+    if (!key) {
       notify('请先粘贴 API Key', 'err')
       return
     }
-    setTesting(true)
-    setTestMsg('')
+    setBusy((b) => ({ ...b, [p.id]: true }))
     try {
-      await window.api.settings.setApiKey(apiKey.trim())
-      const res = await window.api.settings.testApiKey()
-      setTestMsg(res.message)
+      const saved = await window.api.settings.setApiKey(p.id, key)
+      if (!saved) {
+        notify('Key 保存失败：数据目录不可写', 'err')
+        return
+      }
+      const res = await window.api.settings.testApiKey(p.id)
+      setResults((r) => ({ ...r, [p.id]: res }))
       if (res.ok) {
-        notify('API Key 已保存并验证通过', 'ok')
-        setApiKey('')
+        notify(`${p.label} 的 Key 已保存并验证通过`, 'ok')
+        setKeyDrafts((k) => ({ ...k, [p.id]: '' }))
         await refreshSettings()
+        await loadProviders()
       } else {
-        notify(res.message, 'err')
+        notify(`${p.label}：${res.message}`, 'err')
       }
     } catch (err) {
       notify(`验证失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
-      setTesting(false)
+      setBusy((b) => ({ ...b, [p.id]: false }))
     }
+  }
+
+  const clearProviderKey = async (p: AiProviderInfo) => {
+    await window.api.settings.clearApiKey(p.id)
+    setResults((r) => ({ ...r, [p.id]: undefined }))
+    await refreshSettings()
+    await loadProviders()
+    notify(`已清除 ${p.label} 的 Key`, 'ok')
+  }
+
+  const clearAllKeys = async () => {
+    if (!window.confirm('清除所有供应商的 API Key（含旧版 secrets.bin）？清除后 AI 功能需要重新配置。')) return
+    await window.api.settings.clearAllApiKeys()
+    setResults({})
+    await refreshSettings()
+    await loadProviders()
+    notify('已清除全部 API Key', 'ok')
+  }
+
+  const testResultText = (res: AiTestResult): string => {
+    const bits = [res.message]
+    if (res.model) bits.push(res.model)
+    if (typeof res.latencyMs === 'number') bits.push(`${res.latencyMs} ms`)
+    return bits.join(' · ')
   }
 
   const moveSource = (index: number, dir: -1 | 1) => {
@@ -173,54 +261,172 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
 
       <div className="page-scroll">
       <div className="grid grid-2" style={{ alignItems: 'start' }}>
-        <div className="panel">
+        <div className="panel" style={{ gridColumn: '1 / -1' }}>
           <div className="panel-title row">
-            <span>DeepSeek API</span>
-            <Badge tone={settings.apiKeySet ? 'green' : 'yellow'}>
-              {settings.apiKeySet ? '已配置' : '未配置'}
+            <span>AI 供应商</span>
+            <span style={{ flex: 1 }} />
+            <Badge tone={providers.some((p) => p.keySet) ? 'green' : 'yellow'}>
+              {providers.filter((p) => p.keySet).length} / {providers.length || 4} 家已配置
             </Badge>
+            <Button size="sm" variant="ghost" onClick={() => void clearAllKeys()}>
+              清除全部 Key
+            </Button>
           </div>
-          <div className="col">
-            <Field
-              label="API Key"
-              hint="只保存在本机，用 Windows DPAPI 加密；不会上传到任何第三方。key 在 platform.deepseek.com 申请。"
-            >
-              <input
-                className="input"
-                type="password"
-                placeholder={settings.apiKeySet ? '已保存，如需更换请重新粘贴' : 'sk-...'}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-            </Field>
-            <div className="row">
-              <Button variant="primary" size="sm" onClick={() => void saveKey()} disabled={testing}>
-                {testing ? '验证中…' : '保存并测试'}
-              </Button>
-              {settings.apiKeySet && (
-                <Button
-                  size="sm"
-                  variant="danger"
-                  onClick={async () => {
-                    await window.api.settings.clearApiKey()
-                    await refreshSettings()
-                    setTestMsg('')
-                    notify('已清除 API Key', 'ok')
+          <div className="hint" style={{ marginBottom: 8 }}>
+            Key 只保存在本机（Windows DPAPI 加密，secrets.v2.json），不会上传。「保存并测试」会发一条
+            「回复 ok」的极短请求；模型与 Base URL 改完要点右上角「保存设置」。
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            {providers.map((p) => {
+              const cfg = providerCfg(p.id)
+              const isOpen = expanded === p.id
+              const result = results[p.id]
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    border: '1px solid var(--line)',
+                    borderRadius: 8,
+                    padding: '8px 10px',
+                    background: 'var(--panel-2)'
                   }}
                 >
-                  清除
-                </Button>
-              )}
-              {testMsg && <span className="hint">{testMsg}</span>}
-            </div>
-            <div className="grid grid-2">
-              <Field label="模型">
-                <input className="input" value={draft.model} onChange={(e) => set('model', e.target.value)} />
+                  <div className="row">
+                    <span style={{ fontWeight: 600 }}>{p.label}</span>
+                    {p.unverified && (
+                      <Badge
+                        tone="yellow"
+                        title="作者没有该地区的账号/Key，参数按官方文档写；报错请把提示发出来"
+                      >
+                        未验证
+                      </Badge>
+                    )}
+                    <Badge tone={p.keySet ? 'green' : 'default'}>
+                      {p.keySet ? '已配置' : '未配置'}
+                    </Badge>
+                    <span className="muted tiny">{p.model || '未填模型'}</span>
+                    <span style={{ flex: 1 }} />
+                    <Button
+                      size="sm"
+                      variant={isOpen ? 'ghost' : 'default'}
+                      onClick={() => setExpanded(isOpen ? null : p.id)}
+                    >
+                      {isOpen ? '收起' : '配置'}
+                    </Button>
+                  </div>
+                  {isOpen && (
+                    <div className="col" style={{ marginTop: 8 }}>
+                      <Field label="API Key" hint={KEY_HINT[p.id] ?? '只保存在本机。'}>
+                        <input
+                          className="input"
+                          type="password"
+                          placeholder={p.keySet ? '已保存，如需更换请重新粘贴' : '粘贴该家的 API Key'}
+                          value={keyDrafts[p.id] ?? ''}
+                          onChange={(e) =>
+                            setKeyDrafts((k) => ({ ...k, [p.id]: e.target.value }))
+                          }
+                        />
+                      </Field>
+                      <div className="row">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          disabled={busy[p.id]}
+                          onClick={() => void saveProviderKey(p)}
+                        >
+                          {busy[p.id] ? '验证中…' : '保存并测试'}
+                        </Button>
+                        {p.keySet && (
+                          <Button size="sm" variant="danger" onClick={() => void clearProviderKey(p)}>
+                            清除
+                          </Button>
+                        )}
+                        {result && <span className="hint">{testResultText(result)}</span>}
+                      </div>
+                      <div className="grid grid-2">
+                        <Field
+                          label="模型"
+                          hint={
+                            p.id === 'deepseek'
+                              ? '默认 deepseek-flash'
+                              : '这家要自己填（如 gpt-4o-mini / gemini-2.0-flash）'
+                          }
+                        >
+                          <input
+                            className="input"
+                            value={cfg.model ?? ''}
+                            placeholder={p.id === 'deepseek' ? 'deepseek-flash' : '模型名'}
+                            onChange={(e) => patchProvider(p.id, { model: e.target.value })}
+                          />
+                        </Field>
+                        <Field label="Base URL" hint="留空 = 官方端点；只有代理/中转才需要改">
+                          <input
+                            className="input"
+                            value={cfg.baseUrl ?? ''}
+                            placeholder={p.baseUrl}
+                            onChange={(e) => patchProvider(p.id, { baseUrl: e.target.value })}
+                          />
+                        </Field>
+                      </div>
+                      <div className="hint">
+                        {p.vision
+                          ? '这家支持图片识别（视觉）'
+                          : '这家不支持图片识别，OCR 会落到默认那家'}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          <div className="hint" style={{ marginTop: 8 }}>
+            DeepSeek 已真机验证；OpenAI / Gemini / GLM 标「未验证」——参数按官方文档写，第一次用如果报错，
+            把提示发出来即可，改配置就能修，不用等发版。
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-title">AI 角色与预算</div>
+          <div className="col">
+            <Field label="默认模型" hint="导入、判分、音标、补搭配都走这家">
+              <select
+                className="select"
+                value={draft.ai.default.provider}
+                onChange={(e) => setDefaultRole(e.target.value as AiProviderId)}
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.model ? ` · ${p.model}` : '（未填模型）'}
+                    {p.unverified ? '（未验证）' : ''}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Toggle
+              checked={!!draft.ai.vision}
+              onChange={setVisionEnabled}
+              label="图片识别单独指定供应商"
+              hint="关闭时跟随默认模型；导入图片时会走这里选的这家。"
+            />
+            {draft.ai.vision && (
+              <Field label="图片识别用哪家">
+                <select
+                  className="select"
+                  value={draft.ai.vision.provider}
+                  onChange={(e) => setVisionRole(e.target.value as AiProviderId)}
+                >
+                  {providers
+                    .filter((p) => p.vision || p.id === draft.ai.vision?.provider)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                        {p.unverified ? '（未验证）' : ''}
+                      </option>
+                    ))}
+                </select>
               </Field>
-              <Field label="Base URL">
-                <input className="input" value={draft.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} />
-              </Field>
-            </div>
+            )}
             <Field label="每月 AI 预算（美元，0 表示不限）">
               <input
                 className="input"
@@ -242,6 +448,12 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
               onChange={(v) => set('aiJudge', v)}
               label="中文答案用 AI 判断语义"
               hint="能本地命中时不会调用 AI；关闭后不同表述需要你手动确认。"
+            />
+            <Toggle
+              checked={draft.ai.showCost}
+              onChange={(v) => setDraft((d) => ({ ...d, ai: { ...d.ai, showCost: v } }))}
+              label="显示 AI 费用估算"
+              hint="按内置价格估算（不是账单）；未知模型会显示「费用未知」。"
             />
           </div>
         </div>
