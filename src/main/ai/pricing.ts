@@ -89,6 +89,37 @@ export function priceFor(provider: AiProviderId, model: string): ModelPrice {
   return toPrice(snap, 'snapshot', SNAPSHOT.fetchedAt)
 }
 
+export interface KnownModelEntry {
+  /** models.dev 的公开名（可能为空） */
+  name: string | null
+  price: ModelPrice
+}
+
+/**
+ * 一家所有「我们认识」的模型（快照 ∪ 远程目录），带公开名与价格。
+ * 给模型下拉框用：/models 只回 id 的家（OpenAI / GLM）靠这里的 name 显示人话。
+ * 注意：这只用于**补名字/补价格**，下拉框的候选列表仍只来自 /models 目录。
+ */
+export function knownModels(provider: AiProviderId): Record<string, KnownModelEntry> {
+  const out: Record<string, KnownModelEntry> = {}
+  const snap = SNAPSHOT.providers[provider]?.models ?? {}
+  for (const [id, entry] of Object.entries(snap)) {
+    out[id] = {
+      name: typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : null,
+      price: toPrice(entry, 'snapshot', SNAPSHOT.fetchedAt)
+    }
+  }
+  const remote = readRemoteSafe(provider)
+  if (remote) {
+    const asOf = remote.fetchedAt.slice(0, 10)
+    for (const [id, entry] of Object.entries(remote.models)) {
+      const name = typeof entry.name === 'string' && entry.name.trim() ? entry.name.trim() : null
+      out[id] = { name: name ?? out[id]?.name ?? null, price: toPrice(entry, 'catalog', asOf) }
+    }
+  }
+  return out
+}
+
 /** 估算一次调用的金额（美元）；没价就是 0 */
 export function estimateCostUsd(
   price: ModelPrice,
@@ -151,7 +182,10 @@ export async function refreshPricing(force = false): Promise<PricingRefreshResul
         asOf: (last ?? SNAPSHOT.fetchedAt).slice(0, 10)
       }
     }
-    const all = (await res.json()) as Record<string, { models?: Record<string, { cost?: Record<string, number> }> }>
+    const all = (await res.json()) as Record<
+      string,
+      { models?: Record<string, { name?: string; cost?: Record<string, number> }> }
+    >
     const fetchedAt = new Date().toISOString()
     let count = 0
     for (const id of Object.keys(REMOTE_PROVIDERS) as AiProviderId[]) {
@@ -166,6 +200,8 @@ export async function refreshPricing(force = false): Promise<PricingRefreshResul
           input: cost.input,
           output: cost.output
         }
+        // 名字留着给「模型下拉框」用：API 只回 id 的家（OpenAI / GLM）靠它显示公开名
+        if (typeof model.name === 'string' && model.name.trim()) entry.name = model.name.trim()
         if (typeof cost.cache_read === 'number' && cost.cache_read > 0) entry.cacheRead = cost.cache_read
         models[modelId] = entry
         count++

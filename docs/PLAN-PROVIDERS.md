@@ -484,3 +484,28 @@ OpenAI / Gemini / 智谱 GLM   SKIP（无 Key）
 **验证**：typecheck 0；`npm test` 10 文件 95 项全绿；离屏截图逐个分区检查（6 个分区都只有对应面板可见、左栏 active 正确、无 console 错误），统计页/导入页文案已更新。
 
 > 截图验收的坑：离屏窗口默认会被 throttle，`capturePage()` 会返回**上一帧**，CSS transition 还会卡在中间态（看起来像两个分项同时高亮）。修法是 `webPreferences.backgroundThrottling: false` + 用 CDP `Page.captureScreenshot`，别用 `capturePage()`。
+
+### 2026-11-19　模型下拉框（公开名 + 可搜索）
+
+**问题**：`/models` 只回 id（`deepseek-flash`），公开名是 `DeepSeek-V4.1-Flash`；用户不知道该填哪个，手填又容易错。
+
+**数据（已经具备，不用新接口）**
+
+- `ai_catalog` 的 payload 里本来就存了 API 自报的 `name`（DeepSeek 会回 `DeepSeek-V4.1-Flash`，Gemini 回 `displayName`）；
+- OpenAI / GLM 的 `/models` 只有 id → 用 models.dev 的 `name` 补；这次让 `refreshPricing()` 把 `name` 也存进 `ai_pricing`（以前丢掉了），随包快照本来就有；
+- 合并优先级：**API 自报 → models.dev → id**，不硬编码任何名字映射。
+
+**交互**
+
+- `components/ModelPicker.tsx`：可搜索下拉，输入框本身就是值（**永远允许手填**，代理/新模型不受影响）；
+- 每行两行式：公开名（主）/ `id`（等宽小字）/ 右侧价格（`≈$x/M 入 · $y/M 出` 或「费用未知」）；
+- 搜索同时匹配公开名与 id；↑↓ / Enter / Esc；点击外部关闭；当前值不在目录里时提示「可以直接手填」；
+- 打开时高亮停在当前值上，避免手滑按 Enter 换模型。
+
+**边界（按用户要求）**
+
+- 候选**只来自 `/models`**：没 Key / 没拉过目录就是空列表，**不拿内置快照冒充**——免得用户选了一个其实调不了的模型；
+- 卡片标题与角色下拉都显示公开名（拿不到就退回 id）；
+- models.dev 只用于补名字和价格，不参与"能不能用"的判断。
+
+**验证**：typecheck 0；`npm test` **11 文件 101 项全绿**（新增 `ai-models` 6 项：API 名优先 / models.dev 回退 / 目录外模型费用未知 / 目录空则空列表 / 远程名字覆盖快照 / 刷新保留 name）；离屏截图确认下拉展开、搜索 `v4` 过滤、两行式条目不折行、console 无错误。

@@ -398,6 +398,18 @@ export interface AiPriceInfo {
   asOf: string | null
 }
 
+/** 设置页模型下拉框的一行：目录里的模型 + 公开名 + 价格 */
+export interface AiModelInfo {
+  /** 调用时真正要写给 API 的模型名（如 deepseek-flash） */
+  id: string
+  /** 公开名（API 自报 → models.dev → id），如 DeepSeek-V4.1-Flash */
+  name: string
+  priced: boolean
+  /** 美元 / 百万 token；priced=false 时为 null */
+  input: number | null
+  output: number | null
+}
+
 /** 设置页的供应商卡片：配置只读视图，不包含 Key 本身 */
 export interface AiProviderInfo {
   id: AiProviderId
@@ -409,8 +421,8 @@ export interface AiProviderInfo {
   vision: boolean
   /** 作者没有真机验证过这一家（PLAN-PROVIDERS §9.1），UI 上要标「未验证」 */
   unverified: boolean
-  /** /models 目录（可能为空：还没拉过） */
-  models: string[]
+  /** /models 目录里的模型（**只来自目录**，没拉过就是空——不拿内置快照冒充） */
+  models: AiModelInfo[]
   modelsFetchedAt: string | null
   /** 目录超过 TTL 或上次拉取失败 */
   stale: boolean

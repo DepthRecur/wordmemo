@@ -11,6 +11,7 @@ import type {
   Settings
 } from '@shared/types'
 import { Badge, Button, Field, Toggle } from '../components/UI'
+import { ModelPicker } from '../components/ModelPicker'
 import type { Navigate, Notify } from '../App'
 import { cls, formatBytes } from '../lib/utils'
 
@@ -136,6 +137,12 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
   }
 
   const providerCfg = (id: AiProviderId): AiProviderConfig => draft.ai.providers[id] ?? {}
+
+  /** 卡片上显示公开名（拿不到目录名就退回 id） */
+  const modelLabel = (p: AiProviderInfo): string => {
+    if (!p.model) return '未填模型'
+    return p.models.find((m) => m.id === p.model)?.name ?? p.model
+  }
 
   const patchProvider = (id: AiProviderId, patch: AiProviderConfig) => {
     setDraft((d) => ({
@@ -417,7 +424,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                     <Badge tone={p.keySet ? 'green' : 'default'}>
                       {p.keySet ? '已配置' : '未配置'}
                     </Badge>
-                    <span className="muted tiny">{p.model || '未填模型'}</span>
+                    <span className="muted tiny">{modelLabel(p)}</span>
                     <span style={{ flex: 1 }} />
                     <Button
                       size="sm"
@@ -466,24 +473,17 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                           label="模型"
                           hint={
                             p.models.length
-                              ? `目录里 ${p.models.length} 个，可直接输入过滤；也可以手填`
-                              : p.id === 'deepseek'
-                                ? '默认 deepseek-flash'
-                                : '这家要自己填（如 gpt-4o-mini / gemini-2.0-flash）'
+                              ? `目录里 ${p.models.length} 个；按名字或 id 搜索，也可以手填`
+                              : '还没有目录：配好 Key 后点「刷新目录」，或直接手填模型名'
                           }
                         >
-                          <input
-                            className="input"
-                            list={`wm-models-${p.id}`}
+                          <ModelPicker
                             value={cfg.model ?? ''}
-                            placeholder={p.id === 'deepseek' ? 'deepseek-flash' : '模型名'}
-                            onChange={(e) => patchProvider(p.id, { model: e.target.value })}
+                            models={p.models}
+                            placeholder={p.id === 'deepseek' ? 'deepseek-flash' : '搜索或手填模型名'}
+                            emptyHint="目录里还没有模型：配好 Key 后点上面的「刷新目录」，或直接手填。"
+                            onChange={(id) => patchProvider(p.id, { model: id })}
                           />
-                          <datalist id={`wm-models-${p.id}`}>
-                            {p.models.map((id) => (
-                              <option key={id} value={id} />
-                            ))}
-                          </datalist>
                         </Field>
                         <Field label="Base URL" hint="留空 = 官方端点；只有代理/中转才需要改">
                           <input
@@ -531,7 +531,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                 {providers.map((p) => (
                   <option key={p.id} value={p.id}>
                     {p.label}
-                    {p.model ? ` · ${p.model}` : '（未填模型）'}
+                    {p.model ? ` · ${modelLabel(p)}` : '（未填模型）'}
                     {p.unverified ? '（未验证）' : ''}
                   </option>
                 ))}

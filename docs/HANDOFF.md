@@ -17,7 +17,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，10 个测试文件（95 项）必须全绿
+npm test             # vitest，11 个测试文件（101 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -83,6 +83,7 @@ src/main/db/
   notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
 src/main/index.ts  ← 启动、托盘、提醒、备份；30 秒后后台刷新目录/价格
 src/renderer/src/pages/SettingsPage.tsx ← 左侧 6 分区（供应商/角色/复习/提醒/发音/高级与诊断）
+src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
@@ -90,7 +91,8 @@ scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
 tests/
   providers.test.ts     ← 15 项：传输层/供应商表/错误归一化
   ai-client.test.ts     ← 13 项：client 接线 + 角色路由 + 400 降级（stub fetch，不联网）
-  ai-pricing.test.ts    ← 12 项：价格三级来源/目录解析/未定价用量/预算兜底
+  ai-pricing.test.ts    ← 13 项：价格三级来源/目录解析/未定价用量/预算兜底
+  ai-models.test.ts     ← 6 项：模型列表的公开名合并与目录边界
   ai-cache-key.test.ts  ← 2 项：ai_cache 唯一键重建
   ai-db.test.ts         ← 5 项：provider 列 + 老库迁移回填
   settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存

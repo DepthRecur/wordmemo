@@ -84,6 +84,7 @@
    - OpenAI：[platform.openai.com](https://platform.openai.com/api-keys)（大陆需要代理）
    - Gemini：[aistudio.google.com](https://aistudio.google.com/apikey)（走官方 OpenAI 兼容层）
 2. 设置 → AI 供应商 → 选中那家 →「配置」→ 粘贴 Key → **保存并测试**（会显示延迟与模型回显）
+   - 模型从目录里搜：显示公开名（如 `DeepSeek-V4.1-Flash`），真正发给 API 的是后面的 id（如 `deepseek-flash`）；也可以直接手填
 3. 在同一页的「AI 角色与预算」里选默认模型；图片识别可以单独指定另一家
 4. 建议保持默认：长期保留率 0.90、冲刺 0.95、每天 20 个新词、20 分钟预算
 
