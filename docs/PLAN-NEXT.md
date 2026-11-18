@@ -48,11 +48,11 @@
 这四份计划都以「项目已开源到 GitHub」为前提。开仓库前先清一遍：
 
 - [x] **`LICENSE` 已放仓库根目录**（MIT，Copyright (c) 2026 ymh）；`package.json` 本来就是 MIT
-- [x] **`samples/` 与 `shots/` 已检查**：`samples/demo.txt` 是自造演示词（abandon/ability…），截图也是同一批，**不含私人笔记**；界面改完后重拍即可
-- [ ] `git init` + 首次提交，`main` 分支保护（合并需 PR）；**先 init 再改代码**，每步都可回滚
+- [x] **`samples/` 与 `shots/` 已检查**：`samples/demo.txt` 是自造演示词（abandon/ability…），截图也是同一批，**不含私人笔记**
+- [x] **`git init` 已完成**（`master`，两次提交）；`.gitignore` 已排除 `.data/`、`node_modules/`、`WordMemo.exe`、`scripts/ocr-lab/runs/`、`scripts/ocr-lab/gt/`（后两个含真实笔记照片与标注）
+- [ ] 推到 GitHub（`DepthRecur/wordmemo`）并开分支保护；建议每个功能一个分支（`feat/providers` 等）
 - [ ] `SECURITY.md`、`CONTRIBUTING.md`、Issue/PR 模板；`CONTRIBUTING` 里写 DCO（`git commit -s`）
 - [ ] `package.json`：`private: true` → `false`；补 `repository`、`homepage`、`bugs`
-- [ ] 确认 `.gitignore` 覆盖 `.data/`、`release/`、`*.log`、`backups/`、`secrets.bin`；`WordMemo.exe`（编译产物）与 `.cache/` 不进库
 - [ ] `NOTICE` / `THIRD-PARTY-NOTICES.txt`：等真正复制第三方代码时再建（Rocket.Chat 36 行、obsidian-git 53 行都是 MIT，复制时署名）；npm 依赖用 `license-checker --production` 生成
 - [ ] README 的「下载 / 安装 / 更新 / 隐私」四节重写（现在写的是本机开发启动方式）
 
