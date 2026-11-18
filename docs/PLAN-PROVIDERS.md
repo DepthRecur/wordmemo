@@ -305,3 +305,14 @@ export interface ProviderSpec {
 - 不做多模型自动比价、投票。
 - 不做远程下发行为配置（只下发模型目录/价格）。
 - 不做 7 角色路由矩阵（只有 default / vision）。
+
+---
+
+## 13. 实现记录
+
+### 2026-11-18　P0 第一块：供应商表 + 传输层
+
+- 新增 `src/main/ai/providers.ts`：四家的声明式描述（端点、`max_tokens` 字段、JSON 模式、推理参数写法、视觉、缓存计费字段）。**没有任何 `if (provider === ...)`**。
+- 新增 `src/main/ai/transport.ts`：`buildChatBody` / `parseChatResponse` / `normalizeHttpError` / `requestChat`。把「HTTP 200 里带业务错误」「400 未知参数可降级」「429/5xx 可重试」都收在这里。
+- 新增 `tests/providers.test.ts`（14 个断言）。**注意**：本机沙箱内 vitest 起不来（esbuild 需要 spawn 命名管道，被拦），所以本轮用「tsc 编译成 JS + 普通 node 断言」跑了一遍，14/14 通过；`npx tsc --noEmit` 也通过。`npm test` 需要在你本机（沙箱外）再跑一次确认。
+- **尚未接线**：`client.ts` 还是旧实现，行为完全没变。下一步才把它切到 transport，并给 `ai_cache` / `ai_usage` 加 `provider` 列。
