@@ -257,6 +257,26 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     }
   }
 
+  /** 测试失败时给一段可以贴出来的诊断信息（脱敏：不含 Key） */
+  const copyDiagnostic = async (p: AiProviderInfo) => {
+    const res = results[p.id]
+    const lines = [
+      `provider: ${res?.provider ?? p.id}`,
+      `baseUrl: ${p.baseUrl}`,
+      `model: ${res?.model ?? (p.model || '(未填)')}`,
+      `ok: ${res?.ok ?? false}`,
+      `message: ${res?.message ?? ''}`,
+      `latencyMs: ${typeof res?.latencyMs === 'number' ? res.latencyMs : 'n/a'}`,
+      `at: ${new Date().toISOString()}`
+    ]
+    try {
+      await navigator.clipboard.writeText(lines.join('\n'))
+      notify('诊断信息已复制（不含 Key），可以直接贴出来', 'ok')
+    } catch {
+      notify('复制失败：请手动截图上面那一行提示', 'err')
+    }
+  }
+
   const testResultText = (res: AiTestResult): string => {
     const bits = [res.message]
     if (res.model) bits.push(res.model)
@@ -406,6 +426,11 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                           </Button>
                         )}
                         {result && <span className="hint">{testResultText(result)}</span>}
+                        {result && !result.ok && (
+                          <Button size="sm" variant="ghost" onClick={() => void copyDiagnostic(p)}>
+                            复制诊断信息
+                          </Button>
+                        )}
                       </div>
                       <div className="grid grid-2">
                         <Field

@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0 + P1 + P2 已完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页四张卡片、模型目录与价格自动化（未知模型不再按别家价算钱）；剩下 P3（打磨：文案 / 按家统计 / 冒烟脚本 / README 状态表）。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页四张卡片、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**功能已冻结**，只差 GLM 的真机验证（等 Key）和 OpenAI/Gemini 的社区反馈。下一个功能是**多个库**。
 
 ---
 
@@ -17,7 +17,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，10 个测试文件（94 项）必须全绿
+npm test             # vitest，10 个测试文件（95 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -72,6 +72,7 @@ src/main/ai/
   pricing.ts       ← 远程 models.dev → 随包快照 → 未知（priced:false）
   pricing-snapshot.json ← gen-pricing.mjs 生成，15.9 KB / 110 个模型
   info.ts          ← 设置页只读视图（避开 catalog ↔ client 循环）
+  smoke.ts         ← npm run ai-smoke 的 4 调用点 × 4 家自检
   import.ts        ← 7 个调用点里的 OCR/结构化/校验/补搭配/音标（OCR 走 vision 角色）
   prompts.ts       ← 提示词，不动
 src/main/settings.ts ← settings.ai 深合并 + secrets.v2.json（多 Key，safeStorage 整份加密）
@@ -82,8 +83,10 @@ src/main/db/
   notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
 src/main/index.ts  ← 启动、托盘、提醒、备份；30 秒后后台刷新目录/价格
 src/renderer/src/pages/SettingsPage.tsx ← 四张供应商卡片 + AI 角色区 + 目录/价格行
+src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
+scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
 tests/
   providers.test.ts     ← 15 项：传输层/供应商表/错误归一化
   ai-client.test.ts     ← 13 项：client 接线 + 角色路由 + 400 降级（stub fetch，不联网）
@@ -98,31 +101,28 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ---
 
-## 5. 下一步：P3（打磨）→ 然后多供应商收尾
+## 5. 多供应商已收尾；下一步：GLM 验证 + 多个库
 
-**P0 + P1 + P2 已完成并验证**：四家可配 Key、角色路由、设置页四张卡片、模型目录与价格自动化。typecheck 0、`npm test` 10 文件 94 项全绿、真机（迁移 + `/models` + models.dev + 设置页渲染）通过。细节见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md) 的四条 2026-11-18 记录。
+**多供应商 P0–P3 全部完成并冻结**：四家可配 Key、角色路由（default/vision）、设置页四张卡片、模型目录（`/models` + TTL）、价格（models.dev → 快照 → 未知不猜价）、按家统计、`npm run ai-smoke`。typecheck 0、`npm test` 10 文件 95 项全绿、真机通过。四条实现记录见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md)。
 
-### 5.1 P3 要做的五件事（PLAN-PROVIDERS §8 P3 + §9.1）
+### 5.1 还差的两件小事（不需要动架构）
 
-1. **错误中文化**：`src/renderer/src/App.tsx:287`、`src/main/db/importDrafts.ts:338` 还写着「DeepSeek API Key」——改成「默认模型那家」的说法。
-2. **按供应商用量分布**：`stats.ts` 的 dashboard 加 `aiByProvider`，统计页显示「钱花在哪家」。
-3. **一键诊断**：某家「保存并测试」失败时给「复制诊断信息」（脱敏：provider / baseUrl / model / 状态码 / 消息 / 时间）。
-4. **冒烟脚本** `scripts/ai-smoke.mjs`：4 个调用点 × 4 家，没有 Key 的家 `SKIP（无 Key）`；必须跑在 Electron 里（Key 是 DPAPI 加密的）。
-5. **README 状态表**：DeepSeek 已验证 / GLM 待测 / OpenAI·Gemini 未验证（等社区反馈）。
+1. **GLM 真机验证（等用户拿到 Key）**：`npm run ai-smoke` 跑一遍 → 全通过就把 `src/main/ai/providers.ts` 里 GLM 的 `unverified: true` 去掉，README 状态表改成「已验证」，并且**改一行**就够（不用动别的）。
+2. **OpenAI / Gemini**：等真实用户反馈（作者没有该地区账号）。报错走「设置页 → 复制诊断信息」，按 §9.1 的表改文案/参数即可，不用发版。
 
-### 5.2 验收（PLAN-PROVIDERS §8 P3）
+### 5.2 下一个功能：多个库（PLAN-DECKS）
 
-```powershell
-npm run typecheck   # 0 错误
-npm test            # 全绿（普通 PowerShell；沙箱内 vitest 会 spawn EPERM）
-```
+第一步按 [PLAN-NEXT](PLAN-NEXT.md) §6 与 [PLAN-DECKS](PLAN-DECKS.md)：
 
-- 统计页能看出钱花在哪家；未知模型不显示错金额；冒烟脚本在有 Key 的机器上能跑出一张表。
+1. **先收作用域**：把 `dailyPlan / learnQueue / dueQueue / countDue / learnedTodayCount` 的「当前库」收成一个 helper（**先改这里，别先改页面**）。
+2. 建 `decks` 表 + `notes.deck_id` + 默认库迁移（迁移前先备份，见 §8 坑 1）。
+3. 再改 6 个入口与设置页；复制笔记**不复制进度**；每库一份每日新词额度（方案 A）。
 
-### 5.3 P2 留下的欠账（做 P3 时别丢）
+### 5.3 多供应商留下的欠账（记着就行，不阻塞）
 
 - models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估。
 - 「厂商响应自报价格」（§4.2 第 1 级）只是枚举位，4 家都没给。
+- 冒烟时若复制数据目录，**必须连 `Local State` 一起复制**，否则 safeStorage 解不开 Key（见 PLAN-PROVIDERS §13 P3 的坑）。
 
 ---
 
@@ -193,15 +193,18 @@ npm test            # 全绿（普通 PowerShell；沙箱内 vitest 会 spawn EP
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度）
 
-当前状态：git 已 init（master），多供应商 P0 + P1 + P2 已完成并验证：四家都能配 Key，
-角色路由 default/vision，设置页四张卡片，secrets.v2 多 Key（旧 secrets.bin 自动迁移），
-模型目录（/models，TTL 24h）与价格（models.dev 远程 → 随包快照 → 未知不猜价）。
-typecheck 0 错误、npm test 10 文件 94 项全绿、真机通过。
+当前状态：git 已 init（master），**多供应商 P0–P3 全部完成并冻结**：四家都能配 Key、
+角色路由 default/vision、设置页四张卡片、secrets.v2 多 Key（旧 secrets.bin 自动迁移）、
+模型目录（/models，TTL 24h）、价格（models.dev → 随包快照 → 未知不猜价）、按家统计、
+npm run ai-smoke。typecheck 0 错误、npm test 10 文件 95 项全绿、真机通过。
+DeepSeek 已验证；GLM 等用户 Key 后验证；OpenAI / Gemini 等社区反馈。
 
-下一步：按 HANDOFF §5 做 P3 —— 错误中文化（App.tsx / importDrafts.ts 里的「DeepSeek
-API Key」）、统计页按供应商拆用量、失败时「复制诊断信息」、scripts/ai-smoke.mjs、
-README 供应商状态表。验收 = typecheck + npm test 全绿 + 统计页能看出钱花在哪家。
-做完在 PLAN-PROVIDERS §13 记一笔并 commit（git commit -s）。
+下一步（二选一，都在 HANDOFF §5）：
+1) GLM 拿到 Key 后：npm run ai-smoke → 全过就把 providers.ts 里 GLM 的 unverified 去掉、
+   README 状态表改成已验证（一行改动）。
+2) 开始「多个库」：先按 PLAN-DECKS 把 dailyPlan/learnQueue/dueQueue/countDue/
+   learnedTodayCount 的作用域收成一个 helper，再建 decks 表 + notes.deck_id + 默认库迁移。
+做完在对应计划里记一笔并 commit（git commit -s）。
 ```
 
 ---

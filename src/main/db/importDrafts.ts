@@ -335,7 +335,7 @@ export function discardDraft(id: number): void {
 export async function revalidateDraft(id: number): Promise<ImportDraft> {
   const draft = getDraft(id)
   if (!draft) throw new Error('草稿不存在（可能已经被入库或丢弃）')
-  if (!aiAvailable()) throw new Error('需要先在设置里配置 DeepSeek API Key')
+  if (!aiAvailable()) throw new Error('需要先在设置里配置 API Key（默认模型那家）')
   if (!draft.items.length) throw new Error('没有可校验的词条')
 
   const raw = await validateItems(

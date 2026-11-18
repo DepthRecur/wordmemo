@@ -311,6 +311,10 @@ export interface DashboardStats {
   difficult: { id: number; headword: string; meanings: string[]; lapses: number }[]
   aiCostMonth: number
   aiCallsMonth: number
+  /** 本月钱花在哪家（按金额降序） */
+  aiByProvider: { provider: string; label: string; calls: number; cost: number }[]
+  /** 本月模型没有价格的调用次数（只统计了 token） */
+  aiUnpricedCalls: number
 }
 
 export type AiProviderId = 'deepseek' | 'openai' | 'gemini' | 'glm'

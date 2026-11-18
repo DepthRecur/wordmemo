@@ -2,7 +2,8 @@ import type { DashboardStats, HeatmapPoint, ForecastPoint } from '@shared/types'
 import { addDays, dateKey } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { countUnlearned, learnedTodayCount } from './items'
-import { monthAiCost } from './ai'
+import { monthAiCost, monthAiUsageByProvider } from './ai'
+import { PROVIDERS, isProviderId } from '../ai/providers'
 import { getSettings } from '../settings'
 
 function count(sql: string, params: any[] = []): number {
@@ -110,6 +111,10 @@ export function dashboardStats(): DashboardStats {
     .all() as { id: number; headword: string; meanings: string; lapses: number }[]
 
   const ai = monthAiCost()
+  const byProvider = monthAiUsageByProvider().map((row) => ({
+    ...row,
+    label: isProviderId(row.provider) ? PROVIDERS[row.provider].label : row.provider
+  }))
 
   return {
     dueToday,
@@ -129,6 +134,8 @@ export function dashboardStats(): DashboardStats {
       lapses: toInt(r.lapses)
     })),
     aiCostMonth: ai.cost,
-    aiCallsMonth: ai.calls
+    aiCallsMonth: ai.calls,
+    aiByProvider: byProvider,
+    aiUnpricedCalls: ai.unpricedCalls
   }
 }

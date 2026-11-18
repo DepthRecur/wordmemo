@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeDb, getDb, openDb } from '../src/main/db/connection'
-import { logAiUsage, monthAiCost, writeRemotePricing } from '../src/main/db/ai'
+import { logAiUsage, monthAiCost, monthAiUsageByProvider, writeRemotePricing } from '../src/main/db/ai'
 import { estimateCostUsd, priceFor, snapshotInfo } from '../src/main/ai/pricing'
 import { parseModels } from '../src/main/ai/catalog'
 import { overBudget } from '../src/main/ai/client'
@@ -191,5 +191,46 @@ describe('用量：未定价调用与预算', () => {
       costSource: 'snapshot'
     })
     expect(overBudget()).toBe(false)
+  })
+
+  it('按供应商拆用量（统计页「钱花在哪家」）', () => {
+    openDb(tmpDb())
+    logAiUsage({
+      provider: 'deepseek',
+      kind: 'judge',
+      model: 'deepseek-flash',
+      promptTokens: 100,
+      cachedTokens: 0,
+      completionTokens: 50,
+      costUsd: 0.02,
+      costSource: 'catalog'
+    })
+    logAiUsage({
+      provider: 'glm',
+      kind: 'struct',
+      model: 'glm-4.7',
+      promptTokens: 100,
+      cachedTokens: 0,
+      completionTokens: 50,
+      costUsd: 0.05,
+      costSource: 'snapshot'
+    })
+    logAiUsage({
+      provider: 'deepseek',
+      kind: 'judge',
+      model: 'deepseek-flash',
+      promptTokens: 100,
+      cachedTokens: 0,
+      completionTokens: 50,
+      costUsd: 0.01,
+      costSource: 'catalog'
+    })
+
+    const byProvider = monthAiUsageByProvider()
+    expect(byProvider.map((r) => r.provider)).toEqual(['glm', 'deepseek'])
+    expect(byProvider[0]).toMatchObject({ provider: 'glm', calls: 1 })
+    expect(byProvider[0].cost).toBeCloseTo(0.05, 10)
+    expect(byProvider[1]).toMatchObject({ provider: 'deepseek', calls: 2 })
+    expect(byProvider[1].cost).toBeCloseTo(0.03, 10)
   })
 })

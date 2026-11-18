@@ -284,7 +284,7 @@ export default function App() {
     syncSystemNotice(
       'api-key',
       !settings.apiKeySet,
-      '尚未配置 DeepSeek API Key：图片识别、AI 校验和语义判分都不可用。',
+      '尚未配置 API Key：图片识别、AI 校验和语义判分都不可用。在「设置 → AI 供应商」里填默认模型那家的 Key。',
       { label: '去设置', route: 'settings' }
     )
   }, [ready, settings.apiKeySet, syncSystemNotice])

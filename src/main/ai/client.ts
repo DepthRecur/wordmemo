@@ -20,6 +20,8 @@ interface ChatOptions {
   kind: string
   /** 默认 'default'；图片 OCR 用 'vision' */
   role?: AiRole
+  /** 只给 scripts/ai-smoke.mjs 用：临时指定某一家，不改设置 */
+  provider?: AiProviderId
   json?: boolean
   maxTokens?: number
   thinking?: boolean
@@ -84,7 +86,11 @@ function targetFor(id: ProviderId, role?: AiRoleConfig): Target {
   return { spec: PROVIDERS[id], baseUrl: providerBaseUrl(id), model: providerModel(id, role) }
 }
 
-function resolveTarget(role: AiRole): Target {
+function resolveTarget(role: AiRole, override?: AiProviderId): Target {
+  if (override) {
+    const forced: ProviderId = isProviderId(override) ? override : 'deepseek'
+    return targetFor(forced, { provider: forced })
+  }
   const cfg = roleConfig(role)
   const id: ProviderId = isProviderId(cfg.provider) ? cfg.provider : 'deepseek'
   return targetFor(id, cfg)
@@ -210,7 +216,7 @@ export function overBudget(): boolean {
 }
 
 export async function chat(opts: ChatOptions): Promise<string> {
-  const target = resolveTarget(opts.role ?? 'default')
+  const target = resolveTarget(opts.role ?? 'default', opts.provider)
   const key = getApiKey(target.spec.id)
   if (!key) throw new AiError(`未配置 ${target.spec.label} API Key，请先到设置页填写`, { status: 401 })
   if (!target.model) {

@@ -440,3 +440,31 @@ export interface ProviderSpec {
 本轮真机只花了约 **$0.0000027**（一次 8 token 的调用；模型目录与价格目录都是免费接口）。
 
 **P2 的欠账**：models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估；「厂商响应自报价格」只是枚举位，4 家目前都没给。
+
+### 2026-11-18　P3：打磨（多供应商收尾）
+
+| 项 | 改动 |
+|---|---|
+| 错误文案 | `App.tsx` / `importDrafts.ts` 里的「DeepSeek API Key」→「API Key（默认模型那家）」；不会再对着 GLM 用户说 DeepSeek |
+| 按供应商统计 | `DashboardStats` 加 `aiByProvider`（provider / label / calls / cost）与 `aiUnpricedCalls`；统计页「词库概况」里按家列出「N 次 · $x」，并提示「另有 M 次调用没有价格」 |
+| 一键诊断 | 设置页测试失败时出现「复制诊断信息」：provider / baseUrl / model / ok / message / latency / 时间，**不含 Key**，可以直接贴出来 |
+| 冒烟脚本 | `npm run ai-smoke` → `scripts/ai-smoke.mjs` → `electron . --ai-smoke` → `src/main/ai/smoke.ts`：4 个调用点（结构化/校验/判分/音标）× 4 家，没有 Key 的家输出 `SKIP（无 Key）`，有失败时退出码非 0 |
+| README | 新增「AI 供应商与验证状态」表（DeepSeek 已验证 / GLM 待验证 / OpenAI·Gemini 未验证）、首次配置改成四家、写明 `npm run ai-smoke` 与「价格不是账单」 |
+
+**验证（2026-11-18）**
+
+- `npx tsc --noEmit` → **0 错误**；`npx vitest run` → **10 个文件 95 项全绿**。
+- 真机 `npm run ai-smoke`（隔离数据目录 + 真实 Key）：
+
+```
+DeepSeek    结构化    通过    748ms   {"items":[{"headword":"abandon",...}]}
+DeepSeek    校验      通过    596ms   {"issues":[]}
+DeepSeek    判分      通过    942ms   {"relation":"same","confidence":0.95,...}
+DeepSeek    音标      通过    933ms   {"items":[{"index":1,"us":"/əˈbændən/",...}]}
+OpenAI / Gemini / 智谱 GLM   SKIP（无 Key）
+合计：4 次调用，失败 0 次；跳过 3 家（没有 Key）。
+```
+
+- 界面：设置页四张卡片 + 价格行照常；统计页出现「DeepSeek N 次 · $x」的按家拆分行；console 无错误。
+
+**踩到的坑（写下来给以后）**：把数据目录复制出来跑冒烟时，必须**连 `Local State` 一起复制**——Electron 的 `safeStorage` 密钥存在 `userData/Local State` 里（DPAPI 保护），只复制 `secrets.v2.json` 会解不开 Key（`isEncryptionAvailable()` 仍为 true，但 `getApiKey()` 返回 null）。

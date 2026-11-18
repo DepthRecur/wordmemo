@@ -95,6 +95,23 @@ export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats 
               <span className="muted">本月 AI 调用</span>
               <strong>{stats.aiCallsMonth}</strong>
             </div>
+            {stats.aiByProvider.length > 0 && (
+              <div style={{ borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+                {stats.aiByProvider.map((row) => (
+                  <div key={row.provider} className="row-between tiny" style={{ marginTop: 2 }}>
+                    <span className="muted">{row.label}</span>
+                    <span>
+                      {row.calls} 次 · ${row.cost.toFixed(4)}
+                    </span>
+                  </div>
+                ))}
+                {stats.aiUnpricedCalls > 0 && (
+                  <div className="hint" style={{ marginTop: 4 }}>
+                    另有 {stats.aiUnpricedCalls} 次调用的模型没有价格，只统计了 token（费用未知）。
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div style={{ marginTop: 16 }}>
             <div className="row-between tiny muted" style={{ marginBottom: 6 }}>

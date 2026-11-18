@@ -13,6 +13,7 @@ import { localDate } from './db/connection'
 import { getDiagnostics, getIntegrity, log, setTrayState } from './diagnostics'
 import { scheduleCatalogRefresh } from './ai/catalog'
 import { schedulePricingRefresh } from './ai/pricing'
+import { printSmokeTable, runAiSmoke } from './ai/smoke'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -298,6 +299,15 @@ async function bootstrap(): Promise<void> {
   initSettings()
   log('app-start', { ...getDiagnostics() })
   const settings = getSettings()
+
+  // 真机冒烟入口（scripts/ai-smoke.mjs）：跑完直接退出，不建窗口、不起托盘
+  if (process.argv.includes('--ai-smoke')) {
+    const summary = await runAiSmoke()
+    printSmokeTable(summary)
+    app.exit(summary.failed ? 1 : 0)
+    return
+  }
+
   await initFsrs({
     longTermRetention: settings.longTermRetention,
     examRetention: settings.examRetention
