@@ -1,0 +1,307 @@
+# 计划 A：多供应商（DeepSeek / OpenAI / Gemini / GLM）
+
+> 目标版本：v0.2　预计 **3~4** 个工作日　风险：低
+> 前置：无。可与开源准备并行。
+> 相关：[总览](PLAN-NEXT.md) · [复用调研](RESEARCH-REUSE.md)
+> **2026-11-18 定稿**：供应商收缩到 4 家（+ 可选自定义）。因此**不引入 pi-ai**，改为自写薄适配层 + 声明式配置表；模型名与价格仍然走运行时刷新。
+
+---
+
+## 0. 一页结论
+
+1. **只做 4 家**：DeepSeek、OpenAI、Gemini、GLM。四家都有 OpenAI 兼容端点（Gemini 用官方兼容层），所以**一个 transport 就够**，不需要为每家写一套协议。
+2. **不装 pi-ai**。理由见 §3.2：供应商从 9 家缩到 4 家后，一个 0.x、4.5 MB、要求 Node ≥22.19 的依赖，收益已经小于风险。改成自写约 300 行 + 一张声明式表（字段照 Cline 抄，见调研 §0.5.1）。
+3. **模型名不写死**：启动后调各家 `/models`，拿到什么显示什么；拉不到就用手填。
+4. **价格不靠人抄**：models.dev 快照 + 远程刷新 + 厂商自报，未知就显示「费用未知」，绝不回落成别家的价格。
+5. **我们只写 4 件事**：Key 的 DPAPI 存储、角色路由（默认 / 视觉）、SQLite 缓存与预算、中文错误文案。
+
+---
+
+## 1. 范围与理由
+
+| 厂商 | 是否做 | 端点 | 说明 |
+|---|---|---|---|
+| DeepSeek | ✅ | `https://api.deepseek.com` | 现状，保留为默认 |
+| OpenAI | ✅ | `https://api.openai.com/v1` | |
+| Gemini | ✅ | `https://generativelanguage.googleapis.com/v1beta/openai/` | 官方 OpenAI 兼容层，不需要 native 协议 |
+| GLM（智谱） | ✅（建议直接做） | `https://open.bigmodel.cn/api/paas/v4` | 成本 ≈ 一行配置 + 一次冒烟；国内可直连 |
+| 自定义（Ollama / LM Studio / 代理） | ❌ **本版不做** | — | 用的人少；以后加只是一个输入框（见 §12） |
+
+**砍掉通义 / 豆包 / Kimi / 文心 / 混元** 的理由（你的判断）：目标用户（高中生）基本只用得到上面几家；每加一家 = 一套 compat + 一次冒烟 + 一份文档，收益递减。
+
+**以后想加一家的成本**：在 `providers.ts` 加一行 + 跑一次 `ai-smoke`，约半天。架构不需要动——这是声明式表的意义。
+
+---
+
+## 2. 现状盘点（要改的地方）
+
+| 位置 | 现状 | 问题 |
+|---|---|---|
+| `src/main/ai/client.ts:47` | 手拼 URL，写死 `thinking`、`max_tokens`、`response_format` | 只有 DeepSeek 认 `thinking`；OpenAI 推理模型要 `max_completion_tokens` |
+| `src/main/ai/client.ts:25` | 价格表只有 `deepseek-flash`，未知模型**兜底按它算钱** | 换 GPT/Gemini 后金额是错的 |
+| `src/main/ai/client.ts:89-92` | 错误文案写死「DeepSeek 账户余额不足」 | 换家以后在骗人 |
+| `src/main/ai/client.ts:113-118` | 只读 `prompt_cache_hit_tokens` | 各家缓存字段不同 |
+| `src/main/settings.ts:66` | 单个 `secrets.bin` | 只能存一把 Key |
+| `src/main/db/schema.ts:111` | `ai_cache` 唯一键无 provider | A 家的答案会被当成 B 家的 |
+| `src/main/db/schema.ts:121` | `ai_usage` 只有 `model` | 分不清哪家花的钱 |
+| `src/renderer/src/pages/SettingsPage.tsx:176` | 一整块「DeepSeek API」 | 改成 4 家列表 |
+| `src/main/ai/import.ts:35` | `image_url` + `detail: 'original'` | `detail` 是 OpenAI 字段，别家兼容层可能报错 |
+
+7 个调用点（`ocr` / `struct` / `validate` / `enrich` / `phonetic` / `judge` / `search-expand`）全部走同一个 `chat()` / `chatJson()`，提示词是纯中文 + JSON 示例。所以换的是传输层，不是业务。
+
+---
+
+## 3. 架构
+
+```
+src/main/ai/
+  providers.ts    // 4 家的声明式表：baseUrl / api / 能力位 / compat / 环境变量名
+  transport.ts    // 唯一的 openai-chat 实现 + 能力降级（400 未知参数 → 去掉重试）
+  catalog.ts      // /models：拉取 + 缓存 + TTL + last-known-good（语义抄 DSH listing-cache）
+  pricing.ts      // models.dev 快照 + 远程刷新 + 未知处理
+  keys.ts         // DPAPI：每家一把 Key
+  client.ts       // 角色路由 + 预算 + SQLite 缓存 + 中文错误
+  prompts.ts      // 不动
+```
+
+### 3.1 声明式表（字段名照 Cline，见调研 §0.5.1）
+
+```ts
+export interface ProviderSpec {
+  id: 'deepseek' | 'openai' | 'gemini' | 'glm' | 'custom'
+  label: string
+  baseUrl: string
+  api: 'openai-chat'
+  capabilities: {
+    vision: boolean
+    jsonMode: 'force' | 'prompt-only'
+    stream: false
+  }
+  compat: {
+    maxTokensField: 'max_tokens' | 'max_completion_tokens'
+    temperature: boolean
+    reasoning?: { type: 'toggle'; field: 'thinking.type' } | { type: 'effort'; field: 'reasoning_effort' }
+    imageDetailField: boolean          // 只有 OpenAI 系发 detail
+    usageCache: 'deepseek' | 'openai' | 'none'
+  }
+  models?: { vision?: string; text?: string }   // 只作占位，真正列表来自 /models
+}
+```
+
+**禁止** `modelId.includes("...")` 这种硬编码判断（Roo-Code 就是这么写的，模型改名后静默失效）。
+
+### 3.2 为什么不装 pi-ai（结论反转的原因）
+
+| 因素 | 9 家时 | 4 家时 |
+|---|---|---|
+| 适配层要手写的量 | ~9 套 compat + 视觉差异，易错 | **~300 行**，4 家都是 OpenAI 兼容，差异集中在 3 个字段 |
+| 依赖风险 | 0.x、4 个版本 187 处破坏性变更 | 同样的风险，但换来的收益更小 |
+| 体积 | 4.5 MB + openai/anthropic/google SDK | 不装 = 省掉 |
+| Node 要求 | ≥ 22.19 | 不装 = 无要求 |
+| 目录刷新 | 它没有，仍要自己写 | 仍要自己写 |
+
+**所以：pi-ai 从「推荐」降为「备选」**。如果 P0 发现某家（大概率是 Gemini 的兼容层）行为太怪，再考虑只把那一家交给 pi-ai，或抄 DSH 的 300 行。§10 写了判断标准。
+
+### 3.3 四家的真实差异（这是全部工作量）
+
+| 项 | DeepSeek | OpenAI | Gemini（兼容层） | GLM |
+|---|---|---|---|---|
+| Base URL | `api.deepseek.com` | `api.openai.com/v1` | `.../v1beta/openai/` | `open.bigmodel.cn/api/paas/v4` |
+| 视觉 | `deepseek-flash` 支持 | 主流模型支持 | 支持（base64 data URL） | 视模型而定 |
+| JSON 模式 | `response_format` 支持 | 支持 | **待实测**（不确定就按 prompt-only） | 支持 |
+| 推理参数 | `thinking.type` | `reasoning_effort`；部分模型禁 `temperature` | 兼容层可能忽略 | `thinking.type` |
+| max tokens 字段 | `max_tokens` | 推理模型要 `max_completion_tokens` | `max_tokens` | `max_tokens` |
+| `/models` | 有 | 有 | 兼容层可能没有 → 用 `x-goog-api-key` 调 `{base}/models`，再不行就 bundled 列表 + 手填 | 有 |
+| 缓存计费字段 | `prompt_cache_hit_tokens` | `prompt_tokens_details.cached_tokens` | 无 | 视情况 |
+| 并发限制 | — | 按 tier | 按 quota | 有 QPS 限制 |
+
+**统一处理**：能力位说支持才发；400 报「未知参数」→ 自动去掉该参数重试一次（记录降级原因）；`finish_reason === 'length'` 明确提示被截断。
+
+---
+
+## 4. 自动化：模型名与价格
+
+### 4.1 模型名：以厂商 `/models` 为准
+
+- 每个 provider 实现 `listModels()`：`GET {baseUrl}/models`（Bearer；Gemini 用 `x-goog-api-key` 试 native）。
+- 启动 30 秒后 + 打开设置页时后台刷新；TTL 24h；失败保留上次成功结果。
+- 缓存表 `ai_catalog(provider, model_id, json, etag, fetched_at)`。
+- 下拉框可搜索 + **永远允许手填**（Gemini 兼容层、私有部署、`ep-…` 都需要）。
+- **语义抄 DSH 的 `listing-cache.ts`**（MIT，约 200 行）：单飞、按凭据分域、后台刷新、失败保留旧值。
+
+### 4.2 价格：三级来源，绝不猜
+
+| 级别 | 来源 | 显示 |
+|---|---|---|
+| 1 | 厂商响应自报（若兼容层给了 `usage.cost` 或等价字段） | `实际 $x` |
+| 2 | models.dev（MIT：`deepseek` / `openai` / `google` / `zhipuai` 都有，**四家全齐，没有手工例外**） | `≈ $x（models.dev 2026-11-18）` |
+| 3 | 随包快照（构建时从 models.dev 裁 4 家生成） | 同上 + 标注「离线数据」 |
+| — | 都没有 | **`费用未知 · 1234 tokens`**，且 `priced: false` |
+
+- 远程目录整包 6.7 MB，**只留 4 家**入库（约 30 KB），原始包不落盘；TTL 7 天。
+- 未知模型**不允许**回落到任何默认价（修掉 `client.ts:29` 的 bug）。
+- 预算：有价按金额；本月出现未定价调用时，降级成 **token 上限**并在设置页显示「另有 N 次调用未定价」。
+
+### 4.3 「一年不更新」会怎样
+
+| 事件 | 用户看到 | 要发版吗 |
+|---|---|---|
+| 上架新模型 | 目录里出现，或手填可用 | 否 |
+| 下线旧模型 | 目录消失；旧配置报「可能已下线，请重选」 | 否 |
+| 调价 | 新价 + 日期；按新价估算 | 否 |
+| 模型改名 | 报「模型不存在」+ 自动匹配建议 | 否 |
+| models.dev 挂了 | 用快照，标注可能过期 | 否 |
+| **要加第 5 家厂商** | — | **是**（这是唯一需要发版的情况） |
+
+---
+
+## 5. Key 与配置
+
+- `secrets.bin`（单 Key）→ `secrets.v2.json`，整份 JSON 用 `safeStorage.encryptString`：
+
+```jsonc
+{ "providers": { "deepseek": "sk-...", "openai": "sk-..." } }
+```
+
+- 迁移：旧 `secrets.bin` → `providers.deepseek`，旧文件保留到用户点「清除全部」。
+- 写入用「临时文件 + rename」保证原子（并发保存不会写坏）。
+
+`settings.json`：
+
+```jsonc
+{
+  "ai": {
+    "default": { "provider": "deepseek", "model": "deepseek-flash" },
+    "vision":  { "provider": "deepseek", "model": "deepseek-flash" },
+    "showCost": true
+  }
+}
+```
+
+`Settings.merge()`（`settings.ts:22`）是浅合并，**必须给 `ai` 补深合并**，否则老配置一升级就丢字段。
+
+---
+
+## 6. 界面
+
+设置页改成 4 张供应商卡片 + 一个角色区：
+
+1. 每张卡片：名称 / Key 状态（未配置·已配置·验证失败）/ 模型数 / 「配置」
+2. 展开：Key（`type=password`，只回显"已保存"）、Base URL（「高级」折叠）、模型（可搜索下拉 + 手填 + 「刷新目录」）、「保存并测试」（显示延迟与模型回显）
+3. 角色：`默认模型` / `图片识别单独指定`（默认跟随）
+4. 目录与价格：每个 provider 一行「模型 12 个 · 2 小时前更新」「价格：models.dev · 3 天前」
+5. 费用：本月 `≈$X` + 未定价调用数 + 「价格不是账单」一行说明
+6. 能力提示：图片导入可用/不可用（不可用时给一句人话）
+
+---
+
+## 7. 数据与接口变更
+
+| 变更 | 说明 | 兼容 |
+|---|---|---|
+| `secrets.v2.json` | 多 Key | 旧文件自动迁移 |
+| `settings.ai` | 角色 + provider 覆盖 + `showCost` | 缺省按 DeepSeek 旧值补全 |
+| `ai_usage.provider` | 新列，默认 `'deepseek'`；增 `cost_source`（`provider`/`catalog`/`snapshot`/`none`）与 `priced_at` | `ADD COLUMN` |
+| `ai_cache.provider` + 新唯一索引 | 旧索引先 drop 再建 | 回填 `'deepseek'` |
+| 新表 `ai_catalog` | 运行时模型目录缓存 | 新增 |
+| 新表 `ai_pricing` | 4 家的过滤后价格 | 新增 |
+| IPC | `ai:catalog(provider, force)`、`ai:pricing(force)`、`ai:test(provider)`、`settings:setApiKey(provider, key)` | 旧签名保留为默认 provider |
+
+---
+
+## 8. 分阶段实施
+
+### P0 骨架 + 行为不变（0.5 天）
+
+- 建 `providers.ts` / `transport.ts`，先只接 DeepSeek；`chat()` 走新链路。
+- `ai_usage` / `ai_cache` 加 `provider` 列与迁移；`secrets.v2` 迁移。
+- **验收**：不配任何新东西，现有用户行为完全一致；`npm test` 全绿；OCR 与判分真机各跑一次。
+
+### P1 四家 + 设置页（1.5 天）
+
+- 接 OpenAI / Gemini / GLM；能力位与降级重试；`settings.ai` 深合并。
+- 设置页 4 张卡片 + 角色区 + 「保存并测试」；**未验证的 provider 带徽标**（见 §9.1）。
+- **验收**：DeepSeek（和 GLM，如果能申请到免费额度）真实测试通过、OCR 与判分走通；OpenAI / Gemini 用**录制夹具**跑通请求构造与响应解析，UI 标「未验证」；某家 401 只让那张卡片变红。
+
+### P2 目录与价格自动化（1 天）
+
+- `catalog.ts`（抄 DSH 语义）+ `pricing.ts`（快照 + 远程 + 未知）+ 构建期 `scripts/gen-pricing.mjs`。
+- **验收**：断网启动用快照并标注日期；`/models` 指向坏地址保留旧列表；不在目录里的模型显示「费用未知」。
+
+### P3 打磨（0.5~1 天）
+
+- 错误中文化（不出现「DeepSeek 余额不足」除非 provider 是 DeepSeek）；按供应商用量分布；诊断面板；`ai-smoke.mjs`。
+- **验收**：统计页能看出钱花在哪家；未知模型不显示错金额。
+
+---
+
+## 9. 测试计划
+
+**单元测试**（`tests/providers.test.ts`）：
+- 4 家的 `buildRequest`：快照（含/不含 `thinking`、`max_tokens` 字段名、`image_url` 有无 `detail`）。
+- 响应解析：DeepSeek / OpenAI / 无缓存字段 三种 usage。
+- 错误归一化：401/402/429/400 未知参数/网络超时 → 中文文案与是否可重试。
+- 降级：400 → 去参数重发成功；两次都 400 → 抛错且只重试一次。
+- 价格：有目录 → 估算；无 → `priced:false` 且 `costUsd===0`。
+- 聚合：4 家各自的 `listModels` 解析（OpenAI `data[]`、Gemini `models[]`）。
+
+### 9.1 没有 Key 的 OpenAI / Gemini 怎么验收（2026-11-18 现实约束）
+
+你拿不到 OpenAI / Gemini 的 Key（没 VPN、没虚拟信用卡），这**不是不能做**，但要把"没验证"变成产品里可见、可诊断、可修的东西，而不是赌它没问题。
+
+| 手段 | 具体做法 |
+|---|---|
+| **共享代码路径** | 4 家都走同一个 `transport.ts`（OpenAI 兼容），差异只在 `providers.ts` 的几行 compat。**DeepSeek 跑通 = 传输层跑通**，剩下的是参数/字段差异，不是架构差异 |
+| **录制夹具** | 用官方文档的请求/响应样例做 fixture（`tests/fixtures/openai-*.json`、`gemini-*.json`），覆盖正常返回、`usage` 缺失、`finish_reason=length`、400 未知参数、401、429。**断网也能跑**，能抓住"字段名写错"这类 bug |
+| **UI 徽标** | OpenAI / Gemini 卡片标「**未验证**」，测试按钮旁写「作者无该地区账号，如报错请贴诊断日志」 |
+| **一键诊断** | 测试失败时把**脱敏后的请求摘要**（URL、模型、状态码、响应体前 500 字）写到 `userData/diagnostics/ai-<时间>.log`，并提供「复制诊断信息」 |
+| **错误给下一步** | 401 → Key 无效；403 → 可能是地区限制，需要代理；404 → base URL 或模型名不对；429 → 稍后重试。每条都告诉用户该改什么 |
+| **README 状态表** | DeepSeek「已验证」、GLM「已验证/未验证」、OpenAI / Gemini「未验证（社区反馈）」；发布说明同步更新 |
+| **修复不用发版** | base URL 与模型名在设置页可编辑，目录可刷新——"用户报错 → 你改配置就能修"的周期最短 |
+
+**仍然无法覆盖的**：Gemini 兼容层是否真接受 `image_url` 的 base64、`/models` 是否可用、JSON 模式行为。这三条只能等真实用户反馈；所以**能力位可降级**必须做扎实——不确定就不发那个参数，让功能降级，而不是整个调用失败。
+
+**冒烟脚本**（`scripts/ai-smoke.mjs`）：4 个调用点 × 4 家，输出「通过/失败/耗时/token/价格来源」表；没有 Key 的家自动跳过并标 `SKIP（无 Key）`。这是以后加第 5 家的自检入口。
+
+**真机**：打包后的安装包，在一台只配了某一家 Key 的机器上走完「导入图片 → 入库 → 复习判分」。
+
+---
+
+## 10. 风险与对策
+
+| 风险 | 影响 | 对策 |
+|---|---|---|
+| 自己写 4 家的参数差异 | 某家 400 | 能力位 + 声明式 compat + 400 自动降级；冒烟脚本覆盖 |
+| **Gemini 兼容层行为不齐**（JSON 模式、`/models`） | 两个功能在 Gemini 上降级 | 能力位标 `prompt-only`；目录拉不到就用 bundled 列表 + 手填；在 P1 实测后写死结论 |
+| OpenAI 推理模型禁 `temperature` / 要 `max_completion_tokens` | 400 或行为异常 | 由 compat 决定，不按模型名猜 |
+| 模型名/价格漂移 | 误导 | §4 的三级价格 + `/models`；未知即「未知」 |
+| 以后要加国内厂商 | 半天/家 | 声明式表 + 冒烟脚本；**不要**为了"以后可能"现在就装 pi-ai |
+| Key 泄露 | 用户损失 | DPAPI；日志打码；同步白名单排除 |
+| 不再有 pi-ai 的 vendor 适配红利 | 新模型特性（如结构化输出）要自己跟 | 只跟 4 家，成本可控；真扛不住再按 §10 的退路 |
+
+**什么时候该回头考虑 pi-ai**：出现下列任一情况——① Gemini 兼容层连续两个功能无法用 300 行以内解决；② 需要接第 5、6 家；③ 需要流式输出或工具调用。届时按调研 §1.5 的方式接入，不动业务层。
+
+---
+
+## 11. 已定 / 待定
+
+| 项 | 状态 |
+|---|---|
+| 供应商范围 | **已定**：DeepSeek / OpenAI / Gemini / GLM（+ 可选自定义） |
+| 是否装 pi-ai | **已定**：不装（4 家时收益不抵风险） |
+| 模型名/价格自动刷新 | **已定**：做（这是"一年不更新"的前提） |
+| 视觉单独指定 | 建议做（成本很低） |
+| 是否显示金额 | 建议显示（`≈` + 日期），可关 |
+| 自定义端点 | **已定：本版不做**（用的人少；以后加 = 多一个输入框 + 一个 `custom` 表项） |
+
+---
+
+## 12. 明确不做
+
+- 不做 Claude / Anthropic 协议。
+- 不做 Gemini native 协议（兼容层够用）。
+- 不做通义 / 豆包 / Kimi / 文心 / 混元（用户群体用不到；以后按 §1 的方式加）。
+- 不做自定义端点（Ollama / 代理）——本版不做，接口留好。
+- 不做多模型自动比价、投票。
+- 不做远程下发行为配置（只下发模型目录/价格）。
+- 不做 7 角色路由矩阵（只有 default / vision）。

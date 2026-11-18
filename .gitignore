@@ -1,0 +1,22 @@
+node_modules/
+out/
+release/
+.data/
+.cache/
+*.log
+npm-install*.log
+
+# 构建产物 / 本机一次性修复脚本（由 scripts/ 重新生成）
+WordMemo.exe
+repair-integrity.cmd
+repair.log
+
+# 便携版打包产物与更新暂存
+WordMemo-Portable/
+update/
+*.zip
+*.sha256
+
+# OCR 实验产物：含真实笔记照片与标注，不进公开仓库
+scripts/ocr-lab/runs/
+scripts/ocr-lab/gt/
