@@ -11,6 +11,8 @@ import { countDrafts } from './db/importDrafts'
 import { getDb } from './db/connection'
 import { localDate } from './db/connection'
 import { getDiagnostics, getIntegrity, log, setTrayState } from './diagnostics'
+import { scheduleCatalogRefresh } from './ai/catalog'
+import { schedulePricingRefresh } from './ai/pricing'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -306,6 +308,9 @@ async function bootstrap(): Promise<void> {
   buildTray()
   startReminderLoop()
   dailyBackup()
+  // 模型目录 / 价格：启动 30 秒后后台刷新（过期才真的联网，见 PLAN-PROVIDERS §4.1/§4.2）
+  scheduleCatalogRefresh()
+  schedulePricingRefresh()
 
   try {
     app.setLoginItemSettings({ openAtLogin: settings.autoLaunch })

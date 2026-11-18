@@ -400,3 +400,43 @@ export interface ProviderSpec {
 | 设置页渲染 | 隐藏窗口里加载构建产物、点进「设置」：四张卡片 + 角色区 + 「未验证」/「已配置」徽标都在，**console 无错误** |
 
 **留下的欠账（P2 / P3）**：`ai_cache` 唯一键仍是 `(kind, cache_key)`；非 DeepSeek 家不记金额；`ai_usage` 缺 `cost_source` / `priced_at`；模型仍手填（P2 接 `/models`）；`App.tsx:287` 与 `db/importDrafts.ts:338` 的「DeepSeek API Key」文案还没改（P3 统一中文化）；README 的供应商状态表还没加。
+
+### 2026-11-18　P2：模型目录 + 价格自动化
+
+**数据层**
+
+| 变更 | 说明 |
+|---|---|
+| 新表 `ai_catalog(provider, model_id, payload, fetched_at)` | `/models` 的缓存，按家整表替换（一个事务） |
+| 新表 `ai_pricing(provider, payload, fetched_at)` | models.dev 的 4 家子集，每行一家 |
+| `ai_usage` + `cost_source` / `priced_at` | `provider`/`catalog`/`snapshot`/`none`；金额为 0 且 `none` 时不混进金额统计 |
+| `ai_cache` 唯一键 → `(provider, kind, cache_key)` | SQLite 改不了建表约束，`migrateAiCacheUnique()` 在事务里重建表并搬数据；**失败就保持原样继续跑**（纯缓存，串一次比启动失败好） |
+
+**新模块**
+
+- `src/main/ai/catalog.ts`：`/models` + TTL 24h + 并发单飞 + 失败保留上次成功列表。OpenAI 形状 `{data:[{id}]}`；Gemini 形状 `{models:[{name}]}`（去 `models/` 前缀、只留 `generateContent`），Gemini 打 native 端点并带 `x-goog-api-key`，其余走 Bearer。
+- `src/main/ai/pricing.ts` + `scripts/gen-pricing.mjs` + `pricing-snapshot.json`（**15.9 KB / 110 个模型**，日期 2026-11-18）：三级来源「远程目录 → 随包快照 → 未知」。**未知一律 `priced:false`、金额 0、只统计 token**，修掉了 PLAN-NEXT §7 第 8 条的「按 DeepSeek 价算别家」。
+- `src/main/ai/info.ts`：设置页的只读视图（单独放一个文件，避开 catalog ↔ client 的循环依赖）。
+- 启动 30 秒后后台刷新目录与价格（两者都有 TTL，不是每次启动都联网）。
+
+**预算**：`overBudget()` 有价按金额；这个月一旦出现未定价调用，就同时按 token 上限兜底（`$1 ≈ 200 万 token` 的粗估，宁早勿晚）。
+
+**设置页**：模型输入改成 datalist（可搜索 + **永远可以手填**）、每家「刷新目录」+「目录 N 个 · x 前」+ 单模型价格行；面板头一行「价格：models.dev · 日期 · 本月 ≈$x · N 次调用（另有 M 次未定价）」+「刷新价格」。
+
+**验证（2026-11-18）**
+
+- `npx tsc --noEmit` → **0 错误**；`npx vitest run` → **10 个文件 94 项全绿**（新增 `ai-pricing` 12 项、`ai-cache-key` 2 项）。
+- 真机（真 Key + 真库）：
+
+| 项 | 结果 |
+|---|---|
+| 缓存键迁移 | 真实库 `ai_cache` 已是 `(provider, kind, cache_key)` |
+| 真实 `/models` | DeepSeek 返回 2 个模型（`deepseek-flash`、`deepseek-v4-pro`），写进 `ai_catalog` |
+| 真实 models.dev | 下载一次 → 110 个模型入库；价格来源从 `snapshot` 变 `catalog`，数值一致（0.15/0.6/0.003） |
+| 真实调用 | 新行 `cost_source=catalog`、`priced_at=2026-11-18`、金额 $0.0000027 |
+| 设置页 | 价格行 / 刷新价格 / 四张卡片都渲染正常，console 无错误 |
+| 启动 | 独立数据目录启动 `app-start` 正常；新库的表与新约束齐全 |
+
+本轮真机只花了约 **$0.0000027**（一次 8 token 的调用；模型目录与价格目录都是免费接口）。
+
+**P2 的欠账**：models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估；「厂商响应自报价格」只是枚举位，4 家目前都没给。

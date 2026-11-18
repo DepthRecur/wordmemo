@@ -116,7 +116,7 @@ CREATE TABLE IF NOT EXISTS ai_cache (
   model TEXT,
   response_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  UNIQUE(kind, cache_key)
+  UNIQUE(provider, kind, cache_key)
 );
 
 CREATE TABLE IF NOT EXISTS ai_usage (
@@ -128,7 +128,26 @@ CREATE TABLE IF NOT EXISTS ai_usage (
   prompt_tokens INTEGER DEFAULT 0,
   cached_tokens INTEGER DEFAULT 0,
   completion_tokens INTEGER DEFAULT 0,
-  cost_usd REAL DEFAULT 0
+  cost_usd REAL DEFAULT 0,
+  -- provider / catalog / snapshot / none（none = 这个模型没有价格，只统计 token）
+  cost_source TEXT,
+  priced_at TEXT
+);
+
+-- 运行时模型目录（P2）：每行一个模型，fetched_at 取该 provider 的最新时间
+CREATE TABLE IF NOT EXISTS ai_catalog (
+  provider TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (provider, model_id)
+);
+
+-- 运行时价格（P2）：每行一家，payload 是 { models: { id: {input,output,cacheRead?} } }
+CREATE TABLE IF NOT EXISTS ai_pricing (
+  provider TEXT NOT NULL PRIMARY KEY,
+  payload TEXT NOT NULL,
+  fetched_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS validation_issues (

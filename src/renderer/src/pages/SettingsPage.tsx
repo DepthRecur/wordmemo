@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, Database, FolderOpen, Power, Volume2 } from 'lucide-react'
 import type {
+  AiPriceInfo,
   AiProviderConfig,
   AiProviderId,
   AiProviderInfo,
+  AiSettingsInfo,
   AiTestResult,
   BuildInfo,
   Settings
@@ -58,6 +60,25 @@ const INTEGRITY_LABEL: Record<string, string> = {
   unknown: '未知'
 }
 
+function formatAgo(iso: string | null): string {
+  if (!iso) return '还没拉过'
+  const at = Date.parse(iso)
+  if (Number.isNaN(at)) return '时间未知'
+  const minutes = Math.max(0, Math.round((Date.now() - at) / 60_000))
+  if (minutes < 1) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.round(hours / 24)} 天前`
+}
+
+function priceText(price: AiPriceInfo): string {
+  if (!price.priced) return '费用未知（只统计 token）'
+  const source = price.source === 'catalog' ? 'models.dev' : '随包快照'
+  const suffix = price.asOf ? ` · ${source} ${price.asOf}` : ''
+  return `≈$${price.input}/M 入 · $${price.output}/M 出${suffix}`
+}
+
 export default function SettingsPage({ notify, settings, refreshSettings }: Props) {
   const [draft, setDraft] = useState<Settings>(settings)
   const [saving, setSaving] = useState(false)
@@ -66,15 +87,19 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
   const [build, setBuild] = useState<BuildInfo | null>(null)
 
   // 四张供应商卡片：卡片数据只读，Key 只回显"已配置"
-  const [providers, setProviders] = useState<AiProviderInfo[]>([])
+  const [info, setInfo] = useState<AiSettingsInfo | null>(null)
   const [expanded, setExpanded] = useState<AiProviderId | null>(null)
   const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [results, setResults] = useState<Record<string, AiTestResult | undefined>>({})
+  const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
+  const [pricingBusy, setPricingBusy] = useState(false)
 
-  const loadProviders = async () => {
+  const providers = info?.providers ?? []
+
+  const loadInfo = async () => {
     try {
-      setProviders(await window.api.settings.aiProviders())
+      setInfo(await window.api.settings.aiProviders())
     } catch {
       /* 读不到就当没有配置 */
     }
@@ -88,7 +113,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     void window.api.tts.cacheSize().then(setCache)
     void window.api.system.appVersion().then(setVersion)
     void window.api.system.buildInfo().then(setBuild)
-    void loadProviders()
+    void loadInfo()
   }, [])
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -178,7 +203,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
         notify(`${p.label} 的 Key 已保存并验证通过`, 'ok')
         setKeyDrafts((k) => ({ ...k, [p.id]: '' }))
         await refreshSettings()
-        await loadProviders()
+        await loadInfo()
       } else {
         notify(`${p.label}：${res.message}`, 'err')
       }
@@ -193,7 +218,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     await window.api.settings.clearApiKey(p.id)
     setResults((r) => ({ ...r, [p.id]: undefined }))
     await refreshSettings()
-    await loadProviders()
+    await loadInfo()
     notify(`已清除 ${p.label} 的 Key`, 'ok')
   }
 
@@ -202,8 +227,34 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     await window.api.settings.clearAllApiKeys()
     setResults({})
     await refreshSettings()
-    await loadProviders()
+    await loadInfo()
     notify('已清除全部 API Key', 'ok')
+  }
+
+  const refreshCatalogFor = async (p: AiProviderInfo) => {
+    setRefreshing((r) => ({ ...r, [p.id]: true }))
+    try {
+      const res = await window.api.settings.refreshCatalog(p.id, true)
+      setInfo(res.info)
+      notify(res.ok ? `${p.label}：${res.message}` : `${p.label}：${res.message}`, res.ok ? 'ok' : 'err')
+    } catch (err) {
+      notify(`刷新目录失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setRefreshing((r) => ({ ...r, [p.id]: false }))
+    }
+  }
+
+  const refreshPricingNow = async () => {
+    setPricingBusy(true)
+    try {
+      const res = await window.api.settings.refreshPricing(true)
+      setInfo(res.info)
+      notify(res.message, res.ok ? 'ok' : 'err')
+    } catch (err) {
+      notify(`刷新价格失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setPricingBusy(false)
+    }
   }
 
   const testResultText = (res: AiTestResult): string => {
@@ -272,9 +323,22 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
               清除全部 Key
             </Button>
           </div>
+          <div className="row" style={{ marginBottom: 4 }}>
+            <span className="hint">
+              价格：{info?.pricing.source ?? 'models.dev'} {info?.pricing.asOf ?? ''} · 本月 ≈$
+              {(info?.usage.cost ?? 0).toFixed(4)} · {info?.usage.calls ?? 0} 次调用
+              {info && info.usage.unpricedCalls > 0
+                ? ` · 另有 ${info.usage.unpricedCalls} 次调用没有价格（只算 token）`
+                : ''}
+            </span>
+            <span style={{ flex: 1 }} />
+            <Button size="sm" disabled={pricingBusy} onClick={() => void refreshPricingNow()}>
+              {pricingBusy ? '刷新中…' : '刷新价格'}
+            </Button>
+          </div>
           <div className="hint" style={{ marginBottom: 8 }}>
             Key 只保存在本机（Windows DPAPI 加密，secrets.v2.json），不会上传。「保存并测试」会发一条
-            「回复 ok」的极短请求；模型与 Base URL 改完要点右上角「保存设置」。
+            「回复 ok」的极短请求；模型与 Base URL 改完要点右上角「保存设置」。价格是估算，不是账单。
           </div>
           <div className="col" style={{ gap: 8 }}>
             {providers.map((p) => {
@@ -347,17 +411,25 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                         <Field
                           label="模型"
                           hint={
-                            p.id === 'deepseek'
-                              ? '默认 deepseek-flash'
-                              : '这家要自己填（如 gpt-4o-mini / gemini-2.0-flash）'
+                            p.models.length
+                              ? `目录里 ${p.models.length} 个，可直接输入过滤；也可以手填`
+                              : p.id === 'deepseek'
+                                ? '默认 deepseek-flash'
+                                : '这家要自己填（如 gpt-4o-mini / gemini-2.0-flash）'
                           }
                         >
                           <input
                             className="input"
+                            list={`wm-models-${p.id}`}
                             value={cfg.model ?? ''}
                             placeholder={p.id === 'deepseek' ? 'deepseek-flash' : '模型名'}
                             onChange={(e) => patchProvider(p.id, { model: e.target.value })}
                           />
+                          <datalist id={`wm-models-${p.id}`}>
+                            {p.models.map((id) => (
+                              <option key={id} value={id} />
+                            ))}
+                          </datalist>
                         </Field>
                         <Field label="Base URL" hint="留空 = 官方端点；只有代理/中转才需要改">
                           <input
@@ -368,6 +440,22 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                           />
                         </Field>
                       </div>
+                      <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }}>
+                        <span className="hint">
+                          目录：{p.models.length ? `${p.models.length} 个模型 · ${formatAgo(p.modelsFetchedAt)}` : '还没拉取'}
+                          {p.catalogError ? ` · ${p.catalogError}` : ''}
+                        </span>
+                        {p.keySet && (
+                          <Button
+                            size="sm"
+                            disabled={refreshing[p.id]}
+                            onClick={() => void refreshCatalogFor(p)}
+                          >
+                            {refreshing[p.id] ? '刷新中…' : '刷新目录'}
+                          </Button>
+                        )}
+                      </div>
+                      <div className="hint">价格：{priceText(p.price)}</div>
                       <div className="hint">
                         {p.vision
                           ? '这家支持图片识别（视觉）'

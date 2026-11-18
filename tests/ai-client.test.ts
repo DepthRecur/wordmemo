@@ -4,7 +4,8 @@ import { app } from 'electron'
 import type { AiSettings } from '../src/shared/types'
 import { closeDb, getDb, openDb } from '../src/main/db/connection'
 import { initSettings, setApiKey, updateSettings } from '../src/main/settings'
-import { aiProviderInfo, chat, testApiKey } from '../src/main/ai/client'
+import { chat, testApiKey } from '../src/main/ai/client'
+import { aiSettingsInfo } from '../src/main/ai/info'
 
 /**
  * 不联网地验证 P0 第二块：client.ts 已经接到 transport.ts 上。
@@ -247,7 +248,7 @@ describe('P1 角色路由与多供应商', () => {
     configureAi({ providers: { glm: { model: 'glm-4-flash' } } })
     setApiKey('glm', 'sk-glm')
 
-    const info = aiProviderInfo()
+    const info = aiSettingsInfo().providers
     expect(info.map((p) => p.id)).toEqual(['deepseek', 'openai', 'gemini', 'glm'])
     const glm = info.find((p) => p.id === 'glm')
     expect(glm).toMatchObject({ keySet: true, model: 'glm-4-flash', unverified: true })

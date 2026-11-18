@@ -19,7 +19,10 @@ const api: WordmemoApi = {
     clearApiKey: (provider) => ipcRenderer.invoke('settings:clearApiKey', provider),
     clearAllApiKeys: () => ipcRenderer.invoke('settings:clearAllApiKeys'),
     testApiKey: (provider, key) => ipcRenderer.invoke('settings:testApiKey', provider, key),
-    aiProviders: () => ipcRenderer.invoke('settings:aiProviders')
+    aiProviders: () => ipcRenderer.invoke('settings:aiProviders'),
+    refreshCatalog: (provider, force) =>
+      ipcRenderer.invoke('settings:refreshCatalog', provider, force),
+    refreshPricing: (force) => ipcRenderer.invoke('settings:refreshPricing', force)
   },
   notes: {
     list: (query?: NoteQuery) => ipcRenderer.invoke('notes:list', query),

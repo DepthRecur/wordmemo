@@ -380,6 +380,21 @@ export interface AiTestResult {
   latencyMs?: number
 }
 
+/** 价格来源：远程目录 / 随包快照 / 没有（只统计 token） */
+export type AiPriceSource = 'catalog' | 'snapshot' | 'none'
+
+export interface AiPriceInfo {
+  /** false = 这个模型没有价格 */
+  priced: boolean
+  /** 美元 / 百万 token */
+  input: number
+  output: number
+  cacheRead: number
+  source: AiPriceSource
+  /** 价格数据的日期（YYYY-MM-DD） */
+  asOf: string | null
+}
+
 /** 设置页的供应商卡片：配置只读视图，不包含 Key 本身 */
 export interface AiProviderInfo {
   id: AiProviderId
@@ -391,6 +406,27 @@ export interface AiProviderInfo {
   vision: boolean
   /** 作者没有真机验证过这一家（PLAN-PROVIDERS §9.1），UI 上要标「未验证」 */
   unverified: boolean
+  /** /models 目录（可能为空：还没拉过） */
+  models: string[]
+  modelsFetchedAt: string | null
+  /** 目录超过 TTL 或上次拉取失败 */
+  stale: boolean
+  catalogError: string | null
+  /** 当前模型的价格 */
+  price: AiPriceInfo
+}
+
+export interface AiSettingsInfo {
+  providers: AiProviderInfo[]
+  pricing: { source: string; asOf: string }
+  /** 本月用量（有价部分 + 未定价次数） */
+  usage: { cost: number; calls: number; unpricedCalls: number }
+}
+
+export interface AiRefreshResult {
+  ok: boolean
+  message: string
+  info: AiSettingsInfo
 }
 
 export type IntegrityLevel = 'low' | 'medium' | 'high' | 'system' | 'unknown'
@@ -424,8 +460,12 @@ export interface WordmemoApi {
     /** 清掉全部 Key（含旧的 secrets.bin） */
     clearAllApiKeys(): Promise<void>
     testApiKey(provider?: AiProviderId, key?: string): Promise<AiTestResult>
-    /** 设置页四张卡片的只读视图 */
-    aiProviders(): Promise<AiProviderInfo[]>
+    /** 设置页四张卡片的只读视图（不含 Key） */
+    aiProviders(): Promise<AiSettingsInfo>
+    /** 拉某一家的 /models；force = 忽略 24h TTL */
+    refreshCatalog(provider: AiProviderId, force?: boolean): Promise<AiRefreshResult>
+    /** 刷新 models.dev 价格目录；force = 忽略 7 天 TTL */
+    refreshPricing(force?: boolean): Promise<AiRefreshResult>
   }
   notes: {
     list(query?: NoteQuery): Promise<NoteSummary[]>

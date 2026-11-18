@@ -27,7 +27,10 @@ import { enrichNote } from './enrich'
 import { semanticSearch } from './search'
 import { lookupPhonetic } from './media/phonetic'
 import { getDb } from './db/connection'
-import { testApiKey, aiProviderInfo } from './ai/client'
+import { testApiKey } from './ai/client'
+import { aiSettingsInfo } from './ai/info'
+import { refreshCatalog } from './ai/catalog'
+import { refreshPricing } from './ai/pricing'
 import { isProviderId, type ProviderId } from './ai/providers'
 import { getDiagnostics } from './diagnostics'
 import {
@@ -84,7 +87,22 @@ export function registerIpc(): void {
   ipcMain.handle('settings:testApiKey', (_e, provider?: string, key?: string) =>
     testApiKey(asProviderId(provider), typeof key === 'string' ? key : undefined)
   )
-  ipcMain.handle('settings:aiProviders', () => aiProviderInfo())
+  ipcMain.handle('settings:aiProviders', () => aiSettingsInfo())
+  ipcMain.handle(
+    'settings:refreshCatalog',
+    async (_e, provider?: string, force?: boolean) => {
+      const result = await refreshCatalog(asProviderId(provider), force !== false)
+      return {
+        ok: !result.error,
+        message: result.error ?? `已更新 ${result.models.length} 个模型`,
+        info: aiSettingsInfo()
+      }
+    }
+  )
+  ipcMain.handle('settings:refreshPricing', async (_e, force?: boolean) => {
+    const result = await refreshPricing(force !== false)
+    return { ok: result.ok, message: result.message, info: aiSettingsInfo() }
+  })
 
   ipcMain.handle('notes:list', (_e, query?: NoteQuery) => listNotes(query ?? {}))
   ipcMain.handle('notes:get', (_e, id: number) => getNote(id))

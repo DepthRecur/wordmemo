@@ -21,6 +21,15 @@ export interface ProviderSpec {
   baseUrl: string
   paths: { chat: string; models: string }
   /**
+   * /models 的差异（P2）：Gemini 的兼容层没有兼容的目录接口，要打 native 端点。
+   * 缺省 = `baseUrl + paths.models`、Bearer、OpenAI 形状 `{ data: [...] }`。
+   */
+  modelsConfig?: {
+    url?: string
+    auth?: 'bearer' | 'google'
+    shape?: 'openai' | 'google'
+  }
+  /**
    * 作者没有在真机上验证过这一家（没有该地区的账号/Key，见 PLAN-PROVIDERS §9.1）。
    * 只影响 UI 徽标与文档状态表；等真实用户反馈跑通后改成 false。
    */
@@ -83,6 +92,12 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     // 作者没有 Gemini 账号：兼容层是否接受 image_url / response_format 都没实测
     unverified: true,
+    // 兼容层（/v1beta/openai）一般不提供 /models，改打 native 目录
+    modelsConfig: {
+      url: 'https://generativelanguage.googleapis.com/v1beta/models',
+      auth: 'google',
+      shape: 'google'
+    },
     paths: { chat: '/chat/completions', models: '/models' },
     capabilities: { vision: true },
     compat: {

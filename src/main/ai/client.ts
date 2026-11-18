@@ -1,9 +1,9 @@
-import type { AiProviderId, AiProviderInfo, AiRoleConfig, AiTestResult } from '@shared/types'
+import type { AiProviderId, AiRoleConfig, AiTestResult } from '@shared/types'
 import { getApiKey, getSettings } from '../settings'
 import { getAiCache, logAiUsage, monthAiCost, setAiCache } from '../db/ai'
+import { estimateCostUsd, priceFor } from './pricing'
 import {
   PROVIDERS,
-  PROVIDER_IDS,
   isProviderId,
   type ProviderId,
   type ProviderSpec
@@ -34,22 +34,11 @@ interface Target {
   model: string
 }
 
-type Price = { miss: number; hit: number; out: number }
+/** DeepSeek 没有配模型时的兜底名（价格与目录都在 pricing.ts，这里只有名字） */
+const DEEPSEEK_DEFAULT_MODEL = 'deepseek-flash'
 
-/** 美元 / 百万 token。P1 只有 DeepSeek 有内置价格，其他家 P2 接 models.dev。 */
-const PRICES: Record<string, Record<string, Price>> = {
-  deepseek: { 'deepseek-flash': { miss: 0.15, hit: 0.003, out: 0.6 } }
-}
-
-/** 每个 provider 认不出模型时的兜底（DeepSeek 保持旧行为；P2 改成「费用未知」） */
-const DEFAULT_MODEL: Record<string, string> = { deepseek: 'deepseek-flash' }
-
-const ZERO_PRICE: Price = { miss: 0, hit: 0, out: 0 }
-
-function priceFor(provider: string, model: string): Price {
-  const table = PRICES[provider] ?? {}
-  return table[model] ?? table[DEFAULT_MODEL[provider] ?? ''] ?? ZERO_PRICE
-}
+/** 预算降级成 token 上限时的粗估：$1 ≈ 200 万 token（有未定价调用时才用） */
+const TOKENS_PER_USD = 2_000_000
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
@@ -60,7 +49,8 @@ function providerConfig(id: ProviderId): { baseUrl?: string; model?: string } {
   return getSettings().ai.providers[id] ?? {}
 }
 
-function baseUrlFor(id: ProviderId): string {
+/** 某一家实际会用的端点（设置页与目录都要用） */
+export function providerBaseUrl(id: ProviderId): string {
   const own = providerConfig(id).baseUrl?.trim()
   if (own) return own.replace(/\/+$/, '')
   // 老配置：DeepSeek 时代只有顶层 baseUrl，不迁移也能照旧
@@ -71,14 +61,15 @@ function baseUrlFor(id: ProviderId): string {
   return PROVIDERS[id].baseUrl
 }
 
-function modelFor(id: ProviderId, role?: AiRoleConfig): string {
+/** 某一家实际会用的模型名（角色覆盖 > 卡片配置 > 旧字段/默认） */
+export function providerModel(id: ProviderId, role?: AiRoleConfig): string {
   const fromRole = role && role.provider === id ? role.model?.trim() : ''
   if (fromRole) return fromRole
   const own = providerConfig(id).model?.trim()
   if (own) return own
   if (id === 'deepseek') {
     // 老配置：顶层 model 就是 DeepSeek 的模型
-    return getSettings().model?.trim() || DEFAULT_MODEL.deepseek
+    return getSettings().model?.trim() || DEEPSEEK_DEFAULT_MODEL
   }
   return ''
 }
@@ -90,7 +81,7 @@ function roleConfig(role: AiRole): AiRoleConfig {
 }
 
 function targetFor(id: ProviderId, role?: AiRoleConfig): Target {
-  return { spec: PROVIDERS[id], baseUrl: baseUrlFor(id), model: modelFor(id, role) }
+  return { spec: PROVIDERS[id], baseUrl: providerBaseUrl(id), model: providerModel(id, role) }
 }
 
 function resolveTarget(role: AiRole): Target {
@@ -172,19 +163,19 @@ async function requestOnce(target: Target, opts: ChatOptions, key: string): Prom
         req
       )
 
+      // 价格来自 pricing.ts（远程目录 → 随包快照 → 未知）。未知就 priced:false + 只记 token
       const price = priceFor(current.spec.id, current.model)
-      const cached = result.usage.cachedTokens
-      const miss = Math.max(0, result.usage.promptTokens - cached)
-      const cost =
-        (miss * price.miss + cached * price.hit + result.usage.completionTokens * price.out) / 1_000_000
+      const cost = estimateCostUsd(price, result.usage)
       logAiUsage({
         provider: current.spec.id,
         kind: opts.kind,
         model: current.model,
         promptTokens: result.usage.promptTokens,
-        cachedTokens: cached,
+        cachedTokens: result.usage.cachedTokens,
         completionTokens: result.usage.completionTokens,
-        costUsd: cost
+        costUsd: cost,
+        costSource: price.priced ? price.source : 'none',
+        pricedAt: price.asOf
       })
       return result.content
     } catch (err) {
@@ -203,10 +194,19 @@ export function aiAvailable(role: AiRole = 'default'): boolean {
   return !!getApiKey(resolveTarget(role).spec.id)
 }
 
+/**
+ * 预算：有价按金额；这个月只要出现过「没有价格」的调用，就同时按 token 上限兜底
+ * （`TOKENS_PER_USD` 是粗估，宁可早点提示，也不要因为看不到价格就无限花）。
+ */
 export function overBudget(): boolean {
   const s = getSettings()
   if (!s.monthlyBudgetUsd || s.monthlyBudgetUsd <= 0) return false
-  return monthAiCost().cost >= s.monthlyBudgetUsd
+  const month = monthAiCost()
+  if (month.cost >= s.monthlyBudgetUsd) return true
+  if (month.unpricedCalls > 0) {
+    return month.tokens >= s.monthlyBudgetUsd * TOKENS_PER_USD
+  }
+  return false
 }
 
 export async function chat(opts: ChatOptions): Promise<string> {
@@ -341,18 +341,4 @@ export async function testApiKey(
   }
 }
 
-/** 设置页四张卡片的只读视图（不含 Key 本身） */
-export function aiProviderInfo(): AiProviderInfo[] {
-  return PROVIDER_IDS.map((id) => {
-    const spec = PROVIDERS[id]
-    return {
-      id,
-      label: spec.label,
-      baseUrl: baseUrlFor(id),
-      model: modelFor(id),
-      keySet: !!getApiKey(id),
-      vision: spec.capabilities.vision,
-      unverified: !!spec.unverified
-    }
-  })
-}
+/* 设置页的供应商卡片视图在 info.ts（依赖 catalog.ts，不能让 client 反向依赖） */

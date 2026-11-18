@@ -48,9 +48,14 @@ function migrate(database: SqliteDatabase): void {
   }
 
   // 多供应商（P0）：缓存与用量以前没有 provider 维度，A 家的答案会被当成 B 家的。
-  // 唯一键 (kind, cache_key) 留到 P1 再换成 (provider, kind, cache_key)，避免这一轮重建表。
   addColumnIfMissing(database, 'ai_cache', 'provider', "TEXT NOT NULL DEFAULT 'deepseek'")
   addColumnIfMissing(database, 'ai_usage', 'provider', "TEXT NOT NULL DEFAULT 'deepseek'")
+  // 价格来源（P2）：区分「按目录价 / 按快照 / 没有价」；没有价的调用只记 token
+  addColumnIfMissing(database, 'ai_usage', 'cost_source', 'TEXT')
+  addColumnIfMissing(database, 'ai_usage', 'priced_at', 'TEXT')
+  // 缓存唯一键带上 provider（P2）：老表的 UNIQUE(kind, cache_key) 是建表时写死的，
+  // 只能重建表；ai_cache 是纯缓存，重建不会影响任何用户数据
+  migrateAiCacheUnique(database)
 
   // 旧的 (headword, pos, kind) 唯一键会阻止合并不同词性/类型的重复词条
   database.exec('DROP INDEX IF EXISTS ux_items')
@@ -76,6 +81,52 @@ function addColumnIfMissing(
   if (!columns.length || columns.some((c) => c.name === column)) return false
   database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
   return true
+}
+
+/**
+ * ai_cache 的唯一键从 (kind, cache_key) 换成 (provider, kind, cache_key)。
+ * SQLite 改不了约束，只能重建表；ai_cache 是纯缓存（丢了会重新请求），重建不动任何用户数据。
+ * 失败就保持原样继续跑——跨家串缓存的风险，比启动失败小得多。
+ */
+function migrateAiCacheUnique(database: SqliteDatabase): void {
+  const row = database
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ai_cache'")
+    .get() as unknown as { sql?: string } | undefined
+  const sql = row?.sql ?? ''
+  if (!sql) return
+  if (/UNIQUE\s*\(\s*provider\s*,\s*kind\s*,\s*cache_key\s*\)/i.test(sql)) return
+
+  try {
+    database.exec(`
+      BEGIN IMMEDIATE;
+      CREATE TABLE ai_cache_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        provider TEXT NOT NULL DEFAULT 'deepseek',
+        kind TEXT NOT NULL,
+        cache_key TEXT NOT NULL,
+        model TEXT,
+        response_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        UNIQUE(provider, kind, cache_key)
+      );
+      INSERT INTO ai_cache_new (id, provider, kind, cache_key, model, response_json, created_at)
+        SELECT id, provider, kind, cache_key, model, response_json, created_at FROM ai_cache;
+      DROP TABLE ai_cache;
+      ALTER TABLE ai_cache_new RENAME TO ai_cache;
+      COMMIT;
+    `)
+  } catch {
+    try {
+      database.exec('ROLLBACK')
+    } catch {
+      /* ignore */
+    }
+    try {
+      database.exec('DROP TABLE IF EXISTS ai_cache_new')
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function getDb(): SqliteDatabase {
