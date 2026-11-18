@@ -288,7 +288,7 @@ export default function Notes({
         )}
         {search.trim() && expandedTerms.length > 0 && (
           <div className="hint" style={{ marginBottom: 10 }}>
-            AI 语义扩展：{expandedTerms.join(' / ')}（仅把查询词发给 AI，未上传词库）
+            AI 语义扩展：{expandedTerms.join(' / ')}（只发送查询词，不上传词库）
           </div>
         )}
         {search.trim() && itemResults.length > 0 && (
@@ -630,7 +630,7 @@ export default function Notes({
               onChange={(e) => setItemExtra(e.target.value)}
             />
           </Field>
-          <div className="hint">提示：修改英文、词性或类型会重新计算去重键；如果与已有词条冲突会提示失败。</div>
+          <div className="hint">改英文 / 词性 / 类型后会与已有词条比对，撞词会提示失败。</div>
         </div>
       </Modal>
 

@@ -341,7 +341,6 @@ export interface AiSettings {
   default: AiRoleConfig
   /** null = 图片识别跟随 default */
   vision: AiRoleConfig | null
-  showCost: boolean
   providers: Partial<Record<AiProviderId, AiProviderConfig>>
 }
 
@@ -572,7 +571,6 @@ export const DEFAULT_SETTINGS: Settings = {
   ai: {
     default: { provider: 'deepseek' },
     vision: null,
-    showCost: true,
     providers: {}
   },
   longTermRetention: 0.9,

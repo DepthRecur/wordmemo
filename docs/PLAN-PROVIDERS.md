@@ -468,3 +468,19 @@ OpenAI / Gemini / 智谱 GLM   SKIP（无 Key）
 - 界面：设置页四张卡片 + 价格行照常；统计页出现「DeepSeek N 次 · $x」的按家拆分行；console 无错误。
 
 **踩到的坑（写下来给以后）**：把数据目录复制出来跑冒烟时，必须**连 `Local State` 一起复制**——Electron 的 `safeStorage` 密钥存在 `userData/Local State` 里（DPAPI 保护），只复制 `secrets.v2.json` 会解不开 Key（`isEncryptionAvailable()` 仍为 true，但 `getApiKey()` 返回 null）。
+
+### 2026-11-18　UI 打磨：设置页分区 + 灰字清理 + 去掉「显示费用」开关
+
+起因是用户的三点反馈：设置页边框对不齐、很多小字是写给维护者看的、`显示 AI 费用估算` 勾了没用。
+
+| 问题 | 结论与修法 |
+|---|---|
+| `showCost` 勾选无效 | **是漏写**：这个字段只存不读。用户决定**不做开关**——金额始终显示，但明确标注「估算，可能和账单有出入」。字段从 `AiSettings` / `DEFAULT_SETTINGS.ai` / 深合并里删掉，设置页那个 Toggle 也删了 |
+| 设置页边框错位 | 改成**左侧分区导航**（6 区）：AI 供应商 / AI 角色与预算 / 复习节奏 / 提醒 / 发音源 / **高级与诊断**（数据 + 后台退出 + 构建/权限/托盘折进「诊断信息」）。右栏一次只显示一节，`draft` 共享，切区不丢未保存修改（左侧当前项有点标） |
+| 小字是写给维护者的 | 删 3 条（Anki learn ahead 解释、「DeepSeek 已真机验证…不用等发版」、音标那段长解释改为一句）；改写 9 条（Key 说明、目录行、视觉能力、发音源、后台运行、导入页两处、笔记页去重键、统计页 SQLite）；把构建/权限/托盘/重启说明挪进折叠的「诊断信息」。规则写进 HANDOFF §10 |
+
+改动文件：`SettingsPage.tsx`（分区 + 文案）、`styles.css`（约 45 行分区样式）、`StatsPage.tsx`（估算说明、按家金额）、`Notes.tsx` / `ImportPage.tsx`（文案）、`shared/types.ts` + `settings.ts`（删 `showCost`）、两个测试文件（同步删断言）。
+
+**验证**：typecheck 0；`npm test` 10 文件 95 项全绿；离屏截图逐个分区检查（6 个分区都只有对应面板可见、左栏 active 正确、无 console 错误），统计页/导入页文案已更新。
+
+> 截图验收的坑：离屏窗口默认会被 throttle，`capturePage()` 会返回**上一帧**，CSS transition 还会卡在中间态（看起来像两个分项同时高亮）。修法是 `webPreferences.backgroundThrottling: false` + 用 CDP `Page.captureScreenshot`，别用 `capturePage()`。

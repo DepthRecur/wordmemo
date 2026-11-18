@@ -31,7 +31,6 @@ describe('settings.ai 深合并', () => {
     const s = getSettings()
     expect(s.ai.default.provider).toBe('glm')
     expect(s.ai.vision).toBeNull()
-    expect(s.ai.showCost).toBe(true)
     expect(s.ai.providers.glm?.model).toBe('glm-4-flash')
     // 旧顶层字段仍保留：DeepSeek 的模型解析要回落到它
     expect(s.model).toBe('deepseek-chat')

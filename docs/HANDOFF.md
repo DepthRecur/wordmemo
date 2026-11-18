@@ -82,7 +82,7 @@ src/main/db/
   ai.ts            ← 缓存/用量/月度费用/按家用量/目录与价格的读写
   notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
 src/main/index.ts  ← 启动、托盘、提醒、备份；30 秒后后台刷新目录/价格
-src/renderer/src/pages/SettingsPage.tsx ← 四张供应商卡片 + AI 角色区 + 目录/价格行
+src/renderer/src/pages/SettingsPage.tsx ← 左侧 6 分区（供应商/角色/复习/提醒/发音/高级与诊断）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
@@ -141,7 +141,8 @@ docs/               ← 四份计划 + 调研 + 本文件
 ### 7.1 本机（这台）
 
 - `npm run typecheck` / `npm test`：每次改完都跑。
-- `npm run dev`：开发模式看界面。
+- `npm run dev`：开发模式看界面。`npm run ai-smoke`：真机自检（4 个调用点 × 4 家，没 Key 的家 `SKIP（无 Key）`，会花几次极短调用；跑之前先退出正在运行的应用）。
+- **界面截图验收**：离屏窗口必须 `webPreferences.backgroundThrottling: false`，并且用 CDP `Page.captureScreenshot`（`capturePage()` 会返回上一帧，还会把 CSS transition 卡在中间态，看起来像两个分项同时高亮）。
 
 ### 7.2 另一台电脑（Windows 家庭版，有 Git/Node，用 VMware）
 
@@ -215,4 +216,5 @@ DeepSeek 已验证；GLM 等用户 Key 后验证；OpenAI / Gemini 等社区反�
 - 建议每个功能开一个分支：`feat/providers`、`feat/decks`、`feat/portable`、`feat/sync`。
 - 提交信息用 `feat|fix|refactor|docs(scope): ...`。
 - 贡献者用 DCO（`git commit -s`），不引入 CLA。
+- **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。

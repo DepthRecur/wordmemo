@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowDown, ArrowUp, Database, FolderOpen, Power, Volume2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Database, FolderOpen, Volume2 } from 'lucide-react'
 import type {
   AiPriceInfo,
   AiProviderConfig,
@@ -12,7 +12,18 @@ import type {
 } from '@shared/types'
 import { Badge, Button, Field, Toggle } from '../components/UI'
 import type { Navigate, Notify } from '../App'
-import { formatBytes } from '../lib/utils'
+import { cls, formatBytes } from '../lib/utils'
+
+type SettingsSection = 'providers' | 'ai' | 'review' | 'reminder' | 'tts' | 'advanced'
+
+const SECTIONS: { key: SettingsSection; label: string }[] = [
+  { key: 'providers', label: 'AI 供应商' },
+  { key: 'ai', label: 'AI 角色与预算' },
+  { key: 'review', label: '复习节奏' },
+  { key: 'reminder', label: '提醒' },
+  { key: 'tts', label: '发音源' },
+  { key: 'advanced', label: '高级与诊断' }
+]
 
 interface Props {
   notify: Notify
@@ -81,6 +92,7 @@ function priceText(price: AiPriceInfo): string {
 
 export default function SettingsPage({ notify, settings, refreshSettings }: Props) {
   const [draft, setDraft] = useState<Settings>(settings)
+  const [section, setSection] = useState<SettingsSection>('providers')
   const [saving, setSaving] = useState(false)
   const [cache, setCache] = useState({ files: 0, bytes: 0 })
   const [version, setVersion] = useState('')
@@ -96,6 +108,9 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
   const [pricingBusy, setPricingBusy] = useState(false)
 
   const providers = info?.providers ?? []
+
+  // 切换分区不会丢草稿（draft 是整页共享的）；有未保存的修改时在左侧项上点一个点
+  const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
 
   const loadInfo = async () => {
     try {
@@ -331,8 +346,23 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
       </div>
 
       <div className="page-scroll">
-      <div className="grid grid-2" style={{ alignItems: 'start' }}>
-        <div className="panel" style={{ gridColumn: '1 / -1' }}>
+      <div className="settings-layout">
+        <nav className="settings-nav">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.key}
+              className={cls('nav-item', section === s.key && 'active')}
+              onClick={() => setSection(s.key)}
+            >
+              {s.label}
+              {dirty && section === s.key && (
+                <span className="unsaved-dot" title="有未保存的修改" />
+              )}
+            </button>
+          ))}
+        </nav>
+        <div className="settings-body">
+        <div className="panel" hidden={section !== 'providers'}>
           <div className="panel-title row">
             <span>AI 供应商</span>
             <span style={{ flex: 1 }} />
@@ -357,8 +387,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
             </Button>
           </div>
           <div className="hint" style={{ marginBottom: 8 }}>
-            Key 只保存在本机（Windows DPAPI 加密，secrets.v2.json），不会上传。「保存并测试」会发一条
-            「回复 ok」的极短请求；模型与 Base URL 改完要点右上角「保存设置」。价格是估算，不是账单。
+            Key 只保存在本机，不会上传。价格按公开价估算，可能和账单有出入；未知模型只统计 token。
           </div>
           <div className="col" style={{ gap: 8 }}>
             {providers.map((p) => {
@@ -466,9 +495,9 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                         </Field>
                       </div>
                       <div className="row-between" style={{ alignItems: 'flex-start', gap: 10 }}>
-                        <span className="hint">
+                        <span className="hint" title={p.catalogError ?? undefined}>
                           目录：{p.models.length ? `${p.models.length} 个模型 · ${formatAgo(p.modelsFetchedAt)}` : '还没拉取'}
-                          {p.catalogError ? ` · ${p.catalogError}` : ''}
+                          {p.catalogError ? ' · 上次刷新失败' : ''}
                         </span>
                         {p.keySet && (
                           <Button
@@ -481,24 +510,16 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                         )}
                       </div>
                       <div className="hint">价格：{priceText(p.price)}</div>
-                      <div className="hint">
-                        {p.vision
-                          ? '这家支持图片识别（视觉）'
-                          : '这家不支持图片识别，OCR 会落到默认那家'}
-                      </div>
+                      <div className="hint">{p.vision ? '支持图片识别' : '不支持图片识别'}</div>
                     </div>
                   )}
                 </div>
               )
             })}
           </div>
-          <div className="hint" style={{ marginTop: 8 }}>
-            DeepSeek 已真机验证；OpenAI / Gemini / GLM 标「未验证」——参数按官方文档写，第一次用如果报错，
-            把提示发出来即可，改配置就能修，不用等发版。
-          </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" hidden={section !== 'ai'}>
           <div className="panel-title">AI 角色与预算</div>
           <div className="col">
             <Field label="默认模型" hint="导入、判分、音标、补搭配都走这家">
@@ -540,7 +561,10 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                 </select>
               </Field>
             )}
-            <Field label="每月 AI 预算（美元，0 表示不限）">
+            <Field
+              label="每月 AI 预算（美元，0 表示不限）"
+              hint="按估算金额统计，实际出账可能略有出入"
+            >
               <input
                 className="input"
                 type="number"
@@ -562,16 +586,10 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
               label="中文答案用 AI 判断语义"
               hint="能本地命中时不会调用 AI；关闭后不同表述需要你手动确认。"
             />
-            <Toggle
-              checked={draft.ai.showCost}
-              onChange={(v) => setDraft((d) => ({ ...d, ai: { ...d.ai, showCost: v } }))}
-              label="显示 AI 费用估算"
-              hint="按内置价格估算（不是账单）；未知模型会显示「费用未知」。"
-            />
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" hidden={section !== 'review'}>
           <div className="panel-title">复习节奏</div>
           <div className="col">
             <div className="grid grid-2">
@@ -628,9 +646,6 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                 />
               </Field>
             </div>
-            <div className="hint">
-              对应 Anki 的 learn ahead：本轮复习快结束时，提前学掉这段时间内到期的学习卡，避免过几分钟又出现“第二批”。
-            </div>
 
             <Toggle
               checked={draft.listenCardEnabled}
@@ -650,10 +665,11 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                 <option value="uk">英式发音</option>
               </select>
             </Field>
+            <div className="hint">复习时不显示音标（避免通过音标反推拼写），需要时在词条详情里看。</div>
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" hidden={section !== 'reminder'}>
           <div className="panel-title">提醒</div>
           <div className="col">
             <Toggle
@@ -696,7 +712,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" hidden={section !== 'tts'}>
           <div className="panel-title row">
             <Volume2 size={16} /> 发音源（按顺序尝试）
           </div>
@@ -731,7 +747,7 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
             ))}
           </div>
           <div className="hint" style={{ marginTop: 10 }}>
-            有道 / 百度是网页接口，免费但非官方，可能限流；下载过的音频会缓存到本地，断网也能播。全部失败时会退回系统语音。
+            可能是非官方接口，限流时会自动换下一个；音频会缓存到本地，断网也能播。
           </div>
           <div className="row" style={{ marginTop: 10 }}>
             <span className="muted tiny">
@@ -750,14 +766,12 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
           </div>
         </div>
 
-        <div className="panel">
+        <div className="panel" hidden={section !== 'advanced'}>
           <div className="panel-title row">
-            <Database size={16} /> 数据
+            <Database size={16} /> 高级与诊断
           </div>
           <div className="col">
-            <div className="hint">
-              数据库、原始上传文件和发音缓存都在本机用户目录。建议每周备份一次。
-            </div>
+            <div className="hint">数据库、原始上传文件和发音缓存都在本机。建议每周备份一次。</div>
             <div className="row">
               <Button onClick={() => void backup()}>立即备份</Button>
               <Button onClick={() => void window.api.system.openDataDir()}>
@@ -770,63 +784,57 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
                 v{build?.version ?? version ?? '0.1.0'} · {formatBuild(build?.buildTime)}
               </span>
             </div>
-          </div>
-        </div>
-
-        <div className="panel">
-          <div className="panel-title row">
-            <Power size={16} /> 后台与退出
-          </div>
-          <div className="col">
-            <div className="hint">
-              关闭窗口只是收进托盘，应用仍在后台运行（到期提醒依赖它）。Windows 11 的新托盘图标可能收在任务栏右下角的「^」里，
-              找不到图标时可以直接从这里退出或重启。
-            </div>
-            <div className="row-between" style={{ marginTop: 4 }}>
-              <span className="muted tiny">构建 / 启动</span>
-              <span className="tiny">
-                {formatBuild(build?.buildTime)} · 启动 {formatClock(build?.startedAt)}
-              </span>
-            </div>
             <div className="row-between">
-              <span className="muted tiny">权限级别</span>
-              <span className="tiny">{INTEGRITY_LABEL[build?.integrity ?? 'unknown'] ?? '未知'}</span>
+              <span className="muted tiny">后台运行</span>
+              <span className="tiny">关闭窗口只是收进托盘，到期提醒仍然生效</span>
             </div>
-            <div className="row-between">
-              <span className="muted tiny">托盘图标</span>
-              <span className="tiny">
-                {build?.tray.ok === true
-                  ? '已创建'
-                  : build?.tray.ok === false
-                    ? `未创建（${build.tray.reason ?? '未知原因'}）`
-                    : '检测中…'}
-              </span>
-            </div>
-            <div className="row" style={{ marginTop: 6 }}>
-              <Button size="sm" onClick={() => void window.api.system.reloadWindow()}>
-                重新加载界面
-              </Button>
+            <div className="row" style={{ marginTop: 8 }}>
               <Button size="sm" onClick={() => void window.api.system.restart()}>
                 重启应用
               </Button>
               <Button size="sm" variant="danger" onClick={quitApp}>
                 退出应用
               </Button>
-              <Button size="sm" onClick={() => void refreshBuild()}>
-                重新检测
-              </Button>
             </div>
-            <div className="hint">
-              改完代码后必须点「重启应用」才会加载新构建；只刷新界面不会更新主进程。
-              如果显示「低权限」，Windows 不允许注册托盘图标，请退出后从资源管理器双击 WordMemo.exe。
-            </div>
+            <details className="diag">
+              <summary>诊断信息</summary>
+              <div className="col" style={{ marginTop: 8 }}>
+                <div className="row-between">
+                  <span className="muted tiny">构建 / 启动</span>
+                  <span className="tiny">
+                    {formatBuild(build?.buildTime)} · 启动 {formatClock(build?.startedAt)}
+                  </span>
+                </div>
+                <div className="row-between">
+                  <span className="muted tiny">权限级别</span>
+                  <span className="tiny">{INTEGRITY_LABEL[build?.integrity ?? 'unknown'] ?? '未知'}</span>
+                </div>
+                <div className="row-between">
+                  <span className="muted tiny">托盘图标</span>
+                  <span className="tiny">
+                    {build?.tray.ok === true
+                      ? '已创建'
+                      : build?.tray.ok === false
+                        ? `未创建（${build.tray.reason ?? '未知原因'}）`
+                        : '检测中…'}
+                  </span>
+                </div>
+                <div className="row">
+                  <Button size="sm" variant="ghost" onClick={() => void window.api.system.reloadWindow()}>
+                    重新加载界面
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => void refreshBuild()}>
+                    重新检测
+                  </Button>
+                </div>
+                <div className="hint">
+                  改过代码后要用「重启应用」才会加载新构建。权限显示「低权限」时托盘图标不会出现，需要从资源管理器重新启动
+                  WordMemo.exe；Windows 11 也可能把托盘图标收进任务栏右下角的「^」。
+                </div>
+              </div>
+            </details>
           </div>
         </div>
-      </div>
-
-      <div className="panel" style={{ marginTop: 14 }}>
-        <div className="hint">
-          关于音标：复习界面永远不会显示音标，笔记详情里默认也隐藏；这是为了避免你通过音标反推拼写。需要时可以在上方打开「显示音标」。
         </div>
       </div>
       </div>

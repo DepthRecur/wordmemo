@@ -120,7 +120,6 @@ function mergeAi(raw: Partial<AiSettings> | null | undefined): AiSettings {
   return {
     default: { ...base.default, ...(raw?.default ?? {}) },
     vision,
-    showCost: raw?.showCost ?? base.showCost,
     providers
   }
 }

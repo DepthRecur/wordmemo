@@ -564,9 +564,9 @@ export default function ImportPage({
           <h1 className="page-title">导入笔记</h1>
           <span
             className="page-title-hint"
-            title="图片走 DeepSeek 视觉识别；Word / Excel / txt / md 本地解析。识别完立刻存成草稿，入库或手动丢弃之前都不会丢。"
+            title="图片走 AI 识别，Word / Excel / txt / md 本地解析。"
           >
-            图片走 DeepSeek 视觉识别；Word / Excel / txt / md 本地解析。识别完立刻存成草稿，入库或手动丢弃之前都不会丢。
+            图片走 AI 识别，Word / Excel / txt / md 本地解析。
           </span>
         </div>
         <div className="page-actions">
@@ -945,7 +945,7 @@ export default function ImportPage({
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>正在补全音标并入库…</div>
             <div className="hint" style={{ marginTop: 4 }}>
-              单词会查询词典，词组会交给 AI 标注美式 / 英式音标；可能需要几秒，请稍候。
+              单词查词典，词组交给 AI 标注；可能需要几秒。
             </div>
           </div>
         </div>
@@ -970,7 +970,7 @@ export default function ImportPage({
         }
       >
         <div className="hint">
-          丢弃后这份识别结果就真的没有了（除非以后重新上传同一个文件，能命中 AI 缓存）。已入库的笔记不受影响。
+          丢弃后这份识别结果就真的没有了。已入库的笔记不受影响。
         </div>
       </Modal>
 
@@ -1018,7 +1018,7 @@ export default function ImportPage({
         }
       >
         <div className="hint">
-          会用你修改后的 {items.length} 个词条重新请求 DeepSeek，产生新的 token 消耗；旧的校验提示会被替换。
+          会用当前 {items.length} 个词条重新请求 AI（消耗 token），旧的校验结果会被替换。
         </div>
       </Modal>
 
@@ -1087,7 +1087,7 @@ export default function ImportPage({
         }
       >
         <div className="hint">
-          {metas.length} 份识别结果会被删除，源文件副本也会在确认没有被笔记引用后清理。此操作不可撤销。
+          {metas.length} 份识别结果会被删除，此操作不可撤销。
         </div>
       </Modal>
 

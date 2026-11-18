@@ -68,7 +68,7 @@ export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats 
             <span>{stats.forecast[stats.forecast.length - 1]?.date.slice(5)}</span>
           </div>
           <div className="hint" style={{ marginTop: 10 }}>
-            柱子越高，那天到期的卡片越多。如果某天特别高，可以提前在「今日复习」里消化一部分。
+            柱子越高，那天到期的卡片越多。如果某天特别高，可以提前在「今日任务」里消化一部分。
           </div>
         </div>
 
@@ -110,6 +110,9 @@ export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats 
                     另有 {stats.aiUnpricedCalls} 次调用的模型没有价格，只统计了 token（费用未知）。
                   </div>
                 )}
+                <div className="hint" style={{ marginTop: 4 }}>
+                  金额按公开价格估算，实际账单可能略有出入。
+                </div>
               </div>
             )}
           </div>
@@ -194,7 +197,7 @@ export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats 
       <div className="panel" style={{ marginTop: 14 }}>
         <div className="panel-title">最近记录</div>
         <div className="hint">
-          数据最后更新于 {formatDate(new Date().toISOString())}。所有记录都保存在本机 SQLite 数据库里，可在设置页备份或导出。
+          数据最后更新于 {formatDate(new Date().toISOString())}。所有记录都保存在本机，可在设置页备份。
         </div>
       </div>
       </div>

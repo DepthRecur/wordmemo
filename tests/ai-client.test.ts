@@ -50,7 +50,6 @@ const messages = [{ role: 'user', content: 'hi' }]
 const AI_CLEAN: AiSettings = {
   default: { provider: 'deepseek' },
   vision: null,
-  showCost: true,
   providers: {}
 }
 
