@@ -1,15 +1,10 @@
 import type { AiTestResult } from '@shared/types'
 import { getApiKey, getSettings } from '../settings'
 import { getAiCache, logAiUsage, monthAiCost, setAiCache } from '../db/ai'
+import { PROVIDERS } from './providers'
+import { AiError, requestChat } from './transport'
 
-export class AiError extends Error {
-  status?: number
-  constructor(message: string, status?: number) {
-    super(message)
-    this.name = 'AiError'
-    this.status = status
-  }
-}
+export { AiError }
 
 interface ChatOptions {
   messages: unknown[]
@@ -22,12 +17,24 @@ interface ChatOptions {
   temperature?: number
 }
 
-const PRICES: Record<string, { miss: number; hit: number; out: number }> = {
-  'deepseek-flash': { miss: 0.15, hit: 0.003, out: 0.6 }
+/** P0 仍然只走 DeepSeek（settings.model / baseUrl 照旧）；P1 才由 settings.ai 选 provider */
+const ACTIVE_PROVIDER = PROVIDERS.deepseek
+
+type Price = { miss: number; hit: number; out: number }
+
+/** 美元 / 百万 token。键是 provider → 模型名。 */
+const PRICES: Record<string, Record<string, Price>> = {
+  deepseek: { 'deepseek-flash': { miss: 0.15, hit: 0.003, out: 0.6 } }
 }
 
-function priceFor(model: string): { miss: number; hit: number; out: number } {
-  return PRICES[model] ?? PRICES['deepseek-flash']
+/** 每个 provider 认不出模型时的旧兜底（P0 保持行为不变，P2 改成「费用未知」） */
+const DEFAULT_MODEL: Record<string, string> = { deepseek: 'deepseek-flash' }
+
+const ZERO_PRICE: Price = { miss: 0, hit: 0, out: 0 }
+
+function priceFor(provider: string, model: string): Price {
+  const table = PRICES[provider] ?? {}
+  return table[model] ?? table[DEFAULT_MODEL[provider]] ?? ZERO_PRICE
 }
 
 function sleep(ms: number): Promise<void> {
@@ -46,94 +53,45 @@ export function overBudget(): boolean {
 
 async function requestOnce(opts: ChatOptions, key: string): Promise<string> {
   const settings = getSettings()
-  const body: Record<string, unknown> = {
-    model: settings.model,
-    messages: opts.messages,
-    stream: false,
-    max_tokens: opts.maxTokens ?? 2000,
-    thinking: { type: opts.thinking ? 'enabled' : 'disabled' }
-  }
-  if (opts.json) body.response_format = { type: 'json_object' }
-  if (typeof opts.temperature === 'number') body.temperature = opts.temperature
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 90_000)
-  let res: Response
-  try {
-    res = await fetch(`${settings.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${key}`
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    })
-  } catch (err) {
-    clearTimeout(timer)
-    const msg = err instanceof Error ? err.message : String(err)
-    if (controller.signal.aborted) throw new AiError('请求超时，请检查网络后重试')
-    throw new AiError(`网络请求失败：${msg}`)
-  }
-  clearTimeout(timer)
-
-  const text = await res.text()
-  if (!res.ok) {
-    let detail = text.slice(0, 300)
-    try {
-      const parsed = JSON.parse(text) as { error?: { message?: string } }
-      detail = parsed.error?.message ?? detail
-    } catch {
-      /* ignore */
+  const spec = ACTIVE_PROVIDER
+  const result = await requestChat(
+    spec,
+    { baseUrl: settings.baseUrl, model: settings.model, apiKey: key },
+    {
+      messages: opts.messages,
+      json: opts.json,
+      maxTokens: opts.maxTokens,
+      temperature: opts.temperature,
+      thinking: opts.thinking,
+      timeoutMs: opts.timeoutMs
     }
-    if (res.status === 401) throw new AiError('API Key 无效或已过期', 401)
-    if (res.status === 402) throw new AiError('DeepSeek 账户余额不足', 402)
-    if (res.status === 429) throw new AiError('请求过于频繁，稍后再试', 429)
-    throw new AiError(`DeepSeek 返回 ${res.status}：${detail}`, res.status)
-  }
+  )
 
-  let payload: {
-    choices?: { message?: { content?: string } }[]
-    usage?: {
-      prompt_tokens?: number
-      completion_tokens?: number
-      prompt_cache_hit_tokens?: number
-      prompt_cache_miss_tokens?: number
-    }
-  }
-  try {
-    payload = JSON.parse(text)
-  } catch {
-    throw new AiError('DeepSeek 返回了无法解析的内容')
-  }
-
-  const content = payload.choices?.[0]?.message?.content ?? ''
-  if (!content.trim()) throw new AiError('DeepSeek 返回了空内容，请重试')
-
-  const usage = payload.usage ?? {}
-  const hit = Number(usage.prompt_cache_hit_tokens ?? 0)
-  const miss = Number(usage.prompt_cache_miss_tokens ?? Math.max(0, (usage.prompt_tokens ?? 0) - hit))
-  const out = Number(usage.completion_tokens ?? 0)
-  const p = priceFor(settings.model)
-  const cost = (miss * p.miss + hit * p.hit + out * p.out) / 1_000_000
+  const price = priceFor(spec.id, settings.model)
+  const cached = result.usage.cachedTokens
+  const miss = Math.max(0, result.usage.promptTokens - cached)
+  const cost =
+    (miss * price.miss + cached * price.hit + result.usage.completionTokens * price.out) / 1_000_000
   logAiUsage({
+    provider: spec.id,
     kind: opts.kind,
     model: settings.model,
-    promptTokens: miss + hit,
-    cachedTokens: hit,
-    completionTokens: out,
+    promptTokens: result.usage.promptTokens,
+    cachedTokens: cached,
+    completionTokens: result.usage.completionTokens,
     costUsd: cost
   })
 
-  return content
+  return result.content
 }
 
 export async function chat(opts: ChatOptions): Promise<string> {
+  const spec = ACTIVE_PROVIDER
   const key = getApiKey()
-  if (!key) throw new AiError('未配置 DeepSeek API Key，请先到设置页填写', 401)
+  if (!key) throw new AiError(`未配置 ${spec.label} API Key，请先到设置页填写`, { status: 401 })
 
   if (opts.cacheKey) {
-    const cached = getAiCache(opts.kind, opts.cacheKey)
+    const cached = getAiCache(spec.id, opts.kind, opts.cacheKey)
     if (cached) return cached
   }
 
@@ -142,7 +100,7 @@ export async function chat(opts: ChatOptions): Promise<string> {
     try {
       const content = await requestOnce(opts, key)
       if (opts.cacheKey) {
-        setAiCache(opts.kind, opts.cacheKey, getSettings().model, content)
+        setAiCache(spec.id, opts.kind, opts.cacheKey, getSettings().model, content)
       }
       return content
     } catch (err) {
@@ -198,23 +156,25 @@ export async function chatJson<T>(opts: ChatOptions): Promise<T> {
 export async function testApiKey(overrideKey?: string): Promise<AiTestResult> {
   const key = overrideKey?.trim() || getApiKey()
   if (!key) return { ok: false, message: '还没有填写 API Key' }
+  const settings = getSettings()
+  const spec = ACTIVE_PROVIDER
   try {
-    const settings = getSettings()
-    const res = await fetch(`${settings.baseUrl.replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({
-        model: settings.model,
+    await requestChat(
+      spec,
+      { baseUrl: settings.baseUrl, model: settings.model, apiKey: key },
+      {
         messages: [{ role: 'user', content: '回复 ok' }],
-        max_tokens: 8,
-        thinking: { type: 'disabled' }
-      }),
-      signal: AbortSignal.timeout(20_000)
-    })
-    if (res.status === 401) return { ok: false, message: 'API Key 无效' }
-    if (!res.ok) return { ok: false, message: `接口返回 ${res.status}` }
+        maxTokens: 8,
+        timeoutMs: 20_000
+      }
+    )
     return { ok: true, message: '连接成功，Key 可用', model: settings.model }
   } catch (err) {
+    if (err instanceof AiError) {
+      if (err.status === 401) return { ok: false, message: 'API Key 无效' }
+      if (err.status) return { ok: false, message: `接口返回 ${err.status}` }
+      return { ok: false, message: `连接失败：${err.message}` }
+    }
     return { ok: false, message: `连接失败：${err instanceof Error ? err.message : String(err)}` }
   }
 }

@@ -1,23 +1,40 @@
 import { getDb, localIso } from './connection'
 
-export function getAiCache(kind: string, key: string): string | null {
+/**
+ * 缓存的键带 provider：A 家的答案不能被当成 B 家的。
+ * P0 只有 DeepSeek 带货，但读写都已经按 provider 分区。
+ * 注意唯一键仍是 (kind, cache_key)，P1 才会换成 (provider, kind, cache_key)。
+ */
+export function getAiCache(provider: string, kind: string, key: string): string | null {
   const row = getDb()
-    .prepare('SELECT response_json FROM ai_cache WHERE kind = ? AND cache_key = ?')
-    .get(kind, key) as { response_json?: string } | undefined
+    .prepare(
+      'SELECT response_json FROM ai_cache WHERE provider = ? AND kind = ? AND cache_key = ?'
+    )
+    .get(provider, kind, key) as { response_json?: string } | undefined
   return row?.response_json ?? null
 }
 
-export function setAiCache(kind: string, key: string, model: string, response: string): void {
+export function setAiCache(
+  provider: string,
+  kind: string,
+  key: string,
+  model: string,
+  response: string
+): void {
   getDb()
     .prepare(
-      `INSERT INTO ai_cache (kind, cache_key, model, response_json, created_at)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(kind, cache_key) DO UPDATE SET response_json = excluded.response_json`
+      `INSERT INTO ai_cache (provider, kind, cache_key, model, response_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(kind, cache_key) DO UPDATE SET
+         provider = excluded.provider,
+         model = excluded.model,
+         response_json = excluded.response_json`
     )
-    .run(kind, key, model, response, localIso())
+    .run(provider, kind, key, model, response, localIso())
 }
 
 export interface UsageRecord {
+  provider: string
   kind: string
   model: string
   promptTokens: number
@@ -29,10 +46,11 @@ export interface UsageRecord {
 export function logAiUsage(u: UsageRecord): void {
   getDb()
     .prepare(
-      `INSERT INTO ai_usage (at, kind, model, prompt_tokens, cached_tokens, completion_tokens, cost_usd)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ai_usage (provider, at, kind, model, prompt_tokens, cached_tokens, completion_tokens, cost_usd)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      u.provider,
       localIso(),
       u.kind,
       u.model,

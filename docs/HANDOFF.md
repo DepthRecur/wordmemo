@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）已经在做，**只完成了底层模块，还没有接线**。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0 已做完并验证**：传输层 + `client.ts` 已接线 + 缓存/用量带 `provider` 列，行为仍是「只用 DeepSeek、和以前完全一样」。下一步是 **P1：接 OpenAI / Gemini / GLM + 设置页四张卡片**。
 
 ---
 
@@ -17,7 +17,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，4 个测试文件必须全绿
+npm test             # vitest，6 个测试文件（64 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -25,6 +25,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 - 只跑一个测试：`npx vitest run tests/providers.test.ts`
 - 打包（现在还用不到）：`npm run dist` → `release/`
 - 应用是单实例的：改完代码要先真退出（托盘右键 → 退出），再重新启动，否则加载的还是旧代码。
+- **手动启动主进程**（真机冒烟用）：`Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; .\node_modules\electron\dist\electron.exe . --no-sandbox`。环境里若留着 `ELECTRON_RUN_AS_NODE=1`（DSH 这类工具会设），Electron 会被当成 node 跑，报 `Cannot read properties of undefined (reading 'isPackaged')`。
 
 ---
 
@@ -64,67 +65,61 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 
 ```
 src/main/ai/
-  providers.ts     ← 【新】四家的声明式描述（端点/compat/能力位），无 if(provider)
-  transport.ts     ← 【新】buildChatBody / parseChatResponse / normalizeHttpError / requestChat
-  client.ts        ← 旧实现，仍是 DeepSeek 专用；**下一步要切到 transport**
+  providers.ts     ← 四家的声明式描述（端点/compat/能力位），无 if(provider)
+  transport.ts     ← buildChatBody / parseChatResponse / normalizeHttpError / requestChat
+  client.ts        ← 已接 transport：ACTIVE_PROVIDER = deepseek，价格表按 provider 分组
   import.ts        ← 7 个调用点里的 OCR/结构化/校验/补搭配/音标
   prompts.ts       ← 提示词，不动
 src/main/db/
-  schema.ts        ← 表结构（ai_cache / ai_usage 还没有 provider 列）
-  connection.ts    ← migrate()，加列和迁移写在这里
-  ai.ts            ← 缓存/用量/月度费用
+  schema.ts        ← 表结构（ai_cache / ai_usage 已有 provider 列）
+  connection.ts    ← migrate()，含 addColumnIfMissing()；加列和迁移写在这里
+  ai.ts            ← 缓存/用量/月度费用（读写都按 provider 分区）
   notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
 src/main/index.ts  ← 启动、托盘、提醒、备份；注意 22-26 行的 dev 数据目录逻辑
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 tests/
-  providers.test.ts ← 【新】14 项断言（传输层/供应商表/错误归一化）
-  core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有
+  providers.test.ts  ← 15 项：传输层/供应商表/错误归一化
+  ai-client.test.ts  ← 6 项：client 接线（stub fetch，不联网）
+  ai-db.test.ts      ← 5 项：provider 列 + 老库迁移回填
+  core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 10 / 3 项）
 docs/               ← 四份计划 + 调研 + 本文件
 ```
 
 ---
 
-## 5. 下一步：P0 第二块（直接照着做）
+## 5. 下一步：P1（四家供应商 + 设置页）
 
-**目标**：把 `client.ts` 切到新的 transport，并给缓存/用量加上 `provider` 维度。**行为必须与现在完全一致**（仍然只走 DeepSeek）。
+**P0 已完成并验证**（传输层 + `client.ts` 接线 + `provider` 列；typecheck 0 错误、`npm test` 6 文件 64 项全绿、DeepSeek 真机四项通过）。细节见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md) 的两条 2026-11-18 记录。
 
-### 5.1 改哪些文件
+### 5.1 P1 要做的四件事（按这个顺序）
 
-1. `src/main/db/schema.ts`
-   - `ai_cache` 加 `provider TEXT NOT NULL DEFAULT 'deepseek'`
-   - `ai_usage` 加 `provider TEXT NOT NULL DEFAULT 'deepseek'`
-   - （唯一索引 `(provider, kind, cache_key)` 留到 P1 再做；P0 不动现有唯一键，避免重建表）
-2. `src/main/db/connection.ts` 的 `migrate()`
-   - 用 `PRAGMA table_info(...)` 判断列是否存在，缺就 `ALTER TABLE ... ADD COLUMN`
-3. `src/main/db/ai.ts`
-   - `getAiCache(provider, kind, key)` / `setAiCache(provider, kind, key, model, response)`
-   - `logAiUsage({ provider, kind, model, ... })`
-4. `src/main/ai/client.ts`
-   - 删掉本地 `AiError` 类，改为 `export { AiError } from './transport'`
-   - `requestOnce`：`const spec = PROVIDERS.deepseek`；调 `requestChat(spec, { baseUrl: settings.baseUrl, model: settings.model, apiKey: key }, opts)`
-   - 费用：`PRICES` 改成 `{ deepseek: { ... } }`；未知模型**暂时保留**旧的兜底行为（P2 再改成「费用未知」）
-   - `logAiUsage` 带上 `provider: spec.id`
-   - `testApiKey` 也走 `requestChat`（发一条 `'回复 ok'`，maxTokens 8）
-   - 重试逻辑保持现状：401/402 不重试，其余重试 2 次
+1. **`settings.ai` 深合并 + 多 Key**（`src/main/settings.ts`、`src/shared/types.ts`）
+   - `Settings.merge()` 现在是浅合并，`ai` 必须补深合并，否则老配置一升级就丢字段（PLAN-PROVIDERS §5）。
+   - `secrets.bin` → `secrets.v2.json`（整份 JSON 用 `safeStorage.encryptString`；临时文件 + rename 保证原子）；旧文件迁移成 `providers.deepseek`，旧文件保留到用户点「清除全部」。
+2. **角色路由**：把 `client.ts` 的 `ACTIVE_PROVIDER` 换成 `settings.ai.default` / `settings.ai.vision`；`testApiKey(provider)` 加参数，旧签名默认 `deepseek`。
+3. **接另外三家**：只改 `providers.ts` 的能力位与 `chat()` 的传参；`400` 未知参数用 `AiError.unknownParam` 去掉该参数重试一次；`image_url.detail` 按 `spec.compat.imageDetail` 发不发（`src/main/ai/import.ts:47`）。**不要**写 `if (provider === ...)`。
+4. **设置页四张卡片**（`src/renderer/src/pages/SettingsPage.tsx`）：Key 状态 / 模型（可搜索下拉 + 手填）/「保存并测试」/ 未验证徽标（OpenAI、Gemini）/ 本月费用一行。
 
-### 5.2 验收（必须全过）
+### 5.2 验收（PLAN-PROVIDERS §8 P1 + §9.1）
 
 ```powershell
 npm run typecheck   # 0 错误
-npm test            # 4 个文件全绿（在普通 PowerShell 里跑）
+npm test            # 全绿（普通 PowerShell；沙箱内 vitest 会 spawn EPERM）
 ```
 
-再加真机（DeepSeek Key）：
-1. 启动应用 → 设置页「保存并测试」→ 显示连接成功
-2. 导入 `samples/demo.txt` → 能结构化出词条
-3. 复习一张卡，输入中文答案 → 判分正常（本地命中或 AI）
-4. 设置页「本月 AI 费用」有数字（不是 0）
+- DeepSeek（有 Key）真机：设置页测试、导入、判分通过；GLM 申请到免费额度就一起测。
+- OpenAI / Gemini 没有 Key：用 `tests/fixtures/` 的录制样例跑请求构造与响应解析，UI 标「未验证」。
+- 某家 401 只让那张卡片变红，不影响别家。
 
 ### 5.3 完成后
 
-- 在 `docs/PLAN-PROVIDERS.md` §13 追加一条实现记录（日期、改了什么、验证结果）
-- `git add -A && git commit -m "refactor(ai): wire client to transport; add provider columns"`
-- 然后进入 P1（接 OpenAI/Gemini/GLM + 设置页四张卡片），P1 的验收方式见 PLAN-PROVIDERS §9.1（两家没有 Key，用夹具 + 「未验证」徽标）
+- 在 `docs/PLAN-PROVIDERS.md` §13 追加实现记录，`git commit -s -m "feat(ai): four providers + settings cards"`，再进 P2（目录与价格自动化）。
+
+### 5.4 P0 留下的欠账（P1/P2 一起收）
+
+- 唯一键仍是 `(kind, cache_key)` → P1 换成 `(provider, kind, cache_key)`（drop 再建）。
+- 未知模型仍按 `deepseek-flash` 的价格算钱（PLAN-NEXT §7 第 8 条）→ P2 改成 `priced:false` + 「费用未知」。
+- `ai_usage` 还缺 `cost_source` / `priced_at` → P2 加。
 
 ---
 
@@ -195,12 +190,15 @@ npm test            # 4 个文件全绿（在普通 PowerShell 里跑）
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度）
 
-当前状态：git 已 init（master），完成 P0 第一块（providers.ts + transport.ts +
-tests/providers.test.ts），尚未接线；client.ts 仍是旧实现。
+当前状态：git 已 init（master），多供应商的 P0 已做完并验证（providers.ts +
+transport.ts + client.ts 接线 + ai_cache/ai_usage 的 provider 列；typecheck
+0 错误、npm test 6 文件 64 项全绿、DeepSeek 真机四项通过）。现在仍然只走
+DeepSeek，行为与以前一致。
 
-下一步：按 HANDOFF §5 做 P0 第二块（client.ts 接 transport + ai_cache/ai_usage
-加 provider 列），验收 = npm run typecheck 0 错误 + npm test 全绿 + DeepSeek
-真机四项。做完在 PLAN-PROVIDERS §13 记一笔并 commit。
+下一步：按 HANDOFF §5 做 P1 —— settings.ai 深合并 + secrets.v2 多 Key + 角色路由
++ 接 OpenAI/Gemini/GLM + 设置页四张卡片；验收 = typecheck 0 错误 + npm test 全绿 +
+DeepSeek（有 Key）真机 + OpenAI/Gemini 用夹具标「未验证」。做完在 PLAN-PROVIDERS
+§13 记一笔并 commit（git commit -s）。
 ```
 
 ---

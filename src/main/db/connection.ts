@@ -47,11 +47,35 @@ function migrate(database: SqliteDatabase): void {
     database.exec("ALTER TABLE import_drafts ADD COLUMN summary TEXT NOT NULL DEFAULT '{}'")
   }
 
+  // 多供应商（P0）：缓存与用量以前没有 provider 维度，A 家的答案会被当成 B 家的。
+  // 唯一键 (kind, cache_key) 留到 P1 再换成 (provider, kind, cache_key)，避免这一轮重建表。
+  addColumnIfMissing(database, 'ai_cache', 'provider', "TEXT NOT NULL DEFAULT 'deepseek'")
+  addColumnIfMissing(database, 'ai_usage', 'provider', "TEXT NOT NULL DEFAULT 'deepseek'")
+
   // 旧的 (headword, pos, kind) 唯一键会阻止合并不同词性/类型的重复词条
   database.exec('DROP INDEX IF EXISTS ux_items')
   dedupeItems(database)
   // 一个 headword 只允许一个词条；pos/kind 不再参与去重键
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_items_headword_norm ON items(headword_norm)')
+}
+
+/**
+ * 缺列才 ADD COLUMN——SQLite 给老库补列的标准做法。
+ * 已有行会被填上 definition 里的 DEFAULT（这里就是回填 'deepseek'）。
+ */
+function addColumnIfMissing(
+  database: SqliteDatabase,
+  table: string,
+  column: string,
+  definition: string
+): boolean {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as unknown as {
+    name: string
+  }[]
+  // PRAGMA 返回空 = 表不存在，交给 SCHEMA 去建，不在这里加列
+  if (!columns.length || columns.some((c) => c.name === column)) return false
+  database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+  return true
 }
 
 export function getDb(): SqliteDatabase {

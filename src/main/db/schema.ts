@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS pronunciations (
 
 CREATE TABLE IF NOT EXISTS ai_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'deepseek',
   kind TEXT NOT NULL,
   cache_key TEXT NOT NULL,
   model TEXT,
@@ -120,6 +121,7 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 
 CREATE TABLE IF NOT EXISTS ai_usage (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider TEXT NOT NULL DEFAULT 'deepseek',
   at TEXT NOT NULL,
   kind TEXT,
   model TEXT,

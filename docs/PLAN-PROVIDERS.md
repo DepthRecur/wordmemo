@@ -317,3 +317,45 @@ export interface ProviderSpec {
 - 新增 `tests/providers.test.ts`（14 个断言）。**注意**：本机沙箱内 vitest 起不来（esbuild 需要 spawn 命名管道，被拦），所以本轮用「tsc 编译成 JS + 普通 node 断言」跑了一遍，14/14 通过；`npx tsc --noEmit` 也通过。`npm test` 需要在你本机（沙箱外）再跑一次确认。
 - **尚未接线**：`client.ts` 还是旧实现，行为完全没变。下一步才把它切到 transport，并给 `ai_cache` / `ai_usage` 加 `provider` 列。
 - **下一步的具体步骤见 [HANDOFF.md](HANDOFF.md) §5**（改哪 4 个文件、验收命令、真机四项）。
+
+### 2026-11-18　P0 第二块：client 接到 transport + 缓存/用量加 provider 维度
+
+**行为与之前一致**：仍然只走 DeepSeek，`settings.model` / `settings.baseUrl` 照旧、重试策略照旧（401/402 不重试，其余重试 2 次）。
+
+改了 4 个文件：
+
+| 文件 | 改动 |
+|---|---|
+| `src/main/db/schema.ts` | `ai_cache` / `ai_usage` 各加 `provider TEXT NOT NULL DEFAULT 'deepseek'`（新建库直接带上） |
+| `src/main/db/connection.ts` | 新增 `addColumnIfMissing()`：先 `PRAGMA table_info` 判断，缺列才 `ALTER TABLE ... ADD COLUMN`；老库的已有行由 DEFAULT 自动回填 `deepseek`；重复打开不会重复加列 |
+| `src/main/db/ai.ts` | `getAiCache(provider, kind, key)` / `setAiCache(provider, kind, key, model, response)` / `logAiUsage({ provider, ... })`；`monthAiCost()` 不变（仍把各家加总） |
+| `src/main/ai/client.ts` | 删掉本地 `AiError`（改为 `export { AiError } from './transport'`）；`requestOnce` 用 `PROVIDERS.deepseek` + `requestChat()`；价格表改成 `PRICES[provider][model]`；`logAiUsage` 带 `provider: spec.id`；`testApiKey` 也走 `requestChat`（`回复 ok`、maxTokens 8、20s 超时） |
+
+**两个有意的取舍（都写进了代码注释）**
+
+1. **唯一键仍是 `(kind, cache_key)`**，`(provider, kind, cache_key)` 留给 P1——P0 不重建表。副作用：不同 provider 写同一个 key 会互相覆盖；P0 只有 DeepSeek，碰不到。但读已经按 provider 过滤，P1 换唯一键时只需改索引。
+2. **未知模型仍回落 `deepseek-flash` 的价格**（`client.ts` 的 `DEFAULT_MODEL`），P2 才改成「费用未知、`priced:false`」。这是为了 P0 行为完全不变；PLAN-NEXT §7 的第 8 条 bug 仍未修。
+
+新增两个测试文件（都**不联网**，用 stub fetch / 临时库）：
+
+- `tests/ai-db.test.ts`（5 项）：新库带列、缓存按 provider 分区（`getAiCache('openai', ...)` 取不到 DeepSeek 的答案）、用量入库 + 月度汇总、**老库迁移回填**（先用旧 DDL 建库写数据，再 `openDb`，验证列出现且旧行为 `deepseek`）、重复打开不重复加列。
+- `tests/ai-client.test.ts`（6 项）：请求体是 DeepSeek 形状（`max_tokens` / `thinking:{type:'disabled'}` / `response_format` / 地址与 `Authorization`）、用量与价格（60 miss + 40 hit + 20 out ≈ $0.00002112）、`cacheKey` 命中不发第二次请求、401/402 只请求一次、500 重试一次后成功、`testApiKey` 成功/401 两条路径。
+
+**验证结果（2026-11-18）**
+
+- `npx tsc --noEmit -p tsconfig.json` → **0 错误**。
+- `npx vitest run` → **6 个文件 64 项全绿**（providers 15 / core 25 / drafts 10 / ai-client 6 / ai-db 5 / phonetic 3）。
+  - 注意：DSH 沙箱内 `npm test` 仍会 `spawn EPERM`（esbuild 要 spawn 子进程），必须在沙箱外的普通 PowerShell 里跑；本轮就是这样跑通的。
+- **真机（DeepSeek 真 Key，本机 `.data` 旧库升级）**：先用 `electron . --no-sandbox` 把应用正常启动了一次，`app-start` 与托盘检查都正常，说明迁移在真实 1.3 MB 库上没炸；再在 Electron 主进程里用应用自己的 `safeStorage` 解密 Key 跑 4 项（脚本是一次性的，没进仓库，Key 从未落盘）：
+
+| 验收项 | 结果 |
+|---|---|
+| ① 设置页「保存并测试」 | `{ok:true, message:'连接成功，Key 可用', model:'deepseek-flash'}` |
+| ② 导入结构化 | `structurize()` 真实请求返回 2 条：`abandon` / `ability`，释义正确 |
+| ③ 复习判分 | 真实卡片 `assess`（en2zh）走 AI：`source:'ai'`，`correct:false`，理由「答非所问」（给的是无关答案，符合预期） |
+| ④ 本月 AI 费用 | `monthAiCost()` 由 `$0.088203` → `$0.088385`（calls 314 → 316），不是 0 |
+
+- **真实库迁移后**：`ai_cache` 310 行、`ai_usage` 314 行全部回填 `provider='deepseek'`；`notes/items/cards/reviews` 仍是 17 / 289 / 624 / 975，没有丢数据。当天早些时候 `dailyBackup()` 已经留了 `wordmemo-2026-11-18.db`，相当于迁移前备份（HANDOFF §8 坑 1 的通用修法仍未做）。
+- GUI 里的四个页面没有逐个点击（等价性：IPC 处理器调的就是上面这些函数）；如需补一次纯点击验证，按 HANDOFF §5.2 走。
+
+**下一步**：P1（接 OpenAI / Gemini / GLM + 设置页四张卡片 + `settings.ai` 深合并 + `secrets.v2` 多 Key），步骤见 [HANDOFF.md](HANDOFF.md) §5 与本文 §8 P1、§9.1。
