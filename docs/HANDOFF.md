@@ -1,13 +1,13 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-18　当前分支：`master`　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
+> 最后更新：2026-11-19　当前分支：`master`　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页四张卡片、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**DeepSeek 与 GLM 都已在真机验证**（GLM 2026-11-19，`npm run ai-smoke` 4/4）；OpenAI / Gemini 等社区反馈。下一个功能是**多个库**。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页六分区、模型可搜索下拉（公开名 + id + 价格）、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**DeepSeek 与 GLM 都已在真机验证**（GLM 2026-11-19，`npm run ai-smoke` 4/4）；OpenAI / Gemini 等社区反馈。下一个功能是**多个库**。
 
 ---
 
@@ -89,8 +89,8 @@ scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录�
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
 scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
 tests/
-  providers.test.ts     ← 15 项：传输层/供应商表/错误归一化
-  ai-client.test.ts     ← 13 项：client 接线 + 角色路由 + 400 降级（stub fetch，不联网）
+  providers.test.ts     ← 17 项：传输层/供应商表/错误归一化/中文 400/GLM 不发 thinking
+  ai-client.test.ts     ← 16 项：client 接线 + 角色路由 + 400 降级 + 强制思考模型（stub fetch，不联网）
   ai-pricing.test.ts    ← 13 项：价格三级来源/目录解析/未定价用量/预算兜底
   ai-models.test.ts     ← 6 项：模型列表的公开名合并与目录边界
   ai-cache-key.test.ts  ← 2 项：ai_cache 唯一键重建
@@ -103,28 +103,37 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ---
 
-## 5. 多供应商已收尾；下一步：GLM 验证 + 多个库
+## 5. 多供应商已完成（冻结）；下一步：多个库
 
-**多供应商 P0–P3 全部完成并冻结**：四家可配 Key、角色路由（default/vision）、设置页四张卡片、模型目录（`/models` + TTL）、价格（models.dev → 快照 → 未知不猜价）、按家统计、`npm run ai-smoke`。typecheck 0、`npm test` 10 文件 95 项全绿、真机通过。四条实现记录见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md)。
+**多供应商 P0–P3 + UI 打磨全部完成并冻结**（2026-11-18 ~ 11-19）。`typecheck` 0 错误、`npm test` 11 文件 106 项全绿、真机通过。实现记录见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md)（五条，最后两条是 UI 打磨与 GLM 验证）。
 
-### 5.1 还差的两件小事（不需要动架构）
+| 能力 | 状态 |
+|---|---|
+| 四家供应商（DeepSeek / OpenAI / Gemini / GLM） | ✅ 可配 Key；设置页四张卡片 + 角色路由 `default`/`vision` |
+| Key 存储 | ✅ `secrets.v2.json`（safeStorage 整份加密；旧 `secrets.bin` 自动迁移，保留到「清除全部」） |
+| 模型目录 | ✅ `/models` + TTL 24h + 单飞 + 失败保留旧列表；设置页**可搜索下拉**（公开名 + id + 价格），永远可手填；候选**只来自目录**，不拿快照冒充 |
+| 价格 | ✅ models.dev → 随包快照 → 未知 `priced:false`（金额 0，只统计 token） |
+| 用量与预算 | ✅ `cost_source`/`priced_at`、按家统计、未定价时按 token 上限兜底 |
+| 自检 | ✅ `npm run ai-smoke`（4 调用点 × 4 家，没 Key 的 `SKIP`） |
+| 真机 | ✅ DeepSeek（11-18）、GLM（11-19）；OpenAI / Gemini 没有 Key，标「未验证」等社区反馈 |
 
-1. **GLM 真机验证（等用户拿到 Key）**：`npm run ai-smoke` 跑一遍 → 全通过就把 `src/main/ai/providers.ts` 里 GLM 的 `unverified: true` 去掉，README 状态表改成「已验证」，并且**改一行**就够（不用动别的）。
-2. **OpenAI / Gemini**：等真实用户反馈（作者没有该地区账号）。报错走「设置页 → 复制诊断信息」，按 §9.1 的表改文案/参数即可，不用发版。
+**GLM 的坑（已修，别踩回去）**：`glm-5.x-flash` **强制思考**，不能发 `thinking: {type:'disabled'}`（中文 400）；GLM 现在 `whenOff: 'omit'`（不需要思考时干脆不发这个字段）。另外「保存并测试」的 max_tokens 从 8 提到 256，否则思考模型会把 token 全花在推理上返回空内容。
 
-### 5.2 下一个功能：多个库（PLAN-DECKS）
+### 5.1 下一个功能：多个库（PLAN-DECKS）
 
-第一步按 [PLAN-NEXT](PLAN-NEXT.md) §6 与 [PLAN-DECKS](PLAN-DECKS.md)：
+对照 [PLAN-NEXT](PLAN-NEXT.md) §6 与 [PLAN-DECKS](PLAN-DECKS.md)（§1 有 6 条验收场景，先照着写死）：
 
 1. **先收作用域**：把 `dailyPlan / learnQueue / dueQueue / countDue / learnedTodayCount` 的「当前库」收成一个 helper（**先改这里，别先改页面**）。
 2. 建 `decks` 表 + `notes.deck_id` + 默认库迁移（迁移前先备份，见 §8 坑 1）。
 3. 再改 6 个入口与设置页；复制笔记**不复制进度**；每库一份每日新词额度（方案 A）。
+4. 建议开分支 `feat/decks`（前几个功能都在 master 上做的）。
 
-### 5.3 多供应商留下的欠账（记着就行，不阻塞）
+### 5.2 多供应商残留欠账（不阻塞多个库）
 
 - models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估。
 - 「厂商响应自报价格」（§4.2 第 1 级）只是枚举位，4 家都没给。
-- 冒烟时若复制数据目录，**必须连 `Local State` 一起复制**，否则 safeStorage 解不开 Key（见 PLAN-PROVIDERS §13 P3 的坑）。
+- 冒烟复制数据目录时必须连 **`Local State`** 一起复制（safeStorage 密钥在那）。
+- `glm-5.x-flash` 判分约 22 秒（强制思考）；想快就让用户换 `glm-4.6` / `glm-4.7`。
 
 ---
 
@@ -163,9 +172,9 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ### 7.4 没有 Key 的两家（OpenAI / Gemini）
 
-- 用 `tests/fixtures/` 的录制样例跑单测（P1 会加）
+- 请求构造与响应解析由 `tests/ai-client.test.ts` / `ai-models.test.ts` 的 stub fetch 覆盖（**没有**录制夹具，可后补；DeepSeek 与 GLM 已真机验证，所以传输层是可信的）
 - UI 上标「未验证」，失败时给「复制诊断信息」
-- README 维护一张状态表：已验证 / 未验证 / 已知问题
+- README 维护状态表：DeepSeek / GLM 已验证，OpenAI / Gemini 未验证
 
 ---
 
@@ -187,27 +196,27 @@ docs/               ← 四份计划 + 调研 + 本文件
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
 再读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）；
-需要动多供应商时读 docs/PLAN-PROVIDERS.md，特别是 §13 实现记录。
+要做「多个库」时读 docs/PLAN-DECKS.md（§1 是 6 条验收场景）；
+多供应商已经冻结，实现记录在 docs/PLAN-PROVIDERS.md §13（只修 bug，不加功能）。
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
 - 只做 DeepSeek/OpenAI/Gemini/GLM；不装 pi-ai；不做自定义端点
 - 便携版 zip + 启动器换目录；不做安装包、不做签名、不用 electron-updater
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
-- 多个库用方案 A（进度跟单词走，每库一份新词额度）
+- 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：git 已 init（master），**多供应商 P0–P3 全部完成并冻结**：四家都能配 Key、
-角色路由 default/vision、设置页四张卡片、secrets.v2 多 Key（旧 secrets.bin 自动迁移）、
-模型目录（/models，TTL 24h）、价格（models.dev → 随包快照 → 未知不猜价）、按家统计、
-npm run ai-smoke。typecheck 0 错误、npm test 10 文件 95 项全绿、真机通过。
-DeepSeek 已验证；GLM 等用户 Key 后验证；OpenAI / Gemini 等社区反馈。
+当前状态：git 已 init（master，最近提交见 git log）。多供应商已完成并冻结：
+四家可配 Key、角色路由 default/vision、设置页六分区、模型可搜索下拉（公开名 + id）、
+模型目录与价格自动化、按家统计、npm run ai-smoke。typecheck 0 错误、
+npm test 11 文件 106 项全绿。真机：DeepSeek、GLM 已验证；OpenAI / Gemini 未验证
+（没有 Key，等社区反馈）。
 
-下一步（二选一，都在 HANDOFF §5）：
-1) GLM 拿到 Key 后：npm run ai-smoke → 全过就把 providers.ts 里 GLM 的 unverified 去掉、
-   README 状态表改成已验证（一行改动）。
-2) 开始「多个库」：先按 PLAN-DECKS 把 dailyPlan/learnQueue/dueQueue/countDue/
-   learnedTodayCount 的作用域收成一个 helper，再建 decks 表 + notes.deck_id + 默认库迁移。
-做完在对应计划里记一笔并 commit（git commit -s）。
+下一步：按 HANDOFF §5 做「多个库」——
+1) 先把 dailyPlan/learnQueue/dueQueue/countDue/learnedTodayCount 的作用域收成一个 helper；
+2) 建 decks 表 + notes.deck_id + 默认库迁移（迁移前先备份）；
+3) 再改 6 个入口与设置页；验收照 PLAN-DECKS §1 的 6 条场景。
+建议开分支 feat/decks；做完在 PLAN-DECKS 里记一笔并 commit（git commit -s）。
 ```
 
 ---
