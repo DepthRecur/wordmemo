@@ -437,7 +437,7 @@ WordMemo-Portable/
 | 代码签名 | **已定**：不做，连免费 OSS 签名也不申请；SmartScreen 警告通过文档缓解 |
 | 更新组件 | **已定**：不用 `electron-updater`、不用 NSIS、不用 `latest.yml`；自己写 ~250 行启动器 |
 | 全量下载 | **已定**：接受每次 ~100 MB，不做差分 |
-| 首个可更新版本号 | 待定，建议 `v0.3.0`（多供应商 + 多库做完后第一次发布） |
+| 首个可更新版本号 | **已定 `v0.3.0`**（2026-11-19，随便携版 U0 落进 `package.json`） |
 | 是否保留「安装包」路线 | 留作以后可选；本版不发
 
 ## 9. 明确不做
@@ -447,3 +447,44 @@ WordMemo-Portable/
 - 不做强制更新、不做静默重启、不做开机自动升级。
 - 不做遥测、不做崩溃上报（本地日志 + Issue 模板足够）。
 - 不做 Linux / macOS 打包（Windows 用户是目标人群；跨平台等有人真的需要）。
+
+---
+
+## 10. 实现记录
+
+### U0 便携版打包 + 启动器 v0（2026-11-19，`feat/portable`）
+
+**状态：完成。** `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB；解压后约 408 MB）。U1 / U2 / U3 未做。
+
+**落地内容**
+
+| 文件 | 作用 |
+|---|---|
+| `package.json` | version `0.3.0`；`win.target` 从 nsis 改为 `zip`；`electronDist` 指向本地；`dist` = 组装脚本，`dist:app` 只出 win-unpacked，`launcher` 只编译启动器 |
+| `scripts/make-portable.mjs` | build → electron-builder `--dir` → 组装 `WordMemo-Portable/`（`WordMemo.exe` + `app/` + `update/` + `README.txt`）→ 写 `app/version.json` → zip + sha256 |
+| `scripts/build-launcher.mjs` | 用 Windows 自带 .NET Framework 4.x `csc.exe` 编译 `Launcher.cs`（含图标与版本属性），无新增依赖 |
+| `scripts/Launcher.cs` | v0：清 `ELECTRON_RUN_AS_NODE` → `app\WordMemo.exe --no-sandbox`；缺 `app/` 时弹中文错误框 |
+| `scripts/portable-README.txt` | zip 内说明：用法、数据位置、手动更新（路线 B）；构建时替换版本号 |
+| `src/main/index.ts` | 打包版显式 `app.setPath('userData', %APPDATA%\WordMemo)`；开发版仍用 `.data` |
+| `build/icon.ico` | 启动器图标（`/win32icon`），应用内图标不变 |
+
+**必须记住的四个坑**
+
+1. **electron-builder 25 的依赖树 bug（会打不开）**：hoisted 的 `call-bind-apply-helpers` 被误判成 `call-bind` 的 nested 依赖，只复制到 `node_modules/call-bind/node_modules/`；exceljs → unzipper 链在启动时直接 `Cannot find module 'call-bind-apply-helpers'`。**升到 `26.18.0` 后解决**（v26 换成纯 JS 依赖收集，asar 里 190 个顶层模块，`call-bind-apply-helpers` 回顶层）。不要退回 25；临时加直接依赖也不管用（仍被标 conflict）。
+2. **GitHub 被墙也能打包**：electron-builder 默认从 GitHub 下 Electron zip，本项目用 `electronDist: "node_modules/electron/dist"` 复用已安装的 Electron。v26 不再需要 winCodeSign/rcedit 下载（旧版 25 的 7z 解压还会因符号链接权限失败）。builder 缓存放 `.cache/electron-builder`（本机 `%LOCALAPPDATA%` 曾被拒写）。
+3. **zip 用 Windows 自带 `tar.exe -a -c`**（bsdtar）。v26 已没有 `7zip-bin` 依赖，不要再用 `7za`。
+4. **首次运行的数据位置**：源码模式的数据在仓库 `.data/`，便携版按设计读 `%APPDATA%\WordMemo`，两者**不会自动迁移**。从源码切到便携版前，要复制 `.data` 里的 `wordmemo.db`、`settings.json`、`secrets.v2.json`、`Local State`（最后一个是 safeStorage 密钥）。反过来，便携版跑过之后 `.data` 仍是开发数据，互不影响。
+
+**验收（本机 2026-11-19）**
+
+- 解压到 `D:\WordMemo-Portable-Test` → 双击启动器 → 进程起来；托盘 `tray-state ok`（`diagnostics.log`）。
+- `%APPDATA%\WordMemo\wordmemo.db` 创建；程序目录里 `*.db` / `settings.json` / `secrets*.json` / `diagnostics.log` 均为空。
+- CDP：`window.api.system.appVersion() = 0.3.0`，UI 正常（截图 `.data/shots/portable-0.3.0.png`）。
+- 导入 `samples/demo.txt` → 1 笔记 / 14 词；退出 → 启动器重开 → 数据仍在（1 笔记 / 14 词）。
+- `npm run typecheck` 0 错误；`npm test` 12 文件 118 项全绿。
+
+**下一步**
+
+- **U1 兼容模式**：`sandbox-state.json` 探针 + `failStreak` 自愈 + 设置页开关；现在启动器无条件带 `--no-sandbox`。
+- **U2 自更新**：应用侧检查 `latest.json` → 下载 → 流式 sha256 → 解压 `update/app-new` → 写 `state.json`；启动器按 §3.11 七步换目录 + 回滚 + `error.log`。`update/` 目录已预留、`app/version.json` 已写。
+- **U3 CI 发版 + README 两条更新路径**：构建脚本已具备出 zip + sha256 的能力，`latest.json` 留给 U2/U3。

@@ -28,6 +28,10 @@ if (!app.isPackaged) {
   const devData = process.env.WORDMEMO_DATA_DIR || path.join(app.getAppPath(), '.data')
   fs.mkdirSync(devData, { recursive: true })
   app.setPath('userData', devData)
+} else {
+  // 便携版：数据固定放 %APPDATA%\WordMemo，绝不跟着程序目录走（PLAN-UPDATE §3.11）。
+  // 显式指定而不依赖 app.getName()，避免以后改 productName 时把用户数据搬家。
+  app.setPath('userData', path.join(app.getPath('appData'), 'WordMemo'))
 }
 
 function userDataDir(): string {

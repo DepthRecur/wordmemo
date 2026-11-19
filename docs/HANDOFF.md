@@ -1,18 +1,19 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-19　当前分支：`master`（`feat/decks` 已合并）　仓库：`DepthRecur/wordmemo`
-> **推送状态**：已 push（`master` 与 `feat/decks`）；远端仓库 `https://github.com/DepthRecur/wordmemo` 目前是 **private**（2026-11-19 为首次 push 创建），公开前按 §10 清理。
+> 最后更新：2026-11-19　当前分支：`feat/portable`（从 master 开，未合并）　仓库：`DepthRecur/wordmemo`
+> **推送状态**：`master` 与 `feat/decks` 已 push；`feat/portable` 只在本地（2026-11-19 完成 U0）。远端仓库 `https://github.com/DepthRecur/wordmemo` 目前是 **private**（2026-11-19 为首次 push 创建），公开前按 §10 清理。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成：
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成，第三个完成 U0：
 - **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
 - **多个库**（2026-11-19，已合并 master）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库；后续打磨：删批量撤销、切库性能（10~30ms）、今日任务标题右侧库下拉、原生 select 全换自定义圆角下拉。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
+- **便携版 U0**（2026-11-19，`feat/portable`）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器 v0 可启动；数据固定在 `%APPDATA%\WordMemo`。**U1 兼容模式 / U2 自更新 / U3 CI 未做**。实现记录与四个坑见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。
 
-下一个功能是**便携版 + 自更新**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案）。
+下一个要做的：**U1 兼容模式 → U2 自更新 → U3 CI**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案、§10 是已完成部分）。
 
 ---
 
@@ -28,7 +29,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 
 - **`npm test` 报 `spawn EPERM`**：说明你处在受限沙箱里（esbuild 要 spawn 命名管道）。**在普通 PowerShell / CMD 里跑**就没问题。
 - 只跑一个测试：`npx vitest run tests/providers.test.ts`
-- 打包（现在还用不到）：`npm run dist` → `release/`
+- 打包（便携版）：`npm run dist` → `release/WordMemo-0.3.0-portable.zip`（+ `.sha256`）；只想出 `win-unpacked` 用 `npm run dist:app`；只编译启动器用 `npm run launcher`。
 - 应用是单实例的：改完代码要先真退出（托盘右键 → 退出），再重新启动，否则加载的还是旧代码。
 - **手动启动主进程**（真机冒烟用）：`Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; .\node_modules\electron\dist\electron.exe . --no-sandbox`。环境里若留着 `ELECTRON_RUN_AS_NODE=1`（DSH 这类工具会设），Electron 会被当成 node 跑，报 `Cannot read properties of undefined (reading 'isPackaged')`。
 
@@ -60,7 +61,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 | [PLAN-NEXT.md](PLAN-NEXT.md) | 排序、共同约束、**已定/待定清单**、**坑点清单（§7）**、验证条件（§9） |
 | [PLAN-PROVIDERS.md](PLAN-PROVIDERS.md) | 做多供应商时；**§13 是当前实现记录与下一步** |
 | [PLAN-DECKS.md](PLAN-DECKS.md) | 做多个库时 |
-| [PLAN-UPDATE.md](PLAN-UPDATE.md) | 做便携版/自更新时（§3.11 是定稿方案） |
+| [PLAN-UPDATE.md](PLAN-UPDATE.md) | 做便携版/自更新时（§3.11 是定稿方案、**§10 是 U0 实现记录**） |
 | [PLAN-SYNC.md](PLAN-SYNC.md) | 做同步时（§3.5 口令加密、S0 重放验证） |
 | [RESEARCH-REUSE.md](RESEARCH-REUSE.md) | 想知道「为什么这么选」时；**不需要重新调研** |
 
@@ -97,7 +98,10 @@ src/renderer/src/components/Select.tsx ← 自定义下拉（原生 select 弹�
 src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
 src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分 + 顶部库过滤
-scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
+scripts/Launcher.cs   ← 便携版启动器（v0：只启动 app\WordMemo.exe；U2 再加换目录）
+scripts/build-launcher.mjs ← 用 Windows 自带 csc.exe 编译启动器（不需要 SDK/新依赖）
+scripts/make-portable.mjs  ← npm run dist：build → electron-builder --dir → 组装 → zip + sha256
+scripts/portable-README.txt ← zip 里的使用/数据/手动更新说明（{{VERSION}} 构建时替换）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
 scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
 tests/
@@ -163,13 +167,23 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 冒烟复制数据目录时必须连 **`Local State`** 一起复制（safeStorage 密钥在那）。
 - `glm-5.x-flash` 判分约 22 秒（强制思考）；想快就让用户换 `glm-4.6` / `glm-4.7`。
 
+### 5.5 便携版 U0（2026-11-19，`feat/portable`，完成）
+
+`npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ `.sha256`；启动器 v0、`app/version.json`、数据路径都已落定。实现记录与验收见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。接手时最容易忘的五件事：
+
+1. **electron-builder 必须 ≥ 26.18**：25.1.8 的依赖树 bug 会把 hoisted 的 `call-bind-apply-helpers` 只复制到 `node_modules/call-bind/node_modules/`，启动直接 `Cannot find module`。退回 25 = 打不开。
+2. **出包不需要 GitHub**：`electronDist: node_modules/electron/dist` 复用已装 Electron；v26 不下载 winCodeSign；zip 用系统 `tar.exe`（v26 已无 `7zip-bin`）。
+3. **打包版与开发版数据是分开的**：打包版 `%APPDATA%\WordMemo`，开发版 `.data/`，不自动迁移；切换前手动复制 `wordmemo.db`、`settings.json`、`secrets.v2.json`、`Local State`。
+4. **启动器无条件带 `--no-sandbox`**（U1 才做探测降级）；改 `Launcher.cs` 后跑 `npm run launcher` 或 `npm run dist` 重新编译，用系统 `csc.exe`，不需要 SDK。
+5. `update/` 与 `app/version.json` 是给 U2 预留的：**不要手工改 version.json**（构建时写入）；启动器 v0 不读它。
+
 ---
 
 ## 6. 后面两个功能各自的"第一步"
 
 | 功能 | 第一步 | 注意 |
 |---|---|---|
-| 便携版 | `electron-builder --dir` 出 `win-unpacked`，写 `app/version.json`，启动器 v0 | **先确认 `%APPDATA%\WordMemo` 有数据、程序目录没有数据** |
+| 便携版 | U0 已完成；下一步 **U1 兼容模式**（`sandbox-state.json` 探针 + 设置页开关） | 数据必须留在 `%APPDATA%\WordMemo`；打包前先确认程序目录没有数据 |
 | 同步 | S0：`uid` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
 
 ---
@@ -208,14 +222,16 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ## 8. 已知坑（做之前先看一眼）
 
-完整清单在 [PLAN-NEXT §7](PLAN-NEXT.md)。最容易踩的六个：
+完整清单在 [PLAN-NEXT §7](PLAN-NEXT.md)。最容易踩的八个：
 
 1. ~~**迁移跑在备份之前**~~：**已修**。`index.ts` 在 `openDb()` 之前调 `backupBeforeMigrate()`，写 `backups/wordmemo-pre-migrate-v<N>.db`；改 schema 记得升 `SCHEMA_VERSION`（`schema.ts`），否则不会触发备份。
 2. **同步的时间戳没有时区**：`localIso()` 是本地时间，跨设备比较会错 → 同步 op 要另加 `ts_utc`。
 3. **批量删除连带删词条**：`deleteNotes` 会清理孤儿 items（卡片/复习记录一起没）；对话框已写明；删除**不可恢复**。
-4. **便携版数据不能放程序目录**：`index.ts:22-26` 的 dev 逻辑要把数据塞进 `.data`，必须确认打包后不生效。
+4. **便携版数据不能放程序目录**：dev 分支仍写 `.data`；打包版由 `src/main/index.ts` 的 `else` 分支显式 `setPath('userData', %APPDATA%\WordMemo)`。改动这段前先看 PLAN-UPDATE §3.11。
 5. **库的作用域漏一处就串库**：新查询一律用 `deckScope()`/`deckInClause()`；审计 `grep "FROM cards\|FROM items\|FROM notes"`。`deckId = null` = 全部库，别把 null 当 0。
-6. **`--no-sandbox` 是这台机器的硬需求**：三保险（代码开关 + 启动器 + 崩溃探针）。
+6. **`--no-sandbox` 是这台机器的硬需求**：启动器现在无条件传；U1 才改成按 `sandbox-state.json` 探测（代码开关 + 启动器 + 崩溃探针）。
+7. **electron-builder 25 打不出能跑的包**：依赖树漏 hoisted 包（`call-bind-apply-helpers`），exceljs 启动即崩；必须 26.18+，别退回。
+8. **打包版的 `%APPDATA%\WordMemo` 与源码模式的 `.data` 不互通**：切换/迁移要手动复制（含 `Local State`）；删程序目录不影响 `%APPDATA%`。
 
 ---
 
@@ -224,7 +240,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
 再读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）；
-要做「便携版」时读 docs/PLAN-UPDATE.md（§3.11 是定稿方案），要动多个库时读 docs/PLAN-DECKS.md §15；
+要做「便携版」时读 docs/PLAN-UPDATE.md（§3.11 是定稿方案、§10 是 U0 实现记录），要动多个库时读 docs/PLAN-DECKS.md §15；
 多供应商已冻结（PLAN-PROVIDERS §13），多个库已完成（PLAN-DECKS §15），两者都只修 bug。
 
 硬约束（已定，不要再讨论）：
@@ -234,19 +250,21 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：git 已 init，多个库已合并到 master（typecheck 0 错误、npm test 12 文件 118 项全绿）。
+当前状态：多个库已合并到 master；便携版 U0 在 feat/portable 完成
+（typecheck 0 错误、npm test 12 文件 118 项全绿；从解压 zip 启动验证过数据落在 %APPDATA%\WordMemo）。
 多供应商：四家可配 Key、角色路由 default/vision、设置页七分区、模型可搜索下拉、
 模型目录与价格自动化、按家统计、npm run ai-smoke；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
 多个库：decks 表 + notes.deck_id + 默认库迁移（迁移前备份）、查询全部按库作用域、
 笔记库批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库；切库 10~30ms、
 原生 select 已换成自定义圆角下拉（Select.tsx）。
+便携版 U0：npm run dist 出 WordMemo-0.3.0-portable.zip + 启动器 v0 + app/version.json；
+electron-builder 已升 26.18（25 的依赖树 bug 会让包打不开）。
 
-下一步：做「便携版 + 自更新」——
-1) 先确认 %APPDATA%\WordMemo 有数据、程序目录没有数据；
-2) 读 PLAN-UPDATE §3.11，把 electron-builder 的 target 改 portable/zip 方向，
-   出 win-unpacked 或 zip，写 app/version.json，启动器 v0（scripts/Launcher.cs 是基础）；
-3) 验收照 PLAN-UPDATE §3.11 与 HANDOFF §7.2 的便携版动作。
-多个库已合并，直接从 master 开 feat/portable；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
+下一步：做便携版的 U1 → U2 → U3（PLAN-UPDATE §3.11 + §10）——
+1) U1 兼容模式：sandbox-state.json 探针 + failStreak 自愈 + 设置页开关；
+2) U2 自更新：应用下载 latest.json/zip + sha256 + 解压 update/app-new，启动器七步换目录与回滚；
+3) U3 CI 发版 + README 的两条更新路径。
+从 feat/portable 继续；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
 ```
 
 ---
@@ -257,5 +275,6 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 建议每个功能开一个分支：`feat/providers`、`feat/decks`、`feat/portable`、`feat/sync`。
 - 提交信息用 `feat|fix|refactor|docs(scope): ...`。
 - 贡献者用 DCO（`git commit -s`），不引入 CLA。
+- **便携版产物不进 git**：`release/` 与 `WordMemo-Portable/` 都已 gitignore；发版时只上传 `WordMemo-x.y.z-portable.zip` + `.sha256`。
 - **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。
