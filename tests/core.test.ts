@@ -296,11 +296,11 @@ describe('判分', () => {
 })
 
 describe('放弃作答', () => {
-  it('只认「不知道」和「XXX」两种写法（含大小写/全角/结尾标点）', () => {
-    for (const text of ['不知道', ' 不知道 ', '不知道。', '不知道！', 'XXX', 'xxx', 'XxX', 'ＸＸＸ', 'xxx.']) {
+  it('只认「XXX」（含大小写/全角/结尾标点），「不知道」按正常答案处理', () => {
+    for (const text of ['XXX', 'xxx', 'XxX', 'ＸＸＸ', 'xxx.', ' xxx ']) {
       expect(isGiveUpAnswer(text)).toBe(true)
     }
-    for (const text of ['不知道啊', '不知道的单词', 'xxx abandon', 'not sure', 'X', 'XX', '不知道是什么']) {
+    for (const text of ['不知道', '不知道。', '不知道啊', '不知道是什么', 'xxx abandon', 'not sure', 'X', 'XX']) {
       expect(isGiveUpAnswer(text)).toBe(false)
     }
   })
@@ -308,7 +308,7 @@ describe('放弃作答', () => {
   it('放弃作答不查词条、不调 AI，直接按错误处理', async () => {
     const queue = dueQueue(100)
     const card = queue.find((c) => c.direction === 'en2zh')!
-    const result = await judgeAnswer(card.id, '不知道')
+    const result = await judgeAnswer(card.id, 'XXX')
     expect(result.correct).toBe(false)
     expect(result.source).toBe('giveup')
     expect(result.reason).toContain('放弃')

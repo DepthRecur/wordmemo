@@ -31,6 +31,9 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
   const [revealed, setRevealed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [startTs, setStartTs] = useState(Date.now())
+  // 计时：now 每秒刷新一次；answeredMs 在点「提交」那一刻冻结，之后不再增长
+  const [now, setNow] = useState(Date.now())
+  const [answeredMs, setAnsweredMs] = useState<number | null>(null)
   const [stats, setStats] = useState({ total: 0, correct: 0 })
   const [hint, setHint] = useState(false)
   // 音标永远默认隐藏：用户想看自己点，不记忆偏好
@@ -72,6 +75,8 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
   useEffect(() => {
     if (!card) return
     setStartTs(Date.now())
+    setNow(Date.now())
+    setAnsweredMs(null)
     setAnswer('')
     setResult(null)
     setRevealed(false)
@@ -85,6 +90,13 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
     }
     return () => clearTimeout(timer)
   }, [index, card?.id, settings.autoPlayAudio, settings.accent])
+
+  // 答题过程中每秒刷新一次计时；揭晓答案后停表
+  useEffect(() => {
+    if (stage !== 'review' || revealed || !card) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [stage, revealed, card?.id])
 
   const learnItem: Item | undefined = plan?.learnItems[learnIndex]
 
@@ -250,12 +262,15 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
       notify('先写下答案，再按回车', 'info')
       return
     }
+    setAnsweredMs(Date.now() - startTs)
     setBusy(true)
     try {
       const r = await window.api.review.judge(card.id, answer)
       setResult(r)
       setRevealed(true)
     } catch (err) {
+      // 判分失败等同于没有交卷，计时继续走
+      setAnsweredMs(null)
       notify(`判分失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
       setBusy(false)
@@ -271,7 +286,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
         rating,
         answer,
         correct,
-        elapsedMs: Date.now() - startTs,
+        elapsedMs: answeredMs ?? Date.now() - startTs,
         mode,
         examId: examId ?? null,
         judgeBy
@@ -308,7 +323,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
 
   const autoRating = (): 1 | 2 | 3 | 4 => {
     if (!result?.correct) return 1
-    return Date.now() - startTs < 6000 ? 4 : 3
+    return (answeredMs ?? Date.now() - startTs) < 6000 ? 4 : 3
   }
 
   if (stage === 'loading') {
@@ -647,7 +662,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
               </Button>
             </div>
             <div className="hint" style={{ marginTop: 10 }}>
-              想不起来可以输入「不知道」或「XXX」，直接记为不会，不再判分。
+              想不起来可以输入「XXX」，直接记为不会，不再判分。
             </div>
           </>
         ) : (
@@ -750,7 +765,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
               )}
               <span className="spacer" />
               <span className="hint" style={{ alignSelf: 'center' }}>
-                用时 {Math.round((Date.now() - startTs) / 1000)}s
+                用时 {Math.round(((answeredMs ?? now - startTs) / 1000))}s
               </span>
             </div>
           </>

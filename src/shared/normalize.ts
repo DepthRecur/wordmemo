@@ -88,15 +88,15 @@ export function matchEnglish(answer: string, headword: string): 'exact' | 'varia
 }
 
 /**
- * 用户主动放弃作答：只有「不知道」和「XXX」两种写法（含大小写、全角、结尾标点差异）。
- * 刻意不做模糊匹配——有些词条的意思就是“不记得”，放宽会误伤正常作答。
+ * 用户主动放弃作答：只认「XXX」这一种写法（含大小写、全角、结尾标点差异）。
+ * 刻意不做模糊匹配、也不收「不知道」——有些词条的意思就是“不知道”，放宽会误伤正常作答。
  */
 export function isGiveUpAnswer(answer: string): boolean {
   const value = nfkc(answer ?? '')
     .trim()
     .toLowerCase()
     .replace(/[。.!！?？,，、;；:：~～\s]+$/g, '')
-  return value === '不知道' || value === 'xxx'
+  return value === 'xxx'
 }
 
 export function matchChinese(answer: string, meanings: string[]): boolean {
