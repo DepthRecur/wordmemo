@@ -218,39 +218,9 @@ function existingNoteIds(ids: number[]): number[] {
 }
 
 /**
- * 单步撤销（PLAN-DECKS §7.1 的硬约束 4）：只记「上一次批量动作」的反向操作，
- * 存在内存里——重启后自然失效，用户也不会指望跨会话撤销。
- * 删除不可撤销（词条与卡片已经级联删掉了），所以在 deleteNotes 里清空。
+ * 批量移动：只改 deck_id；目标库的待学数会立刻变化（PLAN-DECKS §6.1）。
+ * 不做撤销：操作本身可重复（再移回去即可），单步撤销只会多一套要维护的状态。
  */
-type BatchUndo = { kind: 'move'; moves: { id: number; from: number }[] } | { kind: 'copy'; noteIds: number[] }
-let lastBatch: BatchUndo | null = null
-
-export function undoLastBatch(): { kind: 'move' | 'copy'; count: number } | null {
-  const batch = lastBatch
-  lastBatch = null
-  if (!batch) return null
-  if (batch.kind === 'move') {
-    const count = tx(() => {
-      const stmt = getDb().prepare('UPDATE notes SET deck_id = ?, updated_at = ? WHERE id = ?')
-      let changed = 0
-      const now = localIso()
-      for (const move of batch.moves) changed += Number(stmt.run(move.from, now, move.id).changes ?? 0)
-      return changed
-    })
-    return { kind: 'move', count }
-  }
-  const count = tx(() => {
-    const d = getDb()
-    const stmt = d.prepare('DELETE FROM notes WHERE id = ?')
-    let removed = 0
-    for (const id of batch.noteIds) removed += Number(stmt.run(id).changes ?? 0)
-    d.prepare('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items)').run()
-    return removed
-  })
-  return { kind: 'copy', count }
-}
-
-/** 批量移动：只改 deck_id；目标库的待学数会立刻变化（PLAN-DECKS §6.1） */
 export function moveNotes(ids: unknown, deckId: number): { moved: number } {
   const list = normalizeIds(ids)
   if (!list.length) return { moved: 0 }
@@ -263,21 +233,15 @@ export function moveNotes(ids: unknown, deckId: number): { moved: number } {
     const rows = existing.length
       ? (d
           .prepare(
-            `SELECT id, deck_id FROM notes WHERE deck_id <> ? AND id IN (${existing.map(() => '?').join(',')})`
+            `SELECT id FROM notes WHERE deck_id <> ? AND id IN (${existing.map(() => '?').join(',')})`
           )
-          .all(target, ...existing) as unknown as { id: number; deck_id: number }[])
+          .all(target, ...existing) as unknown as { id: number }[])
       : []
     const now = localIso()
     const stmt = d.prepare('UPDATE notes SET deck_id = ?, updated_at = ? WHERE id = ?')
     let moved = 0
     for (const row of rows) {
       moved += Number(stmt.run(target, now, toInt(row.id)).changes ?? 0)
-    }
-    if (moved) {
-      lastBatch = {
-        kind: 'move',
-        moves: rows.map((row) => ({ id: toInt(row.id), from: toInt(row.deck_id) }))
-      }
     }
     return { moved }
   })
@@ -307,7 +271,6 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
       link.run(noteId, id)
       noteIds.push(noteId)
     }
-    if (noteIds.length) lastBatch = { kind: 'copy', noteIds }
     return { copied: noteIds.length, noteIds }
   })
 }
@@ -323,8 +286,6 @@ export function deleteNotes(ids: unknown): { removed: number } {
     for (const id of list) removed += Number(stmt.run(id).changes ?? 0)
     // 清掉不再被任何笔记引用的词条，卡片会级联删除，避免词库留下孤儿
     d.prepare('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items)').run()
-    // 删除不可撤销（词条/卡片已级联删除），别让「撤销」按钮骗人
-    lastBatch = null
     return { removed }
   })
 }

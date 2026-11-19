@@ -22,7 +22,6 @@ import {
   listNotes,
   moveNotes,
   copyNotes,
-  undoLastBatch,
   updateNote
 } from './db/notes'
 import { deleteItem, getItem, listItems, setDirection, updateItem } from './db/items'
@@ -150,11 +149,6 @@ export function registerIpc(): void {
   })
   ipcMain.handle('notes:removeMany', (_e, ids: number[]) => {
     const result = deleteNotes(ids)
-    requestTrayRefresh()
-    return result
-  })
-  ipcMain.handle('notes:undoBatch', () => {
-    const result = undoLastBatch()
     requestTrayRefresh()
     return result
   })

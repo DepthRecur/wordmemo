@@ -34,8 +34,7 @@ const api: WordmemoApi = {
     remove: (id: number) => ipcRenderer.invoke('notes:remove', id),
     moveMany: (ids: number[], deckId: number) => ipcRenderer.invoke('notes:moveMany', ids, deckId),
     copyMany: (ids: number[], deckId: number) => ipcRenderer.invoke('notes:copyMany', ids, deckId),
-    removeMany: (ids: number[]) => ipcRenderer.invoke('notes:removeMany', ids),
-    undoBatch: () => ipcRenderer.invoke('notes:undoBatch')
+    removeMany: (ids: number[]) => ipcRenderer.invoke('notes:removeMany', ids)
   },
   decks: {
     list: () => ipcRenderer.invoke('decks:list'),

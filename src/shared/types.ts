@@ -539,8 +539,6 @@ export interface WordmemoApi {
     copyMany(ids: number[], deckId: number): Promise<{ copied: number; noteIds: number[] }>
     /** 批量删除：只有在词不再被任何笔记引用时才删词条与卡片 */
     removeMany(ids: number[]): Promise<{ removed: number }>
-    /** 撤销上一次批量移动/复制（只记一步，重启后失效；删除不可撤销） */
-    undoBatch(): Promise<{ kind: 'move' | 'copy'; count: number } | null>
   }
   decks: {
     list(): Promise<Deck[]>

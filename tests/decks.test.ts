@@ -19,8 +19,7 @@ import {
   deleteNotes,
   getNote,
   listNotes,
-  moveNotes,
-  undoLastBatch
+  moveNotes
 } from '../src/main/db/notes'
 import {
   countUnlearned,
@@ -197,19 +196,6 @@ describe('批量移动 / 复制 / 删除', () => {
     expect(moveNotes([n1, n2], Y).moved).toBe(0)
   })
 
-  it('撤销移动能把笔记放回原库', () => {
-    const X = createDeck({ name: 'undo-X' })
-    const Y = createDeck({ name: 'undo-Y' })
-    const n1 = addNote(X, ['undo1'])
-    const n2 = addNote(X, ['undo2'])
-    moveNotes([n1, n2], Y)
-    expect(listNotes({ deckId: Y })).toHaveLength(2)
-    const result = undoLastBatch()
-    expect(result).toEqual({ kind: 'move', count: 2 })
-    expect(listNotes({ deckId: X })).toHaveLength(2)
-    expect(listNotes({ deckId: Y })).toHaveLength(0)
-  })
-
   it('复制只复制笔记与词条关联，不复制词条，也不复制进度', () => {
     const X = createDeck({ name: 'copy-X' })
     const n1 = addNote(X, ['cp1', 'cp2'])
@@ -224,9 +210,6 @@ describe('批量移动 / 复制 / 删除', () => {
     expect(copy!.items.map((item) => item.id).sort((a, b) => a - b)).toEqual(sourceItems)
     // 同一个词条只有一份，learned_at 是共享的
     expect(copy!.items.find((item) => item.headword === 'cp1')?.learnedAt).toBeTruthy()
-    const undone = undoLastBatch()
-    expect(undone).toEqual({ kind: 'copy', count: 1 })
-    expect(getNote(result.noteIds[0])).toBeNull()
   })
 
   it('删除只在词不再被引用时才删词条与卡片', () => {
@@ -238,8 +221,6 @@ describe('批量移动 / 复制 / 删除', () => {
     expect(itemIdOf('keepword')).toBe(sharedId)
     expect(findExistingItemId('onlyword', null, 'word')).toBeNull()
     expect(getNote(keep)).not.toBeNull()
-    // 删除不可撤销：撤销栈已清空
-    expect(undoLastBatch()).toBeNull()
   })
 })
 

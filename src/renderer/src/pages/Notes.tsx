@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Copy, Eye, FileText, Pencil, Plus, RefreshCw, Search, Trash2, Undo2 } from 'lucide-react'
+import { Copy, Eye, FileText, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import type {
   CardDirection,
   Deck,
@@ -61,7 +61,6 @@ export default function Notes({
   const [batchBusy, setBatchBusy] = useState(false)
   const [newDeckName, setNewDeckName] = useState('')
   const [createDeckOpen, setCreateDeckOpen] = useState(false)
-  const [canUndo, setCanUndo] = useState(false)
   const [itemResults, setItemResults] = useState<Item[]>([])
   const [expandedTerms, setExpandedTerms] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -384,7 +383,6 @@ export default function Notes({
       const res = await window.api.notes.moveMany(selectedIds, targetId)
       const name = targetName ?? decks.find((d) => d.id === targetId)?.name ?? ''
       notify(`已移动 ${res.moved} 份笔记到「${name}」`, 'ok')
-      setCanUndo(res.moved > 0)
       setBatch(null)
       clearSelection()
       onChanged()
@@ -404,7 +402,6 @@ export default function Notes({
       const res = await window.api.notes.copyMany(selectedIds, targetId)
       const name = decks.find((d) => d.id === targetId)?.name ?? ''
       notify(`已复制 ${res.copied} 份笔记到「${name}」；这些词的学习进度是共享的`, 'ok')
-      setCanUndo(res.copied > 0)
       setBatch(null)
       clearSelection()
       onChanged()
@@ -423,7 +420,6 @@ export default function Notes({
     try {
       const res = await window.api.notes.removeMany(selectedIds)
       notify(`已删除 ${res.removed} 份笔记`, 'ok')
-      setCanUndo(false)
       setBatch(null)
       clearSelection()
       onChanged()
@@ -469,30 +465,6 @@ export default function Notes({
       notify(`已创建「${name}」`, 'ok')
     } catch (err) {
       notify(`新建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
-    }
-  }
-
-  const undoBatch = async () => {
-    try {
-      const res = await window.api.notes.undoBatch()
-      if (!res) {
-        notify('没有可撤销的批量操作', 'info')
-        setCanUndo(false)
-        return
-      }
-      notify(
-        res.kind === 'move'
-          ? `已撤销移动：${res.count} 份笔记回到原来的库`
-          : `已撤销复制：删除了 ${res.count} 份副本`,
-        'ok'
-      )
-      setCanUndo(false)
-      onChanged()
-      await refreshDecks()
-      void refreshStats()
-      void load()
-    } catch (err) {
-      notify(`撤销失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     }
   }
 
@@ -611,11 +583,6 @@ export default function Notes({
           <Button size="sm" variant="danger" onClick={() => openBatch('delete')} disabled={!selected.size}>
             <Trash2 size={14} /> 删除
           </Button>
-          {canUndo && (
-            <Button size="sm" variant="ghost" onClick={() => void undoBatch()} title="只保留最近一次批量移动/复制">
-              <Undo2 size={14} /> 撤销上次
-            </Button>
-          )}
         </div>
 
         {loading ? (

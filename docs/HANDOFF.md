@@ -1,4 +1,4 @@
-# 交接文档（给下一个会话 / 未来的自己）
+﻿# 交接文档（给下一个会话 / 未来的自己）
 
 > 最后更新：2026-11-19　当前分支：`feat/decks`（从 `master` 拉出，尚未合并）　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
@@ -9,7 +9,7 @@
 
 背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成：
 - **多供应商**（2026-11-18 ~ 19，master，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
-- **多个库**（2026-11-19，`feat/decks`）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库。`npm test` 12 文件 119 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
+- **多个库**（2026-11-19，`feat/decks`）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
 
 下一个功能是**便携版 + 自更新**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案）。
 
@@ -21,7 +21,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，12 个测试文件（119 项）必须全绿
+npm test             # vitest，12 个测试文件（118 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -84,7 +84,7 @@ src/main/db/
   schema.ts        ← 表结构（decks / notes.deck_id / import_drafts.deck_id；SCHEMA_VERSION）
   connection.ts    ← migrate()：补列 + migrateDecks（默认库/回填）+ backupBeforeMigrate()
   decks.ts         ← 库 CRUD、每库计数、deckNewPerDay、deckScope/deckInClause、currentDeckId
-  notes.ts         ← 笔记增删改查 + moveNotes/copyNotes/deleteNotes/undoLastBatch
+  notes.ts         ← 笔记增删改查 + moveNotes/copyNotes/deleteNotes（不做撤销）
   items.ts / cards.ts ← learnQueue/dueQueue/countDue/dailyPlan/learnedTodayCount 都接 deckId
   stats.ts         ← dashboardStats(deckId)：数量类按库，热力图/连续天数跨库
   ai.ts            ← 缓存/用量/月度费用/按家用量/目录与价格的读写
@@ -105,7 +105,7 @@ tests/
   ai-models.test.ts     ← 6 项：模型列表的公开名合并与目录边界
   ai-cache-key.test.ts  ← 2 项：ai_cache 唯一键重建
   ai-db.test.ts         ← 5 项：provider 列 + 老库迁移回填
-  decks.test.ts         ← 13 项：库作用域/额度/批量/撤销/合并分裂/删库/老库迁移+迁移前备份
+  decks.test.ts         ← 12 项：库作用域/额度/批量/合并分裂/删库/老库迁移+迁移前备份
   settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存
   settings-ai.test.ts   ← 4 项：ai 深合并 + apiKeySet 跟随默认角色
   core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 10 / 3 项）
@@ -139,7 +139,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 1. **作用域只有一个入口**：所有按库过滤都走 `deckScope(column, deckId)` / `deckInClause`（`src/main/db/decks.ts`）。`deckId = null` 表示全部库；新加查询时先想清楚该不该拼它。
 2. **当前库是 `settings.currentDeckId`**：主进程托盘、提醒、导入默认目标都读它；渲染层切库走 `App.setDeck()`（写 settings + 刷新统计）。统计页顶部的「统计范围」是**独立过滤器**，不影响当前库。
 3. **笔记库标签栏切库会同时改当前库**；今日任务页的库标签只在总览页出现（答题中不允许切库）。
-4. **撤销只有一步、只在内存**：`undoLastBatch()` 记录上一次批量移动/复制；删除不可撤销（会清空撤销栈）。
+4. **没有撤销**：批量移动/复制/删除都不做撤销（2026-11-19 决定：操作简单，不值得多一套状态）；删除前对话框会写清后果。
 5. **迁移前备份已生效**：`openDb()` 之前 `backupBeforeMigrate()` 会写 `backups/wordmemo-pre-migrate-v<N>.db`（先 checkpoint WAL；同版本已有备份时保留旧的）。改 schema 记得升 `SCHEMA_VERSION`。
 
 ### 5.3 多供应商残留欠账（不阻塞便携版）
@@ -198,7 +198,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 1. ~~**迁移跑在备份之前**~~：**已修**。`index.ts` 在 `openDb()` 之前调 `backupBeforeMigrate()`，写 `backups/wordmemo-pre-migrate-v<N>.db`；改 schema 记得升 `SCHEMA_VERSION`（`schema.ts`），否则不会触发备份。
 2. **同步的时间戳没有时区**：`localIso()` 是本地时间，跨设备比较会错 → 同步 op 要另加 `ts_utc`。
-3. **批量删除连带删词条**：`deleteNotes` 会清理孤儿 items（卡片/复习记录一起没）；对话框已写明，撤销**不能**恢复删除。
+3. **批量删除连带删词条**：`deleteNotes` 会清理孤儿 items（卡片/复习记录一起没）；对话框已写明；删除**不可恢复**。
 4. **便携版数据不能放程序目录**：`index.ts:22-26` 的 dev 逻辑要把数据塞进 `.data`，必须确认打包后不生效。
 5. **库的作用域漏一处就串库**：新查询一律用 `deckScope()`/`deckInClause()`；审计 `grep "FROM cards\|FROM items\|FROM notes"`。`deckId = null` = 全部库，别把 null 当 0。
 6. **`--no-sandbox` 是这台机器的硬需求**：三保险（代码开关 + 启动器 + 崩溃探针）。
@@ -220,11 +220,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：git 已 init；多个库在 feat/decks 分支（typecheck 0 错误、npm test 12 文件 119 项全绿）。
+当前状态：git 已 init；多个库在 feat/decks 分支（typecheck 0 错误、npm test 12 文件 118 项全绿）。
 多供应商：四家可配 Key、角色路由 default/vision、设置页七分区、模型可搜索下拉、
 模型目录与价格自动化、按家统计、npm run ai-smoke；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
 多个库：decks 表 + notes.deck_id + 默认库迁移（迁移前备份）、查询全部按库作用域、
-笔记库批量移动/复制/删除 + 单步撤销、今日任务/导入/考试/统计/托盘接库。
+笔记库批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库。
 
 下一步：做「便携版 + 自更新」——
 1) 先确认 %APPDATA%\WordMemo 有数据、程序目录没有数据；
