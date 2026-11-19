@@ -2,6 +2,7 @@ import type { DashboardStats, HeatmapPoint, ForecastPoint } from '@shared/types'
 import { addDays, dateKey } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { countUnlearned, learnedTodayCount } from './items'
+import { deckNewPerDay, deckScope } from './decks'
 import { monthAiCost, monthAiUsageByProvider } from './ai'
 import { PROVIDERS, isProviderId } from '../ai/providers'
 import { getSettings } from '../settings'
@@ -32,31 +33,42 @@ function streakDays(): number {
   return streak
 }
 
-export function dashboardStats(): DashboardStats {
+/**
+ * 统计：deckId 只影响「数量类」指标（词条数、笔记数、今天到期、新词、难词、到期预测）。
+ * 热力图、连续天数、正确率、AI 花费始终跨库——它们记在 reviews / ai_usage 上，没有库维度。
+ */
+export function dashboardStats(deckId?: number | null): DashboardStats {
   const d = getDb()
   const now = localIso()
   const today = dateKey()
   const settings = getSettings()
+  const allDecks = deckId === null || deckId === undefined
 
-  const totalItems = count('SELECT COUNT(*) AS c FROM items')
-  const totalNotes = count('SELECT COUNT(*) AS c FROM notes')
+  const itemScope = deckScope('i.id', deckId)
+  const cardScope = deckScope('c.item_id', deckId)
+
+  const totalItems = count(`SELECT COUNT(*) AS c FROM items i WHERE 1 = 1${itemScope.clause}`, itemScope.params)
+  const totalNotes = count(
+    allDecks ? 'SELECT COUNT(*) AS c FROM notes' : 'SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?',
+    allDecks ? [] : [toInt(deckId)]
+  )
   const totalReviews = count('SELECT COUNT(*) AS c FROM reviews')
   const learnAhead = Math.max(0, Number(settings.learnAheadMinutes ?? 20))
   const learnCutoff = localIso(new Date(Date.now() + learnAhead * 60_000))
   const dueToday = count(
-    `SELECT COUNT(DISTINCT item_id) AS c FROM cards
-     WHERE suspended = 0
-       AND IFNULL(buried_until, '') < ?
+    `SELECT COUNT(DISTINCT c.item_id) AS c FROM cards c
+     WHERE c.suspended = 0
+       AND IFNULL(c.buried_until, '') < ?
        AND (
-         needs_check = 1
-         OR (state = 2 AND due_at <= ?)
-         OR (state IN (1, 3) AND due_at <= ?)
-       )`,
-    [today, now, learnCutoff]
+         c.needs_check = 1
+         OR (c.state = 2 AND c.due_at <= ?)
+         OR (c.state IN (1, 3) AND c.due_at <= ?)
+       )${cardScope.clause}`,
+    [today, now, learnCutoff, ...cardScope.params]
   )
-  const introduced = learnedTodayCount()
-  const unlearned = countUnlearned()
-  const newToday = Math.min(Math.max(0, settings.newPerDay - introduced), unlearned)
+  const introduced = learnedTodayCount(deckId)
+  const unlearned = countUnlearned(deckId)
+  const newToday = Math.min(Math.max(0, deckNewPerDay(deckId) - introduced), unlearned)
   const reviewedToday = count('SELECT COUNT(*) AS c FROM reviews WHERE substr(reviewed_at, 1, 10) = ?', [
     today
   ])
@@ -72,11 +84,14 @@ export function dashboardStats(): DashboardStats {
   const forecast: ForecastPoint[] = []
   const forecastRows = d
     .prepare(
-      `SELECT substr(due_at, 1, 10) AS day, COUNT(*) AS c FROM cards
-       WHERE suspended = 0 AND state > 0 AND due_at >= ? AND due_at < ?
+      `SELECT substr(c.due_at, 1, 10) AS day, COUNT(*) AS c FROM cards c
+       WHERE c.suspended = 0 AND c.state > 0 AND c.due_at >= ? AND c.due_at < ?${cardScope.clause}
        GROUP BY day`
     )
-    .all(now, localIso(new Date(Date.now() + 30 * 86400000))) as { day: string; c: number }[]
+    .all(now, localIso(new Date(Date.now() + 30 * 86400000)), ...cardScope.params) as {
+    day: string
+    c: number
+  }[]
   const forecastMap = new Map(forecastRows.map((r) => [r.day, toInt(r.c)]))
   for (let i = 0; i < 30; i++) {
     const day = addDays(today, i)
@@ -103,12 +118,12 @@ export function dashboardStats(): DashboardStats {
     .prepare(
       `SELECT i.id, i.headword, i.meanings, MAX(c.lapses) AS lapses
        FROM cards c JOIN items i ON i.id = c.item_id
-       WHERE c.lapses > 0
+       WHERE c.lapses > 0${cardScope.clause}
        GROUP BY i.id
        ORDER BY lapses DESC
        LIMIT 6`
     )
-    .all() as { id: number; headword: string; meanings: string; lapses: number }[]
+    .all(...cardScope.params) as { id: number; headword: string; meanings: string; lapses: number }[]
 
   const ai = monthAiCost()
   const byProvider = monthAiUsageByProvider().map((row) => ({

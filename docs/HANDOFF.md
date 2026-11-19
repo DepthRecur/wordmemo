@@ -1,13 +1,17 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-19　当前分支：`master`　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
+> 最后更新：2026-11-19　当前分支：`feat/decks`（从 `master` 拉出，尚未合并）　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页六分区、模型可搜索下拉（公开名 + id + 价格）、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**DeepSeek 与 GLM 都已在真机验证**（GLM 2026-11-19，`npm run ai-smoke` 4/4）；OpenAI / Gemini 等社区反馈。下一个功能是**多个库**。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成：
+- **多供应商**（2026-11-18 ~ 19，master，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
+- **多个库**（2026-11-19，`feat/decks`）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库。`npm test` 12 文件 119 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
+
+下一个功能是**便携版 + 自更新**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案）。
 
 ---
 
@@ -17,7 +21,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，11 个测试文件（106 项）必须全绿
+npm test             # vitest，12 个测试文件（119 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -77,14 +81,20 @@ src/main/ai/
   prompts.ts       ← 提示词，不动
 src/main/settings.ts ← settings.ai 深合并 + secrets.v2.json（多 Key，safeStorage 整份加密）
 src/main/db/
-  schema.ts        ← 表结构（ai_cache 新唯一键；ai_catalog / ai_pricing；ai_usage 带 cost_source）
-  connection.ts    ← migrate()：addColumnIfMissing() + migrateAiCacheUnique()（重建表）
+  schema.ts        ← 表结构（decks / notes.deck_id / import_drafts.deck_id；SCHEMA_VERSION）
+  connection.ts    ← migrate()：补列 + migrateDecks（默认库/回填）+ backupBeforeMigrate()
+  decks.ts         ← 库 CRUD、每库计数、deckNewPerDay、deckScope/deckInClause、currentDeckId
+  notes.ts         ← 笔记增删改查 + moveNotes/copyNotes/deleteNotes/undoLastBatch
+  items.ts / cards.ts ← learnQueue/dueQueue/countDue/dailyPlan/learnedTodayCount 都接 deckId
+  stats.ts         ← dashboardStats(deckId)：数量类按库，热力图/连续天数跨库
   ai.ts            ← 缓存/用量/月度费用/按家用量/目录与价格的读写
-  notes.ts / items.ts / cards.ts / stats.ts / importDrafts.ts  ← 库功能将来要改这里
-src/main/index.ts  ← 启动、托盘、提醒、备份；30 秒后后台刷新目录/价格
-src/renderer/src/pages/SettingsPage.tsx ← 左侧 6 分区（供应商/角色/复习/提醒/发音/高级与诊断）
+  importDrafts.ts  ← 草稿的 deck_id 与 commitDraft 的目标库
+src/main/index.ts  ← 启动、托盘（只统计当前库）、提醒、备份；迁移前备份；30 秒后后台刷新目录/价格
+src/main/tray-bridge.ts ← ipc.ts → index.ts 的托盘刷新回调（避免循环 import）
+src/renderer/src/components/DeckPicker.tsx ← 库标签栏（DeckTabs）与下拉（DeckSelect）
+src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
 src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
-src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分
+src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分 + 顶部库过滤
 scripts/Launcher.cs ← 便携版启动器的基础（将来扩展成换目录）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
 scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
@@ -95,6 +105,7 @@ tests/
   ai-models.test.ts     ← 6 项：模型列表的公开名合并与目录边界
   ai-cache-key.test.ts  ← 2 项：ai_cache 唯一键重建
   ai-db.test.ts         ← 5 项：provider 列 + 老库迁移回填
+  decks.test.ts         ← 13 项：库作用域/额度/批量/撤销/合并分裂/删库/老库迁移+迁移前备份
   settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存
   settings-ai.test.ts   ← 4 项：ai 深合并 + apiKeySet 跟随默认角色
   core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 10 / 3 项）
@@ -103,9 +114,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ---
 
-## 5. 多供应商已完成（冻结）；下一步：多个库
+## 5. 已完成：多供应商（冻结）+ 多个库；下一步：便携版
 
-**多供应商 P0–P3 + UI 打磨全部完成并冻结**（2026-11-18 ~ 11-19）。`typecheck` 0 错误、`npm test` 11 文件 106 项全绿、真机通过。实现记录见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md)（五条，最后两条是 UI 打磨与 GLM 验证）。
+### 5.1 多供应商（2026-11-18 ~ 19，master，冻结）
+
+`typecheck` 0 错误、真机通过。实现记录见 [PLAN-PROVIDERS §13](PLAN-PROVIDERS.md)（五条，最后两条是 UI 打磨与 GLM 验证）。
 
 | 能力 | 状态 |
 |---|---|
@@ -119,16 +132,17 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 **GLM 的坑（已修，别踩回去）**：`glm-5.x-flash` **强制思考**，不能发 `thinking: {type:'disabled'}`（中文 400）；GLM 现在 `whenOff: 'omit'`（不需要思考时干脆不发这个字段）。另外「保存并测试」的 max_tokens 从 8 提到 256，否则思考模型会把 token 全花在推理上返回空内容。
 
-### 5.1 下一个功能：多个库（PLAN-DECKS）
+### 5.2 多个库（2026-11-19，`feat/decks`，完成）
 
-对照 [PLAN-NEXT](PLAN-NEXT.md) §6 与 [PLAN-DECKS](PLAN-DECKS.md)（§1 有 6 条验收场景，先照着写死）：
+实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的四件事**：
 
-1. **先收作用域**：把 `dailyPlan / learnQueue / dueQueue / countDue / learnedTodayCount` 的「当前库」收成一个 helper（**先改这里，别先改页面**）。
-2. 建 `decks` 表 + `notes.deck_id` + 默认库迁移（迁移前先备份，见 §8 坑 1）。
-3. 再改 6 个入口与设置页；复制笔记**不复制进度**；每库一份每日新词额度（方案 A）。
-4. 建议开分支 `feat/decks`（前几个功能都在 master 上做的）。
+1. **作用域只有一个入口**：所有按库过滤都走 `deckScope(column, deckId)` / `deckInClause`（`src/main/db/decks.ts`）。`deckId = null` 表示全部库；新加查询时先想清楚该不该拼它。
+2. **当前库是 `settings.currentDeckId`**：主进程托盘、提醒、导入默认目标都读它；渲染层切库走 `App.setDeck()`（写 settings + 刷新统计）。统计页顶部的「统计范围」是**独立过滤器**，不影响当前库。
+3. **笔记库标签栏切库会同时改当前库**；今日任务页的库标签只在总览页出现（答题中不允许切库）。
+4. **撤销只有一步、只在内存**：`undoLastBatch()` 记录上一次批量移动/复制；删除不可撤销（会清空撤销栈）。
+5. **迁移前备份已生效**：`openDb()` 之前 `backupBeforeMigrate()` 会写 `backups/wordmemo-pre-migrate-v<N>.db`（先 checkpoint WAL；同版本已有备份时保留旧的）。改 schema 记得升 `SCHEMA_VERSION`。
 
-### 5.2 多供应商残留欠账（不阻塞多个库）
+### 5.3 多供应商残留欠账（不阻塞便携版）
 
 - models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估。
 - 「厂商响应自报价格」（§4.2 第 1 级）只是枚举位，4 家都没给。
@@ -137,11 +151,10 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ---
 
-## 6. 后面三个功能各自的"第一步"
+## 6. 后面两个功能各自的"第一步"
 
 | 功能 | 第一步 | 注意 |
 |---|---|---|
-| 多个库 | 建 `decks` 表 + `notes.deck_id` + 默认库迁移 | **先把 `dailyPlan/learnQueue/dueQueue/countDue/learnedTodayCount` 的作用域收成一个 helper**，再改页面 |
 | 便携版 | `electron-builder --dir` 出 `win-unpacked`，写 `app/version.json`，启动器 v0 | **先确认 `%APPDATA%\WordMemo` 有数据、程序目录没有数据** |
 | 同步 | S0：`uid` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
 
@@ -154,6 +167,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 - `npm run typecheck` / `npm test`：每次改完都跑。
 - `npm run dev`：开发模式看界面。`npm run ai-smoke`：真机自检（4 个调用点 × 4 家，没 Key 的家 `SKIP（无 Key）`，会花几次极短调用；跑之前先退出正在运行的应用）。
 - **界面截图验收**：离屏窗口必须 `webPreferences.backgroundThrottling: false`，并且用 CDP `Page.captureScreenshot`（`capturePage()` 会返回上一帧，还会把 CSS transition 卡在中间态，看起来像两个分项同时高亮）。
+- 多个库这次用的轻量办法（不装 Playwright）：`npm run build` 后 `electron.exe . --no-sandbox --remote-debugging-port=9333`，用一个临时 Node 脚本（Node 22 自带 `WebSocket`）连 CDP：`Page.navigate` 带 `?page=library` 直接进页面，`Runtime.evaluate` 调 `window.api.*` 造数据/断言，`Page.captureScreenshot` 存图。脚本放 `.data/` 下即可（已被 gitignore），不要提交。
 
 ### 7.2 另一台电脑（Windows 家庭版，有 Git/Node，用 VMware）
 
@@ -182,11 +196,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 完整清单在 [PLAN-NEXT §7](PLAN-NEXT.md)。最容易踩的六个：
 
-1. **迁移跑在备份之前**：`openDb()` 内部迁移，`dailyBackup()` 在后 → 已在计划里要求改成「迁移前备份」。
+1. ~~**迁移跑在备份之前**~~：**已修**。`index.ts` 在 `openDb()` 之前调 `backupBeforeMigrate()`，写 `backups/wordmemo-pre-migrate-v<N>.db`；改 schema 记得升 `SCHEMA_VERSION`（`schema.ts`），否则不会触发备份。
 2. **同步的时间戳没有时区**：`localIso()` 是本地时间，跨设备比较会错 → 同步 op 要另加 `ts_utc`。
-3. **批量删除连带删词条**：`deleteNote` 会清理孤儿 items（卡片/复习记录一起没）。
+3. **批量删除连带删词条**：`deleteNotes` 会清理孤儿 items（卡片/复习记录一起没）；对话框已写明，撤销**不能**恢复删除。
 4. **便携版数据不能放程序目录**：`index.ts:22-26` 的 dev 逻辑要把数据塞进 `.data`，必须确认打包后不生效。
-5. **库的作用域漏一处就串库**：先收 helper，再改查询。
+5. **库的作用域漏一处就串库**：新查询一律用 `deckScope()`/`deckInClause()`；审计 `grep "FROM cards\|FROM items\|FROM notes"`。`deckId = null` = 全部库，别把 null 当 0。
 6. **`--no-sandbox` 是这台机器的硬需求**：三保险（代码开关 + 启动器 + 崩溃探针）。
 
 ---
@@ -196,8 +210,8 @@ docs/               ← 四份计划 + 调研 + 本文件
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
 再读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）；
-要做「多个库」时读 docs/PLAN-DECKS.md（§1 是 6 条验收场景）；
-多供应商已经冻结，实现记录在 docs/PLAN-PROVIDERS.md §13（只修 bug，不加功能）。
+要做「便携版」时读 docs/PLAN-UPDATE.md（§3.11 是定稿方案），要动多个库时读 docs/PLAN-DECKS.md §15；
+多供应商已冻结（PLAN-PROVIDERS §13），多个库已完成（PLAN-DECKS §15），两者都只修 bug。
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
@@ -206,17 +220,17 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：git 已 init（master，最近提交见 git log）。多供应商已完成并冻结：
-四家可配 Key、角色路由 default/vision、设置页六分区、模型可搜索下拉（公开名 + id）、
-模型目录与价格自动化、按家统计、npm run ai-smoke。typecheck 0 错误、
-npm test 11 文件 106 项全绿。真机：DeepSeek、GLM 已验证；OpenAI / Gemini 未验证
-（没有 Key，等社区反馈）。
+当前状态：git 已 init；多个库在 feat/decks 分支（typecheck 0 错误、npm test 12 文件 119 项全绿）。
+多供应商：四家可配 Key、角色路由 default/vision、设置页七分区、模型可搜索下拉、
+模型目录与价格自动化、按家统计、npm run ai-smoke；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
+多个库：decks 表 + notes.deck_id + 默认库迁移（迁移前备份）、查询全部按库作用域、
+笔记库批量移动/复制/删除 + 单步撤销、今日任务/导入/考试/统计/托盘接库。
 
-下一步：按 HANDOFF §5 做「多个库」——
-1) 先把 dailyPlan/learnQueue/dueQueue/countDue/learnedTodayCount 的作用域收成一个 helper；
-2) 建 decks 表 + notes.deck_id + 默认库迁移（迁移前先备份）；
-3) 再改 6 个入口与设置页；验收照 PLAN-DECKS §1 的 6 条场景。
-建议开分支 feat/decks；做完在 PLAN-DECKS 里记一笔并 commit（git commit -s）。
+下一步：做「便携版 + 自更新」——
+1) 先确认 %APPDATA%\WordMemo 有数据、程序目录没有数据；
+2) electron-builder --dir 出 win-unpacked，写 app/version.json，启动器 v0；
+3) 验收照 PLAN-UPDATE §3.11 与 HANDOFF §7.2 的便携版动作。
+建议在 feat/decks 合并后再开 feat/portable；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
 ```
 
 ---

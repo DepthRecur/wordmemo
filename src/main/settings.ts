@@ -133,6 +133,9 @@ function merge(raw: Partial<Settings> | null): Settings {
     : [...DEFAULT_SETTINGS.ttsSources]
   // `ai` 是浅合并的例外：必须深合并，否则老配置一升级就丢字段（PLAN-PROVIDERS §5）
   merged.ai = mergeAi(raw?.ai)
+  // 当前库：文件被手改/删库后可能留下不存在的 id，先归一化成合法数字
+  const deckId = Number((raw as { currentDeckId?: unknown } | null)?.currentDeckId)
+  merged.currentDeckId = Number.isInteger(deckId) && deckId > 0 ? deckId : DEFAULT_SETTINGS.currentDeckId
   // 界面上「是否已配置 Key」跟随默认角色用的那家
   merged.apiKeySet = hasApiKey(merged.ai.default.provider)
   return merged

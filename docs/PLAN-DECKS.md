@@ -4,6 +4,7 @@
 > 前置：无硬依赖，可与「多供应商」调换顺序；**必须在「云端同步」之前完成**
 > 相关：[总览](PLAN-NEXT.md) · [复用调研](RESEARCH-REUSE.md)
 > **2026-11-18 定稿**：采用方案 A——库是「笔记容器 + 学习范围」，进度仍跟单词走，每库一份每日新词额度。
+> **2026-11-19 已完成**（分支 `feat/decks`），实现记录与验收对照见本文 **§15**。
 
 ---
 
@@ -382,3 +383,52 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 - 不做每库独立的 FSRS 参数/保留率（额度可以每库设，调度参数全局）。
 - 不做库级别的标签体系、权限、共享（同步做完后再说）。
 - 不做批量编辑词条字段（批量只作用于「笔记」这一层）。
+
+---
+
+## 15. 实现记录（2026-11-19，`feat/decks`）
+
+**状态：D0–D3 完成并验收。** `typecheck` 0 错误；`npm test` **12 个文件 119 项全绿**（新增 `tests/decks.test.ts` 13 项）；真机（本机 Electron 38）用 CDP 跑过导入 → 两库今日任务 → 批量移动/撤销。
+
+### 15.1 落地内容
+
+| 层 | 文件 | 做了什么 |
+|---|---|---|
+| schema | `src/main/db/schema.ts` | `decks` 表（uid/name/color/position/new_per_day/created_at，name 唯一 + NOCASE）、`notes.deck_id`、`import_drafts.deck_id`；`SCHEMA_VERSION = 2` |
+| 迁移 | `src/main/db/connection.ts` | `migrateDecks()`：补列、`ix_notes_deck`、建默认库、把老笔记回填到默认库；`backupBeforeMigrate()` 在 `openDb()` **之前**复制 `backups/wordmemo-pre-migrate-v<N>.db`（WAL 先 checkpoint；已有同版本备份则保留旧的） |
+| 库 CRUD | `src/main/db/decks.ts` | `listDecks`（含 note/item/unlearned/learnedToday/todayNew/due 计数）、`createDeck`/`updateDeck`/`removeDeck(moveTo)`、`deckNewPerDay`、`currentDeckId`，以及统一作用域 helper `deckInClause`/`deckScope` |
+| 作用域 | `items.ts` / `cards.ts` / `notes.ts` / `stats.ts` | `countUnlearned/learnedTodayCount/learnQueue/dueQueue/dailyPlan/countDue/cardsInScope/listNotes/dashboardStats` 全部加 `deckId`；`dailyPlan(deckId)` 的额度 = `deckNewPerDay(deckId) - learnedTodayCount(deckId)` |
+| 批量 | `src/main/db/notes.ts` | `moveNotes`/`copyNotes`/`deleteNotes`（一次事务、单次最多 500 份）、`undoLastBatch`（只记一步，移动/复制可撤销，删除不可撤销）；复制只复制笔记行 + `note_items` 关联 |
+| 导入 | `importDrafts.ts` / `ingest.ts` | 草稿落盘时记 `deck_id`；`commitDraft` 用草稿的库，老草稿（NULL）用当前库 |
+| IPC / preload | `ipc.ts` / `preload/index.ts` | `decks:*`、`notes:moveMany/copyMany/removeMany/undoBatch`、`review:daily(deckId)`、`stats:dashboard(deckId)`、`search:query(…, deckId)`、`importer:parse(paths, deckId)`；`settings:update`/批量动作/复习后立即刷新托盘 |
+| UI | `DeckPicker.tsx`（新）、`Notes.tsx`、`Review.tsx`、`ImportPage.tsx`、`ExamPage.tsx`、`StatsPage.tsx`、`SettingsPage.tsx` | 库标签栏 + 三态表头 + 全选/全不选/反选 + Shift 区间选 + `Ctrl+A`/`Esc` + 批量栏 + 移动/复制/删除对话框（移动对话框内可「新建并移动」）；今日任务库标签；导入目标库；考试范围库；统计顶部库过滤；设置页新增「笔记库」分区（改名/额度/上下移/删库前迁笔记） |
+| 托盘 | `index.ts` + `tray-bridge.ts`（新） | 托盘计数只算当前库，tooltip 另给全部库总数；菜单里显示「当前库」 |
+
+**当前库**存在 `settings.currentDeckId`（主进程托盘也读同一个值）；笔记库/导入页切库会同时改它，统计页的「统计范围」是独立过滤器。
+
+### 15.2 与计划的差异（有意为之）
+
+- **今日任务页在答题/学习过程中不提供切库**：只在「今日任务」总览页给库标签，避免答到一半切库丢进度（计划里说「切换要二次确认」，这里用「不允许切」替代，更简单也更安全）。
+- **批量移动的「目标库待学 +N」预告没做**：`NoteSummary` 没有「这份笔记里还没学的词数」，加字段要再改一条查询；对话框改成写清语义（「目标库里还没学的词会立刻进入它的今日任务」）。真要做时在 `SUMMARY_SELECT` 加一个 `unlearned_count` 即可。
+- **撤销只保留一步、且在内存里**：重启后失效；删除不可撤销（词条/卡片已级联删掉），删除后清空撤销栈，按钮不会骗人。
+- **教材 3500 词的笔记详情未做虚拟化**：本机用 14 词样例与空库验收，未实测 3500 行；`PLAN-NEXT §7` 的 P2 #13 继续留着。
+- **搜索的「全部库」视图**：结果表的「库」列就是徽标，没有再加额外的库筛选控件。
+
+### 15.3 验收对照
+
+| §1 场景 | 结果 |
+|---|---|
+| 1 建两库、分别导入 | ✅ 真机：14 词样例导入「课标词汇」，2 份笔记在「上课笔记」 |
+| 2 上课笔记的今日任务看不到 3500 词 | ✅ `dailyPlan(上课笔记)` 新词为空，`dailyPlan(课标词汇)` 只出本库 5 个 |
+| 3 课标词汇按额度出 20 个 | ✅ 默认额度 5（测试库设了 5）；全局库 `dailyPlan(null)` 出 14 个 |
+| 4 改上限只影响这个库 | ✅ 改成 2：本库 2 个、另一个库仍 20 个额度 |
+| 5 全选 3 份移动到目标库 | ✅ CDP：全选 2 份 → 移动到 → 目标库 +2、源库清空；撤销后回到原库 |
+| 6 反选/全不选/Shift 区间选；筛选下全选只选当前结果 | ✅ 逻辑与单测；选区在筛选/搜索/排序变化时清空，单次上限 500 |
+| 7 合并/分裂 | ✅ 单测：移动 + 删空库 = 合并（同名词只算一次）；复制一半到新库 = 分裂 |
+| 8 同一个词进两库只扣一次进度 | ✅ 单测：学一次两边都不再算新词；dueQueue 两边看到同一张卡 |
+
+### 15.4 以后再说
+
+- 每库独立进度（备选方案 B）仍未做，`cards.deck_id` 不在本版。
+- 移到目标库的「待学 +N」预告、库数量 >10 的合并提示、搜索结果的库徽标样式，都可以后续补。
+- 迁移备份目前只留同名一份（`pre-migrate-v0.db`）；如果以后 SCHEMA_VERSION 继续升级，旧备份文件名会区分版本，正好各留一份。

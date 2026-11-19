@@ -1,16 +1,18 @@
 import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, dialog } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { openDb } from './db/connection'
+import { backupBeforeMigrate, openDb } from './db/connection'
 import { getSettings, initSettings, updateSettings } from './settings'
 import { initFsrs } from './fsrs'
 import { registerIpc } from './ipc'
 import { APP_ICON, TRAY_ICON } from './icon-data'
 import { countDue } from './db/cards'
+import { currentDeckId, getDeck } from './db/decks'
 import { countDrafts } from './db/importDrafts'
 import { getDb } from './db/connection'
 import { localDate } from './db/connection'
 import { getDiagnostics, getIntegrity, log, setTrayState } from './diagnostics'
+import { setTrayRefresher } from './tray-bridge'
 import { scheduleCatalogRefresh } from './ai/catalog'
 import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
@@ -119,11 +121,13 @@ function restartApp(): void {
   app.exit(0)
 }
 
-function notifyDue(due: number): void {
+function notifyDue(due: number, deckName: string | null): void {
   if (!Notification.isSupported()) return
   const n = new Notification({
     title: 'WordMemo · 该复习了',
-    body: `今天还有 ${due} 张卡片到期，花 10 分钟过一遍吧。`,
+    body: deckName
+      ? `「${deckName}」今天还有 ${due} 张卡片到期，花 10 分钟过一遍吧。`
+      : `今天还有 ${due} 张卡片到期，花 10 分钟过一遍吧。`,
     icon: nativeImage.createFromDataURL(APP_ICON)
   })
   n.on('click', () => navigate('review'))
@@ -155,8 +159,9 @@ function startReminderLoop(): void {
     if (lastFired === key) return
     lastFired = key
     try {
-      const due = countDue()
-      if (due > 0) notifyDue(due)
+      const deckId = currentDeckId()
+      const due = countDue(deckId)
+      if (due > 0) notifyDue(due, getDeck(deckId)?.name ?? null)
     } catch {
       /* ignore */
     }
@@ -165,9 +170,11 @@ function startReminderLoop(): void {
   setTimeout(tick, 5_000)
 }
 
-function trayMenu(due: number, drafts: number): Menu {
+function trayMenu(due: number, drafts: number, deckName: string | null): Menu {
   return Menu.buildFromTemplate([
     { label: '打开 WordMemo', click: () => showWindow() },
+    // 托盘只统计当前库（PLAN-DECKS §7）；全部库的总数只在 tooltip 里给
+    { label: `当前库：${deckName ?? '全部'}`, enabled: false },
     { label: `今日复习（${due}）`, click: () => navigate('review') },
     { label: '听写冲刺', click: () => navigate('exam') },
     { label: '导入笔记', click: () => navigate('import') },
@@ -198,12 +205,17 @@ function createTray(): Tray {
 function refreshTray(): void {
   if (!tray) return
   try {
-    const due = countDue()
+    const deckId = currentDeckId()
+    const deck = getDeck(deckId)
+    const due = countDue(deckId)
+    // 全部库的总数只在 tooltip 里给（托盘图标/菜单只跟当前库走）
+    const allDue = countDue()
     const drafts = countDrafts()
     const parts = [due > 0 ? `今天还有 ${due} 张卡` : '今天已完成']
+    if (allDue !== due) parts.push(`全部库 ${allDue} 张`)
     if (drafts > 0) parts.push(`${drafts} 份草稿待入库`)
-    tray.setToolTip(`WordMemo · ${parts.join(' · ')}`)
-    tray.setContextMenu(trayMenu(due, drafts))
+    tray.setToolTip(`WordMemo · ${deck?.name ?? ''} · ${parts.join(' · ')}`.replace(' ·  ·', ' · '))
+    tray.setContextMenu(trayMenu(due, drafts, deck?.name ?? null))
   } catch {
     /* ignore */
   }
@@ -260,6 +272,8 @@ function buildTray(): void {
     log('tray-create-failed', { error: err instanceof Error ? err.message : String(err) })
     return
   }
+  // 切库、导入、复习后立刻刷新托盘计数，不必等下一次定时刷新
+  setTrayRefresher(refreshTray)
   refreshTray()
   setInterval(refreshTray, 60_000)
   verifyTray(0)
@@ -295,7 +309,15 @@ async function bootstrap(): Promise<void> {
   Menu.setApplicationMenu(null)
 
   const dataDir = userDataDir()
-  openDb(path.join(dataDir, 'wordmemo.db'))
+  const dbFile = path.join(dataDir, 'wordmemo.db')
+  // 坑 1（PLAN-NEXT §7）：迁移在 openDb() 里跑，必须先复制一份旧库再打开
+  try {
+    const backup = backupBeforeMigrate(dbFile, path.join(dataDir, 'backups'))
+    if (backup) log('pre-migrate-backup', { file: backup })
+  } catch (err) {
+    log('pre-migrate-backup-failed', { error: err instanceof Error ? err.message : String(err) })
+  }
+  openDb(dbFile)
   initSettings()
   log('app-start', { ...getDiagnostics() })
   const settings = getSettings()

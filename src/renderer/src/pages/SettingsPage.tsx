@@ -8,19 +8,21 @@ import type {
   AiSettingsInfo,
   AiTestResult,
   BuildInfo,
+  Deck,
   Settings
 } from '@shared/types'
-import { Badge, Button, Field, Toggle } from '../components/UI'
+import { Badge, Button, Field, Modal, Toggle } from '../components/UI'
 import { ModelPicker } from '../components/ModelPicker'
 import type { Navigate, Notify } from '../App'
 import { cls, formatBytes } from '../lib/utils'
 
-type SettingsSection = 'providers' | 'ai' | 'review' | 'reminder' | 'tts' | 'advanced'
+type SettingsSection = 'providers' | 'ai' | 'review' | 'decks' | 'reminder' | 'tts' | 'advanced'
 
 const SECTIONS: { key: SettingsSection; label: string }[] = [
   { key: 'providers', label: 'AI 供应商' },
   { key: 'ai', label: 'AI 角色与预算' },
   { key: 'review', label: '复习节奏' },
+  { key: 'decks', label: '笔记库' },
   { key: 'reminder', label: '提醒' },
   { key: 'tts', label: '发音源' },
   { key: 'advanced', label: '高级与诊断' }
@@ -32,6 +34,12 @@ interface Props {
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
   refreshStats: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
+  /** 从别的页面跳进来时直接打开的分区（如「笔记库」） */
+  initialSection?: string
 }
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -91,7 +99,16 @@ function priceText(price: AiPriceInfo): string {
   return `≈$${price.input}/M 入 · $${price.output}/M 出${suffix}`
 }
 
-export default function SettingsPage({ notify, settings, refreshSettings }: Props) {
+export default function SettingsPage({
+  notify,
+  settings,
+  refreshSettings,
+  decks,
+  deckId,
+  setDeck,
+  refreshDecks,
+  initialSection
+}: Props) {
   const [draft, setDraft] = useState<Settings>(settings)
   const [section, setSection] = useState<SettingsSection>('providers')
   const [saving, setSaving] = useState(false)
@@ -107,6 +124,13 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
   const [results, setResults] = useState<Record<string, AiTestResult | undefined>>({})
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [pricingBusy, setPricingBusy] = useState(false)
+
+  // 库管理：每行一个本地草稿（改名 / 单独额度），点保存才写回
+  const [deckDrafts, setDeckDrafts] = useState<Record<number, { name: string; quota: string }>>({})
+  const [newDeckName, setNewDeckName] = useState('')
+  const [deckBusy, setDeckBusy] = useState(false)
+  const [deleteDeck, setDeleteDeck] = useState<Deck | null>(null)
+  const [deleteMoveTo, setDeleteMoveTo] = useState<number | null>(null)
 
   const providers = info?.providers ?? []
 
@@ -124,6 +148,12 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
   useEffect(() => {
     setDraft(settings)
   }, [settings])
+
+  useEffect(() => {
+    if (initialSection && SECTIONS.some((s) => s.key === initialSection)) {
+      setSection(initialSection as SettingsSection)
+    }
+  }, [initialSection])
 
   useEffect(() => {
     void window.api.tts.cacheSize().then(setCache)
@@ -312,6 +342,103 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
     if (target < 0 || target >= next.length) return
     ;[next[index], next[target]] = [next[target], next[index]]
     set('ttsSources', next)
+  }
+
+  /** 库行编辑：不点保存就不写库 */
+  const deckDraftOf = (deck: Deck) =>
+    deckDrafts[deck.id] ?? {
+      name: deck.name,
+      quota: deck.newPerDay === null ? '' : String(deck.newPerDay)
+    }
+
+  const patchDeckDraft = (deck: Deck, patch: Partial<{ name: string; quota: string }>) =>
+    setDeckDrafts((prev) => ({ ...prev, [deck.id]: { ...deckDraftOf(deck), ...patch } }))
+
+  const saveDeckRow = async (deck: Deck) => {
+    const local = deckDraftOf(deck)
+    const quota = local.quota.trim()
+    const newPerDay = quota === '' ? null : Math.max(0, Math.trunc(Number(quota)) || 0)
+    setDeckBusy(true)
+    try {
+      await window.api.decks.update(deck.id, { name: local.name.trim(), newPerDay })
+      await refreshDecks()
+      setDeckDrafts((prev) => {
+        const next = { ...prev }
+        delete next[deck.id]
+        return next
+      })
+      notify('库已更新', 'ok')
+    } catch (err) {
+      notify(`更新库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setDeckBusy(false)
+    }
+  }
+
+  const createDeckRow = async () => {
+    const name = newDeckName.trim()
+    if (!name) {
+      notify('先给新库起个名字', 'info')
+      return
+    }
+    setDeckBusy(true)
+    try {
+      await window.api.decks.create({ name })
+      setNewDeckName('')
+      await refreshDecks()
+      notify(`已创建「${name}」`, 'ok')
+    } catch (err) {
+      notify(`创建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setDeckBusy(false)
+    }
+  }
+
+  const moveDeckRow = async (deck: Deck, dir: -1 | 1) => {
+    const list = [...decks]
+    const i = list.findIndex((d) => d.id === deck.id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= list.length) return
+    ;[list[i], list[j]] = [list[j], list[i]]
+    setDeckBusy(true)
+    try {
+      // 重新编号：position 有重复时单纯交换不会改变顺序
+      for (let index = 0; index < list.length; index++) {
+        if (list[index].position !== index) {
+          await window.api.decks.update(list[index].id, { position: index })
+        }
+      }
+      await refreshDecks()
+    } catch (err) {
+      notify(`调整顺序失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setDeckBusy(false)
+    }
+  }
+
+  const removeDeckRow = async () => {
+    if (!deleteDeck) return
+    const target = deleteMoveTo ?? decks.find((d) => d.id !== deleteDeck.id)?.id ?? null
+    if (target === null) {
+      notify('至少要保留一个库', 'err')
+      return
+    }
+    setDeckBusy(true)
+    try {
+      const res = await window.api.decks.remove(deleteDeck.id, target)
+      const next = await refreshDecks()
+      if (deckId === deleteDeck.id) {
+        const active = next.some((d) => d.id === deckId) ? deckId : (next[0]?.id ?? null)
+        if (active) await setDeck(active)
+      }
+      const targetName = next.find((d) => d.id === target)?.name ?? ''
+      notify(`已删除「${deleteDeck.name}」，${res.moved} 份笔记移到了「${targetName}」`, 'ok')
+      setDeleteDeck(null)
+    } catch (err) {
+      notify(`删除库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setDeckBusy(false)
+    }
   }
 
   const backup = async () => {
@@ -669,6 +796,119 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
           </div>
         </div>
 
+        <div className="panel" hidden={section !== 'decks'}>
+          <div className="panel-title row">
+            <span>笔记库</span>
+            <span style={{ flex: 1 }} />
+            <span className="hint">同一个词在两个库只学一次；库只决定从哪个范围抽卡</span>
+          </div>
+          <div className="col" style={{ gap: 10 }}>
+            {decks.map((deck, index) => {
+              const local = deckDraftOf(deck)
+              const isCurrent = deck.id === deckId
+              return (
+                <div
+                  key={deck.id}
+                  style={{
+                    border: '1px solid var(--line)',
+                    borderRadius: 8,
+                    padding: '10px 12px',
+                    background: 'var(--panel-2)'
+                  }}
+                >
+                  <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <input
+                      className="input"
+                      style={{ width: 180 }}
+                      value={local.name}
+                      onChange={(e) => patchDeckDraft(deck, { name: e.target.value })}
+                    />
+                    <span className="hint">每天新词</span>
+                    <input
+                      className="input"
+                      type="number"
+                      min={0}
+                      max={999}
+                      style={{ width: 90 }}
+                      placeholder={`全局 ${settings.newPerDay}`}
+                      value={local.quota}
+                      onChange={(e) => patchDeckDraft(deck, { quota: e.target.value })}
+                    />
+                    <span className="hint">个（留空 = 用全局 {settings.newPerDay}）</span>
+                    <span style={{ flex: 1 }} />
+                    <Button size="sm" variant="primary" onClick={() => void saveDeckRow(deck)} disabled={deckBusy}>
+                      保存
+                    </Button>
+                  </div>
+                  <div className="row-between" style={{ marginTop: 8 }}>
+                    <span className="tiny muted">
+                      {deck.noteCount} 份笔记 · {deck.itemCount} 个词条 · 待学 {deck.todayNew} · 到期{' '}
+                      {deck.dueCount}
+                      {deck.learnedToday > 0 ? ` · 今天已学 ${deck.learnedToday}` : ''}
+                    </span>
+                    <div className="row">
+                      {isCurrent ? (
+                        <Badge tone="accent">当前库</Badge>
+                      ) : (
+                        <Button size="sm" variant="ghost" onClick={() => void setDeck(deck.id)}>
+                          设为当前库
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="上移"
+                        disabled={index === 0 || deckBusy}
+                        onClick={() => void moveDeckRow(deck, -1)}
+                      >
+                        <ArrowUp size={14} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="下移"
+                        disabled={index === decks.length - 1 || deckBusy}
+                        onClick={() => void moveDeckRow(deck, 1)}
+                      >
+                        <ArrowDown size={14} />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="danger"
+                        disabled={decks.length <= 1 || deckBusy}
+                        onClick={() => {
+                          setDeleteDeck(deck)
+                          setDeleteMoveTo(decks.find((d) => d.id !== deck.id)?.id ?? null)
+                        }}
+                      >
+                        删除
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="row" style={{ marginTop: 12 }}>
+            <input
+              className="input"
+              style={{ width: 220 }}
+              placeholder="新库名称，如「课标词汇」"
+              value={newDeckName}
+              onChange={(e) => setNewDeckName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void createDeckRow()
+              }}
+            />
+            <Button onClick={() => void createDeckRow()} disabled={deckBusy}>
+              新建库
+            </Button>
+          </div>
+          <div className="hint" style={{ marginTop: 8 }}>
+            删除库时，库里的笔记会先移到你选的目标库，不会连笔记一起删。合并 = 全选移到目标库再删空库。
+          </div>
+        </div>
+
         <div className="panel" hidden={section !== 'reminder'}>
           <div className="panel-title">提醒</div>
           <div className="col">
@@ -838,6 +1078,43 @@ export default function SettingsPage({ notify, settings, refreshSettings }: Prop
         </div>
       </div>
       </div>
+
+      <Modal
+        open={!!deleteDeck}
+        title="删除笔记库"
+        onClose={() => setDeleteDeck(null)}
+        width={480}
+        footer={
+          <>
+            <Button onClick={() => setDeleteDeck(null)}>取消</Button>
+            <Button variant="danger" onClick={() => void removeDeckRow()} disabled={deckBusy}>
+              移动笔记并删除
+            </Button>
+          </>
+        }
+      >
+        <div className="col">
+          <div>
+            「{deleteDeck?.name}」里有 {deleteDeck?.noteCount ?? 0} 份笔记。删除前先把它们移到：
+          </div>
+          <select
+            className="select"
+            value={deleteMoveTo ?? ''}
+            onChange={(e) => setDeleteMoveTo(Number(e.target.value))}
+          >
+            {decks
+              .filter((d) => d.id !== deleteDeck?.id)
+              .map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+          </select>
+          <div className="hint">
+            只移动笔记的归属；词条、卡片和复习进度都不变。不能删掉最后一个库。
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

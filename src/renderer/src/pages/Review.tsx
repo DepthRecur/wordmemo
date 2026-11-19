@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Eye, EyeOff, RotateCcw, Volume2, X } from 'lucide-react'
-import type { DailyPlan, Item, JudgeResult, QueueCard, Settings } from '@shared/types'
+import type { DailyPlan, Deck, Item, JudgeResult, QueueCard, Settings } from '@shared/types'
 import { DIRECTION_LABEL } from '@shared/types'
 import { displayPhonetic } from '@shared/normalize'
 import { AudioButton, playWord } from '../components/AudioButton'
+import { DeckTabs } from '../components/DeckPicker'
 import { Badge, Button, Empty, Progress, Spinner } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { cls } from '../lib/utils'
@@ -14,13 +15,28 @@ interface Props {
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
   refreshStats: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
   examId?: number
   onFinished: () => void
 }
 
 type Stage = 'loading' | 'overview' | 'learn' | 'learnDone' | 'review' | 'done'
 
-export default function Review({ notify, settings, navigate, refreshStats, examId, onFinished }: Props) {
+export default function Review({
+  notify,
+  settings,
+  navigate,
+  refreshStats,
+  decks,
+  deckId,
+  setDeck,
+  refreshDecks,
+  examId,
+  onFinished
+}: Props) {
   const mode = examId ? 'exam' : 'longterm'
   const [stage, setStage] = useState<Stage>('loading')
   const [plan, setPlan] = useState<DailyPlan | null>(null)
@@ -59,14 +75,14 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
         setStage(q.length ? 'review' : 'done')
         return
       }
-      const p = await window.api.review.daily()
+      const p = await window.api.review.daily(deckId)
       setPlan(p)
       setStage('overview')
     } catch (err) {
       notify(`加载今日任务失败：${err instanceof Error ? err.message : String(err)}`, 'err')
       setStage('overview')
     }
-  }, [examId, notify])
+  }, [examId, notify, deckId])
 
   useEffect(() => {
     void init()
@@ -175,6 +191,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
 
   const progress = queue.length ? index / queue.length : 0
   const learnProgress = plan?.learnItems.length ? learnIndex / plan.learnItems.length : 0
+  const currentDeck = decks.find((deck) => deck.id === deckId) ?? null
 
   const startLearn = () => {
     if (!plan?.learnItems.length) return
@@ -227,10 +244,11 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
       if (learnIndex + 1 < (plan?.learnItems.length ?? 0)) {
         setLearnIndex(learnIndex + 1)
       } else {
-        const p = await window.api.review.daily()
+        const p = await window.api.review.daily(deckId)
         setPlan(p)
         setStage('learnDone')
         void refreshStats()
+        void refreshDecks()
       }
     } catch (err) {
       notify(`保存学习记录失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -241,7 +259,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
 
   const startReview = async () => {
     try {
-      const p = await window.api.review.daily()
+      const p = await window.api.review.daily(deckId)
       setPlan(p)
       if (!p.reviewCards.length) {
         setStage('done')
@@ -311,6 +329,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
         setStage('done')
         onFinished()
         void refreshStats()
+        void refreshDecks()
       } else {
         setIndex(index + 1)
       }
@@ -353,12 +372,23 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
           </Button>
         </div>
 
+        {!examId && (
+          <DeckTabs
+            decks={decks}
+            value={deckId}
+            onChange={(id) => {
+              if (id !== null && id !== deckId) void setDeck(id)
+            }}
+          />
+        )}
+
         <div className="task-grid">
           <div className="panel task-card learn">
             <div className="task-num">{learnCount}</div>
             <div className="task-label">待学习的新词</div>
             <div className="hint" style={{ marginTop: 8 }}>
-              来自最近导入、还没学过的笔记。每天最多 {settings.newPerDay} 个。
+              来自「{currentDeck?.name ?? '当前库'}」里最近导入、还没学过的笔记。每天最多{' '}
+              {currentDeck?.newPerDay ?? settings.newPerDay} 个。
             </div>
           </div>
           <div className="panel task-card review">
@@ -558,6 +588,7 @@ export default function Review({ notify, settings, navigate, refreshStats, examI
       <div className="row-between" style={{ marginBottom: 14 }}>
         <div className="row">
           <Badge tone={mode === 'exam' ? 'yellow' : 'accent'}>{mode === 'exam' ? '听写冲刺' : '复习旧词'}</Badge>
+          {mode !== 'exam' && currentDeck && <Badge>{currentDeck.name}</Badge>}
           <span className="muted tiny">
             {index + 1} / {queue.length}
           </span>

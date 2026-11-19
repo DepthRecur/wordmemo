@@ -1,12 +1,24 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Eye, FileText, Pencil, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
-import type { CardDirection, Item, ItemKind, NoteDetail, NoteSummary, Settings } from '@shared/types'
+import { Copy, Eye, FileText, Pencil, Plus, RefreshCw, Search, Trash2, Undo2 } from 'lucide-react'
+import type {
+  CardDirection,
+  Deck,
+  Item,
+  ItemKind,
+  NoteDetail,
+  NoteSummary,
+  Settings
+} from '@shared/types'
 import { KIND_LABEL } from '@shared/types'
 import { displayPhonetic } from '@shared/normalize'
 import { AudioButton } from '../components/AudioButton'
+import { DeckTabs } from '../components/DeckPicker'
 import { Badge, Button, Empty, Field, Modal, Spinner, Toggle } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { cls, formatDate } from '../lib/utils'
+
+/** 一次最多选这么多份（照 Anki 的 SELECTION_LIMIT，避免全选 3500 份把界面拖死） */
+const SELECTION_LIMIT = 500
 
 interface Props {
   notify: Notify
@@ -14,22 +26,42 @@ interface Props {
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
   refreshStats: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
   version: number
   onChanged: () => void
   /** 未入库草稿数量：只在顶部提示，不混进笔记列表 */
   draftCount: number
 }
 
+type BatchKind = 'move' | 'copy' | 'delete'
+
 export default function Notes({
   notify,
   settings,
   navigate,
+  refreshStats,
+  decks,
+  deckId,
+  setDeck,
+  refreshDecks,
   version,
   onChanged,
-  refreshStats,
   draftCount
 }: Props) {
   const [notes, setNotes] = useState<NoteSummary[]>([])
+  // null = 全部库；初值跟当前库走
+  const [filter, setFilter] = useState<number | null>(deckId)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [anchorId, setAnchorId] = useState<number | null>(null)
+  const [batch, setBatch] = useState<BatchKind | null>(null)
+  const [batchDeckId, setBatchDeckId] = useState<number | null>(null)
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [newDeckName, setNewDeckName] = useState('')
+  const [createDeckOpen, setCreateDeckOpen] = useState(false)
+  const [canUndo, setCanUndo] = useState(false)
   const [itemResults, setItemResults] = useState<Item[]>([])
   const [expandedTerms, setExpandedTerms] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -63,13 +95,13 @@ export default function Notes({
     try {
       const term = search.trim()
       if (!term) {
-        const list = await window.api.notes.list({ sort, order: 'desc' })
+        const list = await window.api.notes.list({ sort, order: 'desc', deckId: filter })
         if (id !== requestId.current) return
         setNotes(list)
         setItemResults([])
         setExpandedTerms([])
       } else {
-        const result = await window.api.search.query(term, sort)
+        const result = await window.api.search.query(term, sort, filter)
         if (id !== requestId.current) return
         setNotes(result.notes)
         setItemResults(result.items)
@@ -82,12 +114,97 @@ export default function Notes({
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [search, sort, notify])
+  }, [search, sort, filter, notify])
 
   useEffect(() => {
     const timer = setTimeout(() => void load(), 400)
     return () => clearTimeout(timer)
   }, [load, version])
+
+  // 筛选/搜索/排序变化时清空选区（PLAN-DECKS §7.1：全选只作用于当前结果）
+  useEffect(() => {
+    setSelected(new Set())
+    setAnchorId(null)
+  }, [filter, search, sort, version])
+
+  // 别处切换了当前库（今日任务/导入页）→ 笔记库跟着切
+  useEffect(() => {
+    setFilter(deckId)
+  }, [deckId])
+
+  const visibleIds = notes.map((n) => n.id)
+  const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id))
+  const someSelected = !allSelected && visibleIds.some((id) => selected.has(id))
+
+  const clearSelection = () => {
+    setSelected(new Set())
+    setAnchorId(null)
+  }
+
+  const selectAllVisible = () => {
+    const ids = visibleIds.slice(0, SELECTION_LIMIT)
+    if (visibleIds.length > SELECTION_LIMIT) {
+      notify(`一次最多选 ${SELECTION_LIMIT} 份，已选前 ${SELECTION_LIMIT} 份；其余请再操作一次`, 'info')
+    }
+    setSelected(new Set(ids))
+    setAnchorId(ids[ids.length - 1] ?? null)
+  }
+
+  const invertSelection = () => {
+    const next = new Set<number>()
+    for (const id of visibleIds) if (!selected.has(id)) next.add(id)
+    if (next.size > SELECTION_LIMIT) {
+      notify(`反选后有 ${next.size} 项，超过单次上限 ${SELECTION_LIMIT}，只选前 ${SELECTION_LIMIT} 项`, 'info')
+      setSelected(new Set(visibleIds.filter((id) => !selected.has(id)).slice(0, SELECTION_LIMIT)))
+      return
+    }
+    setSelected(next)
+  }
+
+  /** 复选框点击：Shift = 区间选，其余 = 切换单项 */
+  const toggleOne = (id: number, shift: boolean) => {
+    const next = new Set(selected)
+    if (shift && anchorId !== null) {
+      const from = visibleIds.indexOf(anchorId)
+      const to = visibleIds.indexOf(id)
+      if (from >= 0 && to >= 0) {
+        const [start, end] = from < to ? [from, to] : [to, from]
+        for (let i = start; i <= end; i++) next.add(visibleIds[i])
+        if (next.size > SELECTION_LIMIT) {
+          notify(`一次最多选 ${SELECTION_LIMIT} 份`, 'info')
+          return
+        }
+        setSelected(next)
+        setAnchorId(id)
+        return
+      }
+    }
+    if (next.has(id)) next.delete(id)
+    else if (next.size < SELECTION_LIMIT) next.add(id)
+    else {
+      notify(`一次最多选 ${SELECTION_LIMIT} 份`, 'info')
+      return
+    }
+    setSelected(next)
+    setAnchorId(id)
+  }
+
+  // Ctrl+A 全选当前结果，Esc 清空；输入框里不抢键
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      const tag = target?.tagName?.toLowerCase()
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || target?.isContentEditable) return
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        selectAllVisible()
+      } else if (e.key === 'Escape') {
+        clearSelection()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  })
 
   const openDetail = async (id: number) => {
     try {
@@ -248,12 +365,148 @@ export default function Notes({
     }
   }
 
+  const selectedIds = [...selected]
+
+  const openBatch = (kind: BatchKind) => {
+    if (!selectedIds.length) return
+    setNewDeckName('')
+    if (kind === 'move') {
+      setBatchDeckId(decks.find((d) => d.id !== filter)?.id ?? decks[0]?.id ?? null)
+    } else if (kind === 'copy') {
+      setBatchDeckId(filter ?? decks[0]?.id ?? null)
+    }
+    setBatch(kind)
+  }
+
+  const doMove = async (targetId: number, targetName?: string) => {
+    setBatchBusy(true)
+    try {
+      const res = await window.api.notes.moveMany(selectedIds, targetId)
+      const name = targetName ?? decks.find((d) => d.id === targetId)?.name ?? ''
+      notify(`已移动 ${res.moved} 份笔记到「${name}」`, 'ok')
+      setCanUndo(res.moved > 0)
+      setBatch(null)
+      clearSelection()
+      onChanged()
+      await refreshDecks()
+      void refreshStats()
+      void load()
+    } catch (err) {
+      notify(`移动失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const doCopy = async (targetId: number) => {
+    setBatchBusy(true)
+    try {
+      const res = await window.api.notes.copyMany(selectedIds, targetId)
+      const name = decks.find((d) => d.id === targetId)?.name ?? ''
+      notify(`已复制 ${res.copied} 份笔记到「${name}」；这些词的学习进度是共享的`, 'ok')
+      setCanUndo(res.copied > 0)
+      setBatch(null)
+      clearSelection()
+      onChanged()
+      await refreshDecks()
+      void refreshStats()
+      void load()
+    } catch (err) {
+      notify(`复制失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const doDelete = async () => {
+    setBatchBusy(true)
+    try {
+      const res = await window.api.notes.removeMany(selectedIds)
+      notify(`已删除 ${res.removed} 份笔记`, 'ok')
+      setCanUndo(false)
+      setBatch(null)
+      clearSelection()
+      onChanged()
+      await refreshDecks()
+      void refreshStats()
+      void load()
+    } catch (err) {
+      notify(`删除失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  const createDeckAndMove = async () => {
+    const name = newDeckName.trim()
+    if (!name) {
+      notify('先给新库起个名字', 'info')
+      return
+    }
+    setBatchBusy(true)
+    try {
+      const id = await window.api.decks.create({ name })
+      await refreshDecks()
+      await doMove(id, name)
+    } catch (err) {
+      notify(`新建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+      setBatchBusy(false)
+    }
+  }
+
+  const createDeckFromNotes = async () => {
+    const name = newDeckName.trim()
+    if (!name) {
+      notify('先给新库起个名字', 'info')
+      return
+    }
+    try {
+      const id = await window.api.decks.create({ name })
+      setNewDeckName('')
+      setCreateDeckOpen(false)
+      await refreshDecks()
+      setFilter(id)
+      notify(`已创建「${name}」`, 'ok')
+    } catch (err) {
+      notify(`新建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    }
+  }
+
+  const undoBatch = async () => {
+    try {
+      const res = await window.api.notes.undoBatch()
+      if (!res) {
+        notify('没有可撤销的批量操作', 'info')
+        setCanUndo(false)
+        return
+      }
+      notify(
+        res.kind === 'move'
+          ? `已撤销移动：${res.count} 份笔记回到原来的库`
+          : `已撤销复制：删除了 ${res.count} 份副本`,
+        'ok'
+      )
+      setCanUndo(false)
+      onChanged()
+      await refreshDecks()
+      void refreshStats()
+      void load()
+    } catch (err) {
+      notify(`撤销失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    }
+  }
+
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1 className="page-title">笔记库</h1>
-          <div className="page-sub">所有导入过的笔记与词条，按上课日期或导入时间排序。</div>
+          <div className="page-sub">
+            {filter === null
+              ? '全部库的笔记'
+              : `「${decks.find((d) => d.id === filter)?.name ?? '当前库'}」里的笔记`}
+            ，按上课日期或导入时间排序。
+          </div>
         </div>
         <div className="page-actions">
           <div className="row" style={{ background: 'var(--panel)', border: '1px solid var(--line)', borderRadius: 10, padding: '2px 8px' }}>
@@ -273,6 +526,27 @@ export default function Notes({
           </select>
           <Button onClick={() => void load()} title="刷新">
             <RefreshCw size={15} />
+          </Button>
+        </div>
+      </div>
+
+      <div className="deck-bar">
+        <DeckTabs
+          decks={decks}
+          value={filter}
+          onChange={(id) => {
+            setFilter(id)
+            // 选具体库时顺手把「当前库」也切过去：导入目标、托盘计数都跟着它
+            if (id !== null && id !== deckId) void setDeck(id)
+          }}
+          totalNotes={decks.reduce((sum, deck) => sum + deck.noteCount, 0)}
+        />
+        <div className="row">
+          <Button size="sm" variant="ghost" onClick={() => setCreateDeckOpen(true)}>
+            <Plus size={14} /> 新建库
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => navigate('settings', undefined, undefined, 'decks')}>
+            库管理
           </Button>
         </div>
       </div>
@@ -309,6 +583,41 @@ export default function Notes({
             </div>
           </div>
         )}
+
+        {/* 批量栏常驻：0 选中时按钮禁用，不靠右键菜单（PLAN-DECKS §7.1） */}
+        <div className="batch-bar">
+          <span className="batch-count">
+            已选 {selected.size} 项
+            {selected.size > 0 && visibleIds.length > 0 && selected.size < visibleIds.length
+              ? ` / 共 ${visibleIds.length}`
+              : ''}
+          </span>
+          <Button size="sm" variant="ghost" onClick={selectAllVisible} disabled={!visibleIds.length}>
+            全选
+          </Button>
+          <Button size="sm" variant="ghost" onClick={clearSelection} disabled={!selected.size}>
+            全不选
+          </Button>
+          <Button size="sm" variant="ghost" onClick={invertSelection} disabled={!visibleIds.length}>
+            反选
+          </Button>
+          <span className="spacer" />
+          <Button size="sm" onClick={() => openBatch('move')} disabled={!selected.size}>
+            移动到…
+          </Button>
+          <Button size="sm" onClick={() => openBatch('copy')} disabled={!selected.size}>
+            <Copy size={14} /> 复制到…
+          </Button>
+          <Button size="sm" variant="danger" onClick={() => openBatch('delete')} disabled={!selected.size}>
+            <Trash2 size={14} /> 删除
+          </Button>
+          {canUndo && (
+            <Button size="sm" variant="ghost" onClick={() => void undoBatch()} title="只保留最近一次批量移动/复制">
+              <Undo2 size={14} /> 撤销上次
+            </Button>
+          )}
+        </div>
+
         {loading ? (
           <div className="empty">
             <Spinner />
@@ -317,30 +626,78 @@ export default function Notes({
           <Empty
             icon="📚"
             title={search ? '没有匹配的笔记' : '还没有笔记'}
-            desc={search ? '换个关键词试试' : '把老师发的图片、Word、Excel 或 txt 拖进「导入笔记」。'}
+            desc={
+              search
+                ? '换个关键词试试'
+                : filter === null
+                  ? '把老师发的图片、Word、Excel 或 txt 拖进「导入笔记」。'
+                  : '这个库还是空的：去「导入笔记」把目标库切到这里再导入，或从别的库移动几份过来。'
+            }
           />
         ) : (
-          <div className="grid grid-3">
-            {notes.map((n) => (
-              <div key={n.id} className="note-card" onClick={() => void openDetail(n.id)}>
-                <div className="note-title">
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{n.title}</span>
-                  {n.issueCount > 0 && <Badge tone="yellow" title="有未处理的核对项">{n.issueCount} 待核对</Badge>}
-                </div>
-                <div className="note-meta">
-                  <span>{formatDate(n.noteDate ?? n.createdAt)}</span>
-                  <span>{n.itemCount} 个词条</span>
-                  {n.dueCount > 0 && <span style={{ color: 'var(--accent)' }}>{n.dueCount} 张到期</span>}
-                </div>
-                {n.tags.length > 0 && (
-                  <div className="note-tags">
-                    {n.tags.slice(0, 4).map((t) => (
-                      <Badge key={t}>{t}</Badge>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
+          <div className="table-wrap">
+            <table className="table notes-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = someSelected
+                      }}
+                      onChange={() => (allSelected ? clearSelection() : selectAllVisible())}
+                      title="全选当前结果（不是整库）"
+                      style={{ accentColor: '#6c8cff' }}
+                    />
+                  </th>
+                  <th>标题</th>
+                  <th style={{ width: 110 }}>日期</th>
+                  <th style={{ width: 76 }}>词条</th>
+                  <th style={{ width: 76 }}>到期</th>
+                  <th style={{ width: 130 }}>库</th>
+                </tr>
+              </thead>
+              <tbody>
+                {notes.map((n) => (
+                  <tr key={n.id} className={cls(selected.has(n.id) && 'row-selected')}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        checked={selected.has(n.id)}
+                        onChange={(e) =>
+                          toggleOne(n.id, (e.nativeEvent as MouseEvent).shiftKey)
+                        }
+                        style={{ accentColor: '#6c8cff' }}
+                      />
+                    </td>
+                    <td>
+                      <div className="row" style={{ gap: 6 }}>
+                        <button className="word-link" onClick={() => void openDetail(n.id)}>
+                          {n.title}
+                        </button>
+                        {n.issueCount > 0 && (
+                          <Badge tone="yellow" title="有未处理的核对项">
+                            {n.issueCount} 待核对
+                          </Badge>
+                        )}
+                        {n.tags.length > 0 && (
+                          <span className="tiny muted">{n.tags.slice(0, 3).join(' · ')}</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="tiny muted">{formatDate(n.noteDate ?? n.createdAt)}</td>
+                    <td className="tiny muted">{n.itemCount}</td>
+                    <td className="tiny" style={{ color: n.dueCount > 0 ? 'var(--accent)' : 'var(--muted)' }}>
+                      {n.dueCount || '—'}
+                    </td>
+                    <td>
+                      <Badge>{n.deckName}</Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
@@ -791,7 +1148,150 @@ export default function Notes({
         }
       >
         <div>
-          确定删除「{confirmDelete?.title}」吗？笔记与它的复习进度都会删除，此操作不可撤销。
+          确定删除「{confirmDelete?.title}」吗？若某个词只存在于这份笔记里，它的卡片与复习记录会一起删除。此操作不可撤销。
+        </div>
+      </Modal>
+
+      <Modal
+        open={createDeckOpen}
+        title="新建笔记库"
+        onClose={() => setCreateDeckOpen(false)}
+        width={440}
+        footer={
+          <>
+            <Button onClick={() => setCreateDeckOpen(false)}>取消</Button>
+            <Button variant="primary" onClick={() => void createDeckFromNotes()}>
+              创建
+            </Button>
+          </>
+        }
+      >
+        <Field label="库名" hint="例如「上课笔记」「课标词汇」。同一个词在两个库只学一次。">
+          <input
+            className="input"
+            value={newDeckName}
+            autoFocus
+            onChange={(e) => setNewDeckName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void createDeckFromNotes()
+            }}
+          />
+        </Field>
+      </Modal>
+
+      <Modal
+        open={batch === 'move'}
+        title={`移动 ${selected.size} 份笔记`}
+        onClose={() => setBatch(null)}
+        width={500}
+        footer={
+          <>
+            <Button onClick={() => setBatch(null)}>取消</Button>
+            <Button
+              variant="primary"
+              disabled={batchBusy || !batchDeckId || batchDeckId === filter}
+              onClick={() => {
+                if (batchDeckId) void doMove(batchDeckId)
+              }}
+            >
+              移动
+            </Button>
+          </>
+        }
+      >
+        <div className="col">
+          <div>目标库：</div>
+          <select
+            className="select"
+            value={batchDeckId ?? ''}
+            onChange={(e) => setBatchDeckId(Number(e.target.value))}
+          >
+            {decks.map((deck) => (
+              <option key={deck.id} value={deck.id}>
+                {deck.name}
+                {deck.id === filter ? '（当前筛选的库）' : ''}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            只改笔记的归属，词条、卡片和复习进度一个都不动；目标库里还没学的词会立刻进入它的今日任务。
+          </div>
+          <div className="row">
+            <input
+              className="input"
+              placeholder="或新建一个库…"
+              value={newDeckName}
+              onChange={(e) => setNewDeckName(e.target.value)}
+            />
+            <Button
+              size="sm"
+              disabled={batchBusy || !newDeckName.trim()}
+              onClick={() => void createDeckAndMove()}
+            >
+              新建并移动
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={batch === 'copy'}
+        title={`复制 ${selected.size} 份笔记`}
+        onClose={() => setBatch(null)}
+        width={500}
+        footer={
+          <>
+            <Button onClick={() => setBatch(null)}>取消</Button>
+            <Button
+              variant="primary"
+              disabled={batchBusy || !batchDeckId}
+              onClick={() => {
+                if (batchDeckId) void doCopy(batchDeckId)
+              }}
+            >
+              复制
+            </Button>
+          </>
+        }
+      >
+        <div className="col">
+          <div>目标库：</div>
+          <select
+            className="select"
+            value={batchDeckId ?? ''}
+            onChange={(e) => setBatchDeckId(Number(e.target.value))}
+          >
+            {decks.map((deck) => (
+              <option key={deck.id} value={deck.id}>
+                {deck.name}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            复制的是笔记内容（标题、日期、标签、原文与词条关联）；这些词的学习进度是共享的，不会重新开始。复制进同一个库会得到一份同名副本。
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={batch === 'delete'}
+        title={`删除 ${selected.size} 份笔记`}
+        onClose={() => setBatch(null)}
+        width={480}
+        footer={
+          <>
+            <Button onClick={() => setBatch(null)}>取消</Button>
+            <Button variant="danger" disabled={batchBusy} onClick={() => void doDelete()}>
+              确认删除
+            </Button>
+          </>
+        }
+      >
+        <div className="col">
+          <div>确定删除选中的 {selected.size} 份笔记吗？此操作不可撤销。</div>
+          <div className="hint">
+            若某个词只存在于这些笔记里，它的卡片与复习记录会一起删除；同时在别的笔记里出现的词会保留。
+          </div>
         </div>
       </Modal>
     </div>

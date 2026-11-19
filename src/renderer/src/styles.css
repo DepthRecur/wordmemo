@@ -1493,3 +1493,82 @@ select {
   font-size: 12px;
   line-height: 1.5;
 }
+/* ---------- 笔记库：库标签栏 + 批量操作（PLAN-DECKS §7.1） ---------- */
+.deck-bar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.deck-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+.deck-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 96px;
+  text-align: left;
+  padding: 7px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.deck-tab:hover {
+  border-color: #3a4a63;
+  color: var(--text);
+}
+.deck-tab.active {
+  border-color: rgba(108, 140, 255, 0.6);
+  background: rgba(108, 140, 255, 0.12);
+  color: var(--text);
+}
+.deck-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+.deck-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+.deck-tab.active .deck-meta {
+  color: #a9b8d8;
+}
+.batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.batch-count {
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 74px;
+}
+.notes-table td {
+  vertical-align: middle;
+}
+.notes-table tbody tr:hover {
+  background: rgba(108, 140, 255, 0.06);
+}
+.notes-table tbody tr.row-selected {
+  background: rgba(108, 140, 255, 0.12);
+}
+.notes-table input[type='checkbox'] {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}

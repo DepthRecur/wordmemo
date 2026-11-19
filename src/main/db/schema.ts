@@ -1,4 +1,20 @@
+/** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
+export const SCHEMA_VERSION = 2
+
 export const SCHEMA = `
+-- 笔记库（PLAN-DECKS）：库 = 笔记容器 + 学习范围，卡片与进度仍然全局一份
+CREATE TABLE IF NOT EXISTS decks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
+  name TEXT NOT NULL,
+  color TEXT,
+  position INTEGER NOT NULL DEFAULT 0,
+  -- NULL = 用全局 settings.newPerDay
+  new_per_day INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_decks_name ON decks(name COLLATE NOCASE);
+
 CREATE TABLE IF NOT EXISTS sources (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -12,6 +28,9 @@ CREATE TABLE IF NOT EXISTS sources (
 CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
+  -- 不写 REFERENCES：老库只能用 ALTER ADD COLUMN 带 DEFAULT 补列，
+  -- 而 SQLite 不允许「REFERENCES + 非 NULL DEFAULT」，为了新老库结构一致就不加外键
+  deck_id INTEGER NOT NULL DEFAULT 1,
   title TEXT NOT NULL,
   note_date TEXT,
   tags TEXT NOT NULL DEFAULT '[]',
@@ -22,6 +41,7 @@ CREATE TABLE IF NOT EXISTS notes (
 );
 CREATE INDEX IF NOT EXISTS ix_notes_date ON notes(note_date);
 CREATE INDEX IF NOT EXISTS ix_notes_created ON notes(created_at);
+-- ix_notes_deck 由 migrateDecks 建：老库还没有 deck_id 列时不能在这里建（会直接报错）
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +187,8 @@ CREATE TABLE IF NOT EXISTS import_drafts (
   sha256 TEXT,
   file_name TEXT NOT NULL,
   source_kind TEXT NOT NULL,
+  -- 这份草稿入库时进的库；NULL = 老草稿，入库时进当前库
+  deck_id INTEGER,
   original_path TEXT,
   stored_path TEXT,
   payload TEXT NOT NULL,

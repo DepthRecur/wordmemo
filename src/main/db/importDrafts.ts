@@ -11,6 +11,7 @@ import type {
 } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { createNote, createSource } from './notes'
+import { currentDeckId, defaultDeckId, deckExists } from './decks'
 import { findExistingItemId, upsertItem } from './items'
 import { getSettings } from '../settings'
 import { deleteStoredFileIfUnused, storedFileBytes, storedFileExists } from '../storage'
@@ -22,6 +23,7 @@ interface DraftRow {
   sha256: string | null
   file_name: string
   source_kind: string
+  deck_id: number | null
   original_path: string | null
   stored_path: string | null
   payload: string
@@ -46,7 +48,7 @@ interface DraftPayload {
 }
 
 const DRAFT_COLUMNS =
-  'id, sha256, file_name, source_kind, original_path, stored_path, payload, status, edited, note_id, created_at, updated_at'
+  'id, sha256, file_name, source_kind, deck_id, original_path, stored_path, payload, status, edited, note_id, created_at, updated_at'
 
 interface DraftSummary {
   items: number
@@ -106,22 +108,27 @@ export interface CreateDraftInput {
   fileName: string
   sourceKind: ImportPreview['sourceKind']
   originalPath: string | null
+  /** 入库时进哪个库；不传 = 当前库 */
+  deckId?: number | null
   preview: ImportPreview
 }
 
 export function createDraft(input: CreateDraftInput): number {
   const now = localIso()
   const payload = emptyPayload(input.preview)
+  const deckId =
+    input.deckId === null || input.deckId === undefined ? currentDeckId() : toInt(input.deckId)
   const res = getDb()
     .prepare(
       `INSERT INTO import_drafts
-         (sha256, file_name, source_kind, original_path, stored_path, payload, summary, status, edited, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?)`
+         (sha256, file_name, source_kind, deck_id, original_path, stored_path, payload, summary, status, edited, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', 0, ?, ?)`
     )
     .run(
       input.sha256,
       input.fileName,
       input.sourceKind,
+      deckId,
       input.originalPath,
       input.storedPath,
       JSON.stringify(payload),
@@ -149,7 +156,7 @@ export function findDraftBySha(sha256: string | null): { id: number; fileName: s
 export function listDraftMetas(): ImportDraftMeta[] {
   const rows = getDb()
     .prepare(
-      `SELECT id, file_name, source_kind, stored_path, summary, edited, created_at, updated_at,
+      `SELECT id, file_name, source_kind, deck_id, stored_path, summary, edited, created_at, updated_at,
               length(CAST(payload AS BLOB)) AS payload_bytes
        FROM import_drafts
        WHERE status = 'draft'
@@ -159,6 +166,7 @@ export function listDraftMetas(): ImportDraftMeta[] {
     id: number
     file_name: string
     source_kind: string
+    deck_id: number | null
     stored_path: string | null
     summary: string
     edited: number
@@ -177,6 +185,7 @@ export function listDraftMetas(): ImportDraftMeta[] {
       id: toInt(row.id),
       fileName: row.file_name,
       sourceKind: (row.source_kind as ImportDraftMeta['sourceKind']) ?? 'txt',
+      deckId: row.deck_id === null || row.deck_id === undefined ? null : toInt(row.deck_id),
       itemCount: toInt(summary.items),
       selectedCount: toInt(summary.selected),
       issueCount: toInt(summary.issues),
@@ -203,6 +212,7 @@ export function getDraft(id: number): ImportDraft | null {
     id: toInt(row.id),
     fileName: row.file_name,
     sourceKind: (row.source_kind as ImportDraft['sourceKind']) ?? 'txt',
+    deckId: row.deck_id === null || row.deck_id === undefined ? null : toInt(row.deck_id),
     originalPath: row.original_path,
     storedPath: row.stored_path,
     rawText: payload.rawText ?? '',
@@ -261,7 +271,12 @@ export function commitDraft(
       noteDate: payload.noteDate ?? null,
       tags: payload.tags ?? [],
       rawMarkdown: payload.rawText ?? '',
-      sourceId
+      sourceId,
+      // 草稿落盘时记下的库优先；老草稿（NULL）或库已被删 → 当前库
+      deckId:
+        row.deck_id !== null && row.deck_id !== undefined && deckExists(toInt(row.deck_id))
+          ? toInt(row.deck_id)
+          : currentDeckId() || defaultDeckId()
     })
 
     selected.forEach((item, index) => {

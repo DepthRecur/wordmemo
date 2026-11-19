@@ -33,13 +33,14 @@ async function expandChineseQuery(query: string): Promise<string[]> {
  */
 export async function semanticSearch(
   query: string,
-  sort: NoteQuery['sort'] = 'noteDate'
+  sort: NoteQuery['sort'] = 'noteDate',
+  deckId?: number | null
 ): Promise<SearchResult> {
   const term = query.trim()
   if (!term) return { notes: [], items: [], expandedTerms: [], aiUsed: false }
 
-  const notes = listNotes({ search: term, sort, order: 'desc' })
-  const items = listItems(term)
+  const notes = listNotes({ search: term, sort, order: 'desc', deckId })
+  const items = listItems(term, deckId)
   const chineseChars = term.replace(/[^\u4e00-\u9fff]/g, '')
 
   if (!CJK.test(term) || items.length > 0 || chineseChars.length < 2 || !aiAvailable()) {
@@ -53,8 +54,8 @@ export async function semanticSearch(
     const itemMap = new Map(items.map((item) => [item.id, item]))
     const noteMap = new Map(notes.map((note) => [note.id, note]))
     for (const expanded of expandedTerms) {
-      for (const item of listItems(expanded)) itemMap.set(item.id, item)
-      for (const note of listNotes({ search: expanded, sort, order: 'desc' })) {
+      for (const item of listItems(expanded, deckId)) itemMap.set(item.id, item)
+      for (const note of listNotes({ search: expanded, sort, order: 'desc', deckId })) {
         noteMap.set(note.id, note)
       }
     }

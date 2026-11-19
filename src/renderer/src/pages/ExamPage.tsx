@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarClock, Plus, RefreshCw, Trash2, Play } from 'lucide-react'
-import type { Exam, ExamLevel, ExamPlan, NoteSummary, Settings } from '@shared/types'
+import type { Deck, Exam, ExamLevel, ExamPlan, NoteSummary, Settings } from '@shared/types'
+import { DeckSelect } from '../components/DeckPicker'
 import { Badge, Button, Empty, Field, Modal, Progress, Spinner } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { formatDate, pct, todayKey, weekdayCN } from '../lib/utils'
@@ -11,9 +12,13 @@ interface Props {
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
   refreshStats: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
 }
 
-export default function ExamPage({ notify, navigate, refreshStats }: Props) {
+export default function ExamPage({ notify, navigate, refreshStats, decks, deckId }: Props) {
   const [exams, setExams] = useState<Exam[]>([])
   const [selected, setSelected] = useState<number | null>(null)
   const [plan, setPlan] = useState<ExamPlan | null>(null)
@@ -27,6 +32,8 @@ export default function ExamPage({ notify, navigate, refreshStats }: Props) {
     level: 'dictate' as ExamLevel,
     minutes: 20,
     retention: 0.95,
+    /** null = 全部库 */
+    deckId: null as number | null,
     scope: [] as number[],
     allNotes: true
   })
@@ -71,10 +78,14 @@ export default function ExamPage({ notify, navigate, refreshStats }: Props) {
 
   const create = async () => {
     try {
+      const deckScope = form.deckId ? { deckId: form.deckId } : {}
       const id = await window.api.exams.create({
         title: form.title.trim() || '英语听写',
         examDate: form.examDate,
-        scope: form.allNotes || form.scope.length === 0 ? {} : { noteIds: form.scope },
+        scope:
+          form.allNotes || form.scope.length === 0
+            ? deckScope
+            : { ...deckScope, noteIds: form.scope },
         level: form.level,
         targetRetention: form.retention,
         dailyMinutes: form.minutes
@@ -181,6 +192,9 @@ export default function ExamPage({ notify, navigate, refreshStats }: Props) {
                     <div className="muted tiny" style={{ marginTop: 6 }}>
                       听写日 {formatDate(plan.exam.examDate)} · 目标记忆率 {pct(plan.exam.targetRetention)} · 每天{' '}
                       {plan.exam.dailyMinutes} 分钟
+                      {plan.exam.scope.deckId
+                        ? ` · 范围：${decks.find((d) => d.id === plan.exam.scope.deckId)?.name ?? '已删除的库'}`
+                        : ' · 范围：全部库'}
                     </div>
                   </div>
                   <Button variant="danger" size="sm" onClick={() => void remove()}>
@@ -328,13 +342,23 @@ export default function ExamPage({ notify, navigate, refreshStats }: Props) {
               <option value="custom">指定笔记</option>
             </select>
           </Field>
+          <Field label="范围库" hint="与「范围」是与关系；选「全部库」= 不分库">
+            <DeckSelect
+              decks={decks}
+              value={form.deckId}
+              includeAll
+              onChange={(id) => setForm({ ...form, deckId: id, scope: [] })}
+            />
+          </Field>
         </div>
 
         {!form.allNotes && (
           <div style={{ marginTop: 12 }}>
             <div className="field-label" style={{ marginBottom: 6 }}>选择笔记</div>
             <div className="col" style={{ gap: 4, maxHeight: 220, overflow: 'auto' }}>
-              {notes.map((n) => (
+              {notes
+                .filter((n) => !form.deckId || n.deckId === form.deckId)
+                .map((n) => (
                 <label key={n.id} className="row" style={{ gap: 8, cursor: 'pointer' }}>
                   <input
                     type="checkbox"

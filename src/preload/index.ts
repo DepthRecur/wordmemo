@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
+  DeckInput,
+  DeckPatch,
   ExamInput,
   ImportDraftPatch,
   Item,
@@ -29,10 +31,20 @@ const api: WordmemoApi = {
     get: (id: number) => ipcRenderer.invoke('notes:get', id),
     create: (input: NoteInput) => ipcRenderer.invoke('notes:create', input),
     update: (id: number, patch: Partial<NoteInput>) => ipcRenderer.invoke('notes:update', id, patch),
-    remove: (id: number) => ipcRenderer.invoke('notes:remove', id)
+    remove: (id: number) => ipcRenderer.invoke('notes:remove', id),
+    moveMany: (ids: number[], deckId: number) => ipcRenderer.invoke('notes:moveMany', ids, deckId),
+    copyMany: (ids: number[], deckId: number) => ipcRenderer.invoke('notes:copyMany', ids, deckId),
+    removeMany: (ids: number[]) => ipcRenderer.invoke('notes:removeMany', ids),
+    undoBatch: () => ipcRenderer.invoke('notes:undoBatch')
+  },
+  decks: {
+    list: () => ipcRenderer.invoke('decks:list'),
+    create: (input: DeckInput) => ipcRenderer.invoke('decks:create', input),
+    update: (id: number, patch: DeckPatch) => ipcRenderer.invoke('decks:update', id, patch),
+    remove: (id: number, moveTo: number) => ipcRenderer.invoke('decks:remove', id, moveTo)
   },
   items: {
-    list: (query?: { search?: string }) => ipcRenderer.invoke('items:list', query),
+    list: (query?: { search?: string; deckId?: number | null }) => ipcRenderer.invoke('items:list', query),
     update: (
       id: number,
       patch: Partial<
@@ -51,7 +63,7 @@ const api: WordmemoApi = {
   },
   importer: {
     pickFiles: () => ipcRenderer.invoke('importer:pickFiles'),
-    parse: (paths: string[]) => ipcRenderer.invoke('importer:parse', paths),
+    parse: (paths: string[], deckId?: number) => ipcRenderer.invoke('importer:parse', paths, deckId),
     listDrafts: () => ipcRenderer.invoke('importer:listDrafts'),
     getDraft: (id: number) => ipcRenderer.invoke('importer:getDraft', id),
     saveDraft: (id: number, patch: ImportDraftPatch) => ipcRenderer.invoke('importer:saveDraft', id, patch),
@@ -66,9 +78,10 @@ const api: WordmemoApi = {
     pathForFile: (file: File) => webUtils.getPathForFile(file)
   },
   review: {
-    daily: () => ipcRenderer.invoke('review:daily'),
+    daily: (deckId?: number | null) => ipcRenderer.invoke('review:daily', deckId),
     learn: (itemId: number, known: boolean) => ipcRenderer.invoke('review:learn', itemId, known),
-    queue: (mode?: ReviewMode, examId?: number) => ipcRenderer.invoke('review:queue', mode, examId),
+    queue: (mode?: ReviewMode, examId?: number, deckId?: number | null) =>
+      ipcRenderer.invoke('review:queue', mode, examId, deckId),
     judge: (cardId: number, answer: string) => ipcRenderer.invoke('review:judge', cardId, answer),
     submit: (input: SubmitReview) => ipcRenderer.invoke('review:submit', input)
   },
@@ -80,10 +93,11 @@ const api: WordmemoApi = {
     plan: (id: number) => ipcRenderer.invoke('exams:plan', id)
   },
   stats: {
-    dashboard: () => ipcRenderer.invoke('stats:dashboard')
+    dashboard: (deckId?: number | null) => ipcRenderer.invoke('stats:dashboard', deckId)
   },
   search: {
-    query: (query: string, sort?: NoteQuery['sort']) => ipcRenderer.invoke('search:query', query, sort)
+    query: (query: string, sort?: NoteQuery['sort'], deckId?: number | null) =>
+      ipcRenderer.invoke('search:query', query, sort, deckId)
   },
   tts: {
     get: (word: string, accent?: 'us' | 'uk') => ipcRenderer.invoke('tts:get', word, accent),

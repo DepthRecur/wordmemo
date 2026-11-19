@@ -9,7 +9,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import type { BuildInfo, DashboardStats, DraftIssueSummary, Settings } from '@shared/types'
+import type { BuildInfo, DashboardStats, Deck, DraftIssueSummary, Settings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import Review from './pages/Review'
 import Notes from './pages/Notes'
@@ -26,10 +26,29 @@ export interface NavTarget {
   examId?: number
   /** 从笔记库/托盘跳过来时，导入页要定位到的草稿 */
   draftId?: number
+  /** 设置页要打开的分区（例如从笔记库点「库管理」直接进「笔记库」） */
+  section?: string
 }
 
 export type Notify = (message: string, type?: 'info' | 'ok' | 'err') => void
-export type Navigate = (route: RouteName, examId?: number, draftId?: number) => void
+export type Navigate = (route: RouteName, examId?: number, draftId?: number, section?: string) => void
+
+/** 页面公共 props：库相关的四个字段由 App 统一提供，各页不必自己记「当前库」 */
+export interface DeckProps {
+  decks: Deck[]
+  /** null = 全部库（只有笔记库/统计页会出现） */
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
+}
+
+export interface CommonProps extends DeckProps {
+  notify: Notify
+  settings: Settings
+  refreshSettings: () => Promise<Settings>
+  navigate: Navigate
+  refreshStats: () => Promise<void>
+}
 
 type NoticeType = 'ok' | 'info' | 'err'
 
@@ -89,6 +108,7 @@ export default function App() {
   })()
   const [nav, setNav] = useState<NavTarget>({ route: initialRoute })
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
+  const [decks, setDecks] = useState<Deck[]>([])
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [draftCount, setDraftCount] = useState(0)
   const [draftIssues, setDraftIssues] = useState<DraftIssueSummary>({
@@ -184,8 +204,8 @@ export default function App() {
     })
   }, [])
 
-  const navigate = useCallback((route: RouteName, examId?: number, draftId?: number) => {
-    setNav({ route, examId, draftId })
+  const navigate = useCallback((route: RouteName, examId?: number, draftId?: number, section?: string) => {
+    setNav({ route, examId, draftId, section })
   }, [])
 
   const refreshDraftCount = useCallback(async () => {
@@ -213,9 +233,34 @@ export default function App() {
     return s
   }, [])
 
+  const refreshDecks = useCallback(async () => {
+    const list = await window.api.decks.list()
+    setDecks(list)
+    return list
+  }, [])
+
+  // 当前库以 settings.currentDeckId 为准（托盘也要读同一个值）；库被删了就退回第一个
+  const deckId = useMemo(() => {
+    const wanted = decks.find((deck) => deck.id === settings.currentDeckId)
+    return wanted?.id ?? decks[0]?.id ?? null
+  }, [decks, settings.currentDeckId])
+  const deckIdRef = useRef<number | null>(deckId)
+  deckIdRef.current = deckId
+
   const refreshStats = useCallback(async () => {
     try {
-      setStats(await window.api.stats.dashboard())
+      setStats(await window.api.stats.dashboard(deckIdRef.current))
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  /** 切库：写进 settings（主进程托盘立刻跟着变），再刷新当前库的统计 */
+  const setDeck = useCallback(async (id: number) => {
+    const next = await window.api.settings.update({ currentDeckId: id })
+    setSettings(next)
+    try {
+      setStats(await window.api.stats.dashboard(id))
     } catch {
       /* ignore */
     }
@@ -224,15 +269,25 @@ export default function App() {
   useEffect(() => {
     ;(async () => {
       try {
-        const s = await window.api.settings.get()
+        const [s, list] = await Promise.all([window.api.settings.get(), window.api.decks.list()])
         setSettings(s)
-        await refreshStats()
+        setDecks(list)
+        // 当前库不存在（首次升级、或上一个库被删）→ 落到第一个库并记下来
+        let active = list.some((deck) => deck.id === s.currentDeckId) ? s.currentDeckId : (list[0]?.id ?? null)
+        if (active && active !== s.currentDeckId) {
+          const next = await window.api.settings.update({ currentDeckId: active })
+          setSettings(next)
+          active = next.currentDeckId
+        }
+        if (active) setStats(await window.api.stats.dashboard(active))
         await refreshDraftCount()
+      } catch {
+        /* 启动阶段读不到就先用默认值，页面自己会再报错 */
       } finally {
         setReady(true)
       }
     })()
-  }, [refreshStats, refreshDraftCount])
+  }, [refreshDraftCount])
 
   useEffect(() => {
     const unsubscribe = window.api.events.onNavigate((route) => {
@@ -314,7 +369,11 @@ export default function App() {
     settings,
     refreshSettings,
     navigate,
-    refreshStats
+    refreshStats,
+    decks,
+    deckId,
+    setDeck,
+    refreshDecks
   }
 
   return (
@@ -422,9 +481,9 @@ export default function App() {
         ) : nav.route === 'exam' ? (
           <ExamPage {...common} />
         ) : nav.route === 'stats' ? (
-          <StatsPage stats={stats} onRefresh={refreshStats} />
+          <StatsPage stats={stats} onRefresh={refreshStats} decks={decks} deckId={deckId} />
         ) : (
-          <SettingsPage {...common} />
+          <SettingsPage {...common} initialSection={nav.section} />
         )}
       </main>
 

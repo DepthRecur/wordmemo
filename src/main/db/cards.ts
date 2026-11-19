@@ -1,6 +1,7 @@
 import type { Card, CardDirection, DailyPlan, QueueCard, ReviewMode, SubmitReview } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { getItem, addAcceptedZh, learnQueue, learnedTodayCount } from './items'
+import { deckInClause, deckNewPerDay, deckScope } from './decks'
 import { getSettings } from '../settings'
 import { retrievabilityNow, reviewSnapshot } from '../fsrs'
 
@@ -50,26 +51,27 @@ export function toQueueCard(card: Card, isNew = false, examId?: number): QueueCa
   return { ...card, item, isNew, examId }
 }
 
-export function dueQueue(limit = 200): QueueCard[] {
+export function dueQueue(limit = 200, deckId?: number | null): QueueCard[] {
   const d = getDb()
   const settings = getSettings()
   const now = localIso()
   const today = now.slice(0, 10)
   const learnAhead = Math.max(0, Number(settings.learnAheadMinutes ?? 20))
   const learnCutoff = localIso(new Date(Date.now() + learnAhead * 60_000))
+  const scope = deckScope('c.item_id', deckId)
   const rows = d
     .prepare(
-      `SELECT * FROM cards
+      `SELECT * FROM cards c
        WHERE suspended = 0
          AND IFNULL(buried_until, '') < ?
          AND (
            needs_check = 1
            OR (state = 2 AND due_at <= ?)
            OR (state IN (1, 3) AND due_at <= ?)
-         )
+         )${scope.clause}
        LIMIT ?`
     )
-    .all(today, now, learnCutoff, limit) as unknown as CardRow[]
+    .all(today, now, learnCutoff, ...scope.params, limit) as unknown as CardRow[]
 
   // 参考 Anki/Word_Memorizer：先出未检测的新卡，再按“预测遗忘概率”从高到低排
   rows.sort((a, b) => {
@@ -112,13 +114,13 @@ export function oneCardPerItem<T extends { itemId: number }>(
   return out
 }
 
-/** 今日任务：先学新词，再复习到期/学习中的卡（每个词只抽一个方向） */
-export function dailyPlan(): DailyPlan {
-  const settings = getSettings()
-  const learnedToday = learnedTodayCount()
-  const quota = Math.max(0, settings.newPerDay - learnedToday)
-  const learnItems = learnQueue(quota)
-  const reviewCards = oneCardPerItem(dueQueue())
+/** 今日任务：先学新词，再复习到期/学习中的卡（每个词只抽一个方向）；deckId = 只看这个库 */
+export function dailyPlan(deckId?: number | null): DailyPlan {
+  const learnedToday = learnedTodayCount(deckId)
+  // 每库一份新词额度：decks.new_per_day 覆盖全局 settings.newPerDay（PLAN-DECKS §2.4）
+  const quota = Math.max(0, deckNewPerDay(deckId) - learnedToday)
+  const learnItems = learnQueue(quota, deckId)
+  const reviewCards = oneCardPerItem(dueQueue(200, deckId))
   return {
     learnItems,
     reviewCards,
@@ -148,6 +150,7 @@ export function markItemLearned(itemId: number, known: boolean): void {
 }
 
 export function cardsInScope(scope: {
+  deckId?: number
   noteIds?: number[]
   tags?: string[]
   itemIds?: number[]
@@ -156,6 +159,12 @@ export function cardsInScope(scope: {
   const clauses: string[] = ['c.suspended = 0', "IFNULL(c.buried_until, '') < ?"]
   const params: any[] = [localIso().slice(0, 10)]
 
+  // 库范围与其余条件是与关系（PLAN-DECKS §8）
+  const deck = deckInClause('c.item_id', scope.deckId)
+  if (deck.clause) {
+    clauses.push(deck.clause)
+    params.push(...deck.params)
+  }
   if (scope.itemIds?.length) {
     clauses.push(`c.item_id IN (${scope.itemIds.map(() => '?').join(',')})`)
     params.push(...scope.itemIds)
@@ -235,23 +244,25 @@ export function applyReview(input: SubmitReview): ReviewOutcome {
   return { dueAt: updated.dueAt, state: updated.state }
 }
 
-export function countDue(): number {
+/** 到期卡片数（按词条去重）；deckId = 只数这个库，不传 = 全部库 */
+export function countDue(deckId?: number | null): number {
   const settings = getSettings()
   const now = localIso()
   const today = now.slice(0, 10)
   const learnAhead = Math.max(0, Number(settings.learnAheadMinutes ?? 20))
   const learnCutoff = localIso(new Date(Date.now() + learnAhead * 60_000))
+  const scope = deckScope('c.item_id', deckId)
   const row = getDb()
     .prepare(
-      `SELECT COUNT(DISTINCT item_id) AS c FROM cards
-       WHERE suspended = 0
-         AND IFNULL(buried_until, '') < ?
+      `SELECT COUNT(DISTINCT c.item_id) AS c FROM cards c
+       WHERE c.suspended = 0
+         AND IFNULL(c.buried_until, '') < ?
          AND (
-           needs_check = 1
-           OR (state = 2 AND due_at <= ?)
-           OR (state IN (1, 3) AND due_at <= ?)
-         )`
+           c.needs_check = 1
+           OR (c.state = 2 AND c.due_at <= ?)
+           OR (c.state IN (1, 3) AND c.due_at <= ?)
+         )${scope.clause}`
     )
-    .get(today, now, learnCutoff) as { c?: number } | undefined
+    .get(today, now, learnCutoff, ...scope.params) as { c?: number } | undefined
   return toInt(row?.c)
 }

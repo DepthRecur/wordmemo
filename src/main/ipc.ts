@@ -2,6 +2,8 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electro
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
+  DeckInput,
+  DeckPatch,
   ExamInput,
   ImportDraftPatch,
   ImportResult,
@@ -12,9 +14,20 @@ import type {
   SettingsPatch,
   SubmitReview
 } from '@shared/types'
-import { createNote, deleteNote, getNote, listNotes, updateNote } from './db/notes'
+import {
+  createNote,
+  deleteNote,
+  deleteNotes,
+  getNote,
+  listNotes,
+  moveNotes,
+  copyNotes,
+  undoLastBatch,
+  updateNote
+} from './db/notes'
 import { deleteItem, getItem, listItems, setDirection, updateItem } from './db/items'
 import { applyReview, dailyPlan, markItemLearned } from './db/cards'
+import { createDeck, listDecks, removeDeck, updateDeck } from './db/decks'
 import { createExam, deleteExam, listExams, updateExam } from './db/exams'
 import { buildExamPlan } from './planner'
 import { dashboardStats } from './db/stats'
@@ -47,6 +60,7 @@ import {
   saveDraft
 } from './db/importDrafts'
 import { storedFileAbs } from './storage'
+import { requestTrayRefresh } from './tray-bridge'
 
 function dataDir(): string {
   const dir = app.getPath('userData')
@@ -62,6 +76,12 @@ function asProviderId(value: unknown): ProviderId {
   return typeof value === 'string' && isProviderId(value) ? value : 'deepseek'
 }
 
+/** 库 id 同理：不合法统一当成「全部库」（只有笔记库/统计页会出现） */
+function asDeckId(value: unknown): number | null {
+  const n = Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+}
+
 export function registerIpc(): void {
   ipcMain.handle('settings:get', () => getSettings())
   ipcMain.handle('settings:update', (_e, patch: SettingsPatch) => {
@@ -69,6 +89,8 @@ export function registerIpc(): void {
     if (typeof patch.autoLaunch === 'boolean') {
       app.setLoginItemSettings({ openAtLogin: patch.autoLaunch })
     }
+    // currentDeckId 变了要立刻刷新托盘计数，别等下一次定时刷新
+    requestTrayRefresh()
     return next
   })
   ipcMain.handle('settings:setApiKey', (_e, provider: string, key: string) => {
@@ -107,10 +129,57 @@ export function registerIpc(): void {
   ipcMain.handle('notes:list', (_e, query?: NoteQuery) => listNotes(query ?? {}))
   ipcMain.handle('notes:get', (_e, id: number) => getNote(id))
   ipcMain.handle('notes:create', (_e, input: NoteInput) => createNote(input))
-  ipcMain.handle('notes:update', (_e, id: number, patch: Partial<NoteInput>) => updateNote(id, patch))
-  ipcMain.handle('notes:remove', (_e, id: number) => deleteNote(id))
+  ipcMain.handle('notes:update', (_e, id: number, patch: Partial<NoteInput>) => {
+    updateNote(id, patch)
+    requestTrayRefresh()
+  })
+  ipcMain.handle('notes:remove', (_e, id: number) => {
+    deleteNote(id)
+    requestTrayRefresh()
+  })
+  // 批量动作只吃 id 列表（PLAN-DECKS §7.1 的硬约束 1）
+  ipcMain.handle('notes:moveMany', (_e, ids: number[], deckId: number) => {
+    const result = moveNotes(ids, Number(deckId))
+    requestTrayRefresh()
+    return result
+  })
+  ipcMain.handle('notes:copyMany', (_e, ids: number[], deckId: number) => {
+    const result = copyNotes(ids, Number(deckId))
+    requestTrayRefresh()
+    return result
+  })
+  ipcMain.handle('notes:removeMany', (_e, ids: number[]) => {
+    const result = deleteNotes(ids)
+    requestTrayRefresh()
+    return result
+  })
+  ipcMain.handle('notes:undoBatch', () => {
+    const result = undoLastBatch()
+    requestTrayRefresh()
+    return result
+  })
 
-  ipcMain.handle('items:list', (_e, query?: { search?: string }) => listItems(query?.search))
+  ipcMain.handle('decks:list', () => listDecks())
+  ipcMain.handle('decks:create', (_e, input: DeckInput) =>
+    createDeck({
+      name: String(input?.name ?? ''),
+      color: input?.color ?? null,
+      newPerDay: input?.newPerDay === undefined ? null : input.newPerDay
+    })
+  )
+  ipcMain.handle('decks:update', (_e, id: number, patch: DeckPatch) => {
+    updateDeck(Number(id), patch ?? {})
+    requestTrayRefresh()
+  })
+  ipcMain.handle('decks:remove', (_e, id: number, moveTo: number) => {
+    const result = removeDeck(Number(id), Number(moveTo))
+    requestTrayRefresh()
+    return result
+  })
+
+  ipcMain.handle('items:list', (_e, query?: { search?: string; deckId?: number }) =>
+    listItems(query?.search, asDeckId(query?.deckId))
+  )
   ipcMain.handle(
     'items:update',
     (
@@ -154,11 +223,12 @@ export function registerIpc(): void {
     return result.canceled ? [] : result.filePaths
   })
 
-  ipcMain.handle('importer:parse', async (_e, paths: string[]) => {
+  ipcMain.handle('importer:parse', async (_e, paths: string[], deckId?: number) => {
     const out: ImportResult[] = []
+    const target = asDeckId(deckId)
     for (const p of paths) {
       try {
-        out.push(await ingestFile(p))
+        out.push(await ingestFile(p, target))
       } catch (err) {
         out.push({
           ok: false,
@@ -181,7 +251,9 @@ export function registerIpc(): void {
     } catch {
       /* 音标补全失败不阻塞入库 */
     }
-    return commitDraft(draftId, phonetics)
+    const result = commitDraft(draftId, phonetics)
+    requestTrayRefresh()
+    return result
   })
   ipcMain.handle('importer:commitAll', async () => {
     const ids = listDraftMetas().map((meta) => meta.id)
@@ -191,7 +263,9 @@ export function registerIpc(): void {
     } catch {
       /* 音标补全失败不阻塞入库 */
     }
-    return commitAllDrafts(phonetics)
+    const result = commitAllDrafts(phonetics)
+    requestTrayRefresh()
+    return result
   })
   ipcMain.handle('importer:discardDraft', (_e, id: number) => discardDraft(id))
   ipcMain.handle('importer:revalidateDraft', (_e, id: number) => revalidateDraft(id))
@@ -217,14 +291,21 @@ export function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('review:daily', () => dailyPlan())
-  ipcMain.handle('review:learn', (_e, itemId: number, known: boolean) => markItemLearned(itemId, known))
-  ipcMain.handle('review:queue', (_e, mode?: ReviewMode, examId?: number) => {
+  ipcMain.handle('review:daily', (_e, deckId?: number) => dailyPlan(asDeckId(deckId)))
+  ipcMain.handle('review:learn', (_e, itemId: number, known: boolean) => {
+    markItemLearned(itemId, known)
+    requestTrayRefresh()
+  })
+  ipcMain.handle('review:queue', (_e, mode?: ReviewMode, examId?: number, deckId?: number) => {
     if (mode === 'exam' && examId) return buildExamPlan(examId).queue
-    return dailyPlan().reviewCards
+    return dailyPlan(asDeckId(deckId)).reviewCards
   })
   ipcMain.handle('review:judge', (_e, cardId: number, answer: string) => judgeAnswer(cardId, answer))
-  ipcMain.handle('review:submit', (_e, input: SubmitReview) => applyReview(input))
+  ipcMain.handle('review:submit', (_e, input: SubmitReview) => {
+    const result = applyReview(input)
+    requestTrayRefresh()
+    return result
+  })
 
   ipcMain.handle('exams:list', () => listExams())
   ipcMain.handle('exams:create', (_e, input: ExamInput) => createExam(input))
@@ -234,10 +315,10 @@ export function registerIpc(): void {
   ipcMain.handle('exams:remove', (_e, id: number) => deleteExam(id))
   ipcMain.handle('exams:plan', (_e, id: number) => buildExamPlan(id))
 
-  ipcMain.handle('stats:dashboard', () => dashboardStats())
+  ipcMain.handle('stats:dashboard', (_e, deckId?: number) => dashboardStats(asDeckId(deckId)))
 
-  ipcMain.handle('search:query', (_e, query: string, sort?: NoteQuery['sort']) =>
-    semanticSearch(query, sort)
+  ipcMain.handle('search:query', (_e, query: string, sort?: NoteQuery['sort'], deckId?: number) =>
+    semanticSearch(query, sort, asDeckId(deckId))
   )
 
   ipcMain.handle('tts:get', (_e, word: string, accent?: 'us' | 'uk') => getTts(word, accent))

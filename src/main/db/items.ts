@@ -1,6 +1,7 @@
 import type { CardDirection, Example, Item, ItemKind } from '@shared/types'
 import { normalizeEn, mergePosText } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt } from './connection'
+import { deckScope } from './decks'
 import { newCardSnapshot } from '../fsrs'
 
 interface ItemRow {
@@ -59,16 +60,19 @@ export function getItem(id: number): Item | null {
   return item
 }
 
-export function listItems(search?: string): Item[] {
+/** 词条列表（笔记库搜索用）；deckId = 只看这个库里的词条 */
+export function listItems(search?: string, deckId?: number | null): Item[] {
   const d = getDb()
-  const where = search?.trim()
-    ? 'WHERE headword LIKE ? OR meanings LIKE ? OR collocations LIKE ? OR extra LIKE ?'
-    : ''
-  const params = search?.trim()
-    ? [`%${search.trim()}%`, `%${search.trim()}%`, `%${search.trim()}%`, `%${search.trim()}%`]
-    : []
+  const scope = deckScope('i.id', deckId)
+  const keyword = search?.trim()
+  const where = keyword
+    ? `WHERE (i.headword LIKE ? OR i.meanings LIKE ? OR i.collocations LIKE ? OR i.extra LIKE ?)${scope.clause}`
+    : `WHERE 1 = 1${scope.clause}`
+  const params = keyword
+    ? [`%${keyword}%`, `%${keyword}%`, `%${keyword}%`, `%${keyword}%`, ...scope.params]
+    : scope.params
   const rows = d
-    .prepare(`SELECT * FROM items ${where} ORDER BY headword COLLATE NOCASE ASC LIMIT 1000`)
+    .prepare(`SELECT i.* FROM items i ${where} ORDER BY i.headword COLLATE NOCASE ASC LIMIT 1000`)
     .all(...params) as unknown as ItemRow[]
   const links = d.prepare('SELECT note_id FROM note_items WHERE item_id = ?')
   return rows.map((row) => {
@@ -302,38 +306,45 @@ export function addAcceptedZh(itemId: number, answer: string): void {
   }
 }
 
-/** 还没学过、且至少有一张卡的词条数 */
-export function countUnlearned(): number {
+/** 还没学过、且至少有一张卡的词条数；deckId = 只数这个库 */
+export function countUnlearned(deckId?: number | null): number {
+  const scope = deckScope('i.id', deckId)
   const row = getDb()
     .prepare(
       `SELECT COUNT(*) AS c FROM items i
        WHERE i.learned_at IS NULL
-         AND EXISTS (SELECT 1 FROM cards c WHERE c.item_id = i.id AND c.suspended = 0)`
+         AND EXISTS (SELECT 1 FROM cards c WHERE c.item_id = i.id AND c.suspended = 0)${scope.clause}`
     )
-    .get() as { c?: number } | undefined
+    .get(...scope.params) as { c?: number } | undefined
   return toInt(row?.c)
 }
 
-export function learnedTodayCount(): number {
+/** 今天学过的新词数；按库算时只数这个库范围内的词条 */
+export function learnedTodayCount(deckId?: number | null): number {
+  const scope = deckScope('i.id', deckId)
   const row = getDb()
-    .prepare(`SELECT COUNT(*) AS c FROM items WHERE substr(COALESCE(learned_at, ''), 1, 10) = ?`)
-    .get(localIso().slice(0, 10)) as { c?: number } | undefined
+    .prepare(
+      `SELECT COUNT(*) AS c FROM items i
+       WHERE substr(COALESCE(i.learned_at, ''), 1, 10) = ?${scope.clause}`
+    )
+    .get(localIso().slice(0, 10), ...scope.params) as { c?: number } | undefined
   return toInt(row?.c)
 }
 
-/** 今日待学习的新词（按词条，不按卡片） */
-export function learnQueue(limit: number): Item[] {
+/** 今日待学习的新词（按词条，不按卡片）；deckId = 只抽这个库 */
+export function learnQueue(limit: number, deckId?: number | null): Item[] {
   if (limit <= 0) return []
   const d = getDb()
+  const scope = deckScope('i.id', deckId)
   const rows = d
     .prepare(
       `SELECT i.* FROM items i
        WHERE i.learned_at IS NULL
-         AND EXISTS (SELECT 1 FROM cards c WHERE c.item_id = i.id AND c.suspended = 0)
+         AND EXISTS (SELECT 1 FROM cards c WHERE c.item_id = i.id AND c.suspended = 0)${scope.clause}
        ORDER BY i.created_at ASC, i.id ASC
        LIMIT ?`
     )
-    .all(limit) as unknown as ItemRow[]
+    .all(...scope.params, limit) as unknown as ItemRow[]
   const links = d.prepare('SELECT note_id FROM note_items WHERE item_id = ?')
   return rows.map((row) => {
     const noteIds = (links.all(row.id) as { note_id: number }[]).map((r) => r.note_id)

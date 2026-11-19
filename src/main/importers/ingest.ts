@@ -11,7 +11,7 @@ import { createDraft, findDraftBySha } from '../db/importDrafts'
  * 这样「识别完但没入库」的状态不会只活在渲染层内存里。
  * 同一份文件如果已有未入库草稿，直接恢复，不再调用 AI。
  */
-export async function ingestFile(filePath: string): Promise<ImportResult> {
+export async function ingestFile(filePath: string, deckId?: number | null): Promise<ImportResult> {
   const fileName = path.basename(filePath)
   const sha = sha256OfFile(filePath)
 
@@ -29,6 +29,7 @@ export async function ingestFile(filePath: string): Promise<ImportResult> {
     fileName,
     sourceKind: preview.sourceKind,
     originalPath: filePath,
+    deckId,
     preview
   })
 

@@ -10,6 +10,7 @@ import {
   X
 } from 'lucide-react'
 import type {
+  Deck,
   ImportDraft,
   ImportDraftMeta,
   ImportDraftPatch,
@@ -19,6 +20,7 @@ import type {
   ValidationIssue
 } from '@shared/types'
 import { cleanSuggestion, splitMeanings } from '@shared/normalize'
+import { DeckSelect } from '../components/DeckPicker'
 import { Badge, Button, Empty, Field, Modal, Spinner } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { cls } from '../lib/utils'
@@ -29,6 +31,10 @@ interface Props {
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
   refreshStats: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+  setDeck: (id: number) => Promise<void>
+  refreshDecks: () => Promise<Deck[]>
   onImported: () => void
   onDraftsChanged: () => void
   focusDraftId?: number
@@ -70,10 +76,21 @@ export default function ImportPage({
   notify,
   settings,
   navigate,
+  decks,
+  deckId,
+  setDeck,
+  refreshDecks,
   onImported,
   onDraftsChanged,
   focusDraftId
 }: Props) {
+  // 导入目标库：跟着「当前库」走；库被删了用第一个库兜底
+  const targetDeckId = deckId ?? decks[0]?.id ?? null
+  const deckName = (id: number | null | undefined) =>
+    (id ? decks.find((deck) => deck.id === id)?.name : null) ?? '默认库'
+  /** 老草稿（deckId = null）入库时进当前库 */
+  const draftDeckLabel = (id: number | null | undefined) =>
+    id ? deckName(id) : `当前库（${deckName(targetDeckId)}）`
   const [metas, setMetas] = useState<ImportDraftMeta[]>([])
   const [draft, setDraft] = useState<ImportDraft | null>(null)
   const [busy, setBusy] = useState(false)
@@ -322,8 +339,9 @@ export default function ImportPage({
     setBusy(true)
     setBusyLabel(paths.length > 1 ? `正在识别 ${paths.length} 个文件…` : '正在识别…')
     try {
-      const res = await window.api.importer.parse(paths)
+      const res = await window.api.importer.parse(paths, targetDeckId ?? undefined)
       await applyResults(res)
+      void refreshDecks()
     } catch (err) {
       notify(`解析失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
@@ -371,6 +389,7 @@ export default function ImportPage({
       const res = await window.api.importer.commit(current.id)
       notify(`已入库：${res.itemCount} 个词条`, 'ok')
       onImported()
+      void refreshDecks()
       draftRef.current = null
       pendingSave.current = null
       if (mounted.current) setDraft(null)
@@ -402,6 +421,7 @@ export default function ImportPage({
       if (res.committed.length) {
         notify(`已入库 ${res.committed.length} 份笔记，共 ${itemCount} 个词条`, 'ok')
         onImported()
+        void refreshDecks()
       }
       if (res.failed.length) {
         notify(`${res.failed.length} 份入库失败：${res.failed[0].error}`, 'err')
@@ -570,6 +590,17 @@ export default function ImportPage({
           </span>
         </div>
         <div className="page-actions">
+          <div className="row" style={{ gap: 6 }}>
+            <span className="hint">导入到</span>
+            <DeckSelect
+              decks={decks}
+              value={targetDeckId}
+              onChange={(id) => {
+                if (id !== null) void setDeck(id)
+              }}
+              style={{ width: 150 }}
+            />
+          </div>
           <Button
             variant="ghost"
             onClick={() => setManagerOpen(true)}
@@ -620,6 +651,8 @@ export default function ImportPage({
                   </div>
                   <div className="draft-meta">
                     {formatWhen(m.updatedAt)}
+                    {' · 入库到 '}
+                    {draftDeckLabel(m.deckId)}
                     {m.edited && ' · 已改过'}
                     {!m.hasFile && ' · 原文件缺失'}
                   </div>
@@ -718,6 +751,7 @@ export default function ImportPage({
                 <Badge>
                   {selectedCount} / {items.length} 条
                 </Badge>
+                <Badge tone="accent">入库到 {draftDeckLabel(draft.deckId)}</Badge>
                 {draft.aiUsed && <Badge tone="green">已用 AI 识别</Badge>}
                 <span className="hint">{saveHint}</span>
               </div>
@@ -988,7 +1022,7 @@ export default function ImportPage({
         }
       >
         <div className="hint">
-          将按每份草稿自己的标题、日期、标签和勾选状态逐份入库，共 {metas.length} 份。没有勾选词条的草稿会跳过并提示。
+          将按每份草稿自己的标题、日期、标签、勾选状态和所属库逐份入库，共 {metas.length} 份。没有勾选词条的草稿会跳过并提示。
         </div>
         <div className="col" style={{ gap: 4, marginTop: 10 }}>
           {metas.map((m) => (

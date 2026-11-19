@@ -28,6 +28,9 @@ export interface Item {
 
 export interface NoteSummary {
   id: number
+  /** 所属库；老库迁移后都是默认库 */
+  deckId: number
+  deckName: string
   title: string
   noteDate: string | null
   tags: string[]
@@ -51,13 +54,48 @@ export interface NoteInput {
   noteDate?: string | null
   tags: string[]
   rawMarkdown: string
+  /** 不传 = 当前库 */
+  deckId?: number | null
 }
 
 export interface NoteQuery {
   search?: string
   tag?: string
+  /** null / 不传 = 全部库 */
+  deckId?: number | null
   sort?: 'noteDate' | 'createdAt' | 'title'
   order?: 'asc' | 'desc'
+}
+
+/** 笔记库（PLAN-DECKS 方案 A）：笔记容器 + 学习范围，进度仍跟单词走 */
+export interface Deck {
+  id: number
+  uid: string
+  name: string
+  color: string | null
+  position: number
+  /** null = 用全局设置里的每日新词上限 */
+  newPerDay: number | null
+  noteCount: number
+  itemCount: number
+  /** 库内还没学过、且至少有一张卡的词条数 */
+  unlearnedCount: number
+  /** 今天已经在这个库学了多少新词 */
+  learnedToday: number
+  /** 今天还能从这个库学多少新词（剩余额度，不超过未学数） */
+  todayNew: number
+  /** 今天到期的卡片数（按词条去重） */
+  dueCount: number
+}
+
+export interface DeckInput {
+  name: string
+  color?: string | null
+  newPerDay?: number | null
+}
+
+export interface DeckPatch extends Partial<DeckInput> {
+  position?: number
 }
 
 export interface SearchResult {
@@ -123,6 +161,8 @@ export interface ImportDraftMeta {
   id: number
   fileName: string
   sourceKind: ImportPreview['sourceKind']
+  /** 入库时进的库；null = 老草稿（入库时进当前库） */
+  deckId: number | null
   itemCount: number
   selectedCount: number
   issueCount: number
@@ -142,6 +182,7 @@ export interface ImportDraft {
   id: number
   fileName: string
   sourceKind: ImportPreview['sourceKind']
+  deckId: number | null
   originalPath: string | null
   storedPath: string | null
   rawText: string
@@ -241,6 +282,8 @@ export interface SubmitReview {
 }
 
 export interface ExamScope {
+  /** 只考这个库里的笔记；不传 = 全部库 */
+  deckId?: number
   noteIds?: number[]
   tags?: string[]
   itemIds?: number[]
@@ -365,6 +408,8 @@ export interface Settings {
   autoLaunch: boolean
   quietHours: { start: string; end: string }
   ttsSources: ('youdao' | 'baidu' | 'freedict')[]
+  /** 当前库：今日任务、导入、托盘都跟着它（PLAN-DECKS §7） */
+  currentDeckId: number
 }
 
 export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet'>> {}
@@ -488,9 +533,24 @@ export interface WordmemoApi {
     create(input: NoteInput): Promise<number>
     update(id: number, patch: Partial<NoteInput>): Promise<void>
     remove(id: number): Promise<void>
+    /** 批量移动：只改归属，词条/卡片/进度都不动 */
+    moveMany(ids: number[], deckId: number): Promise<{ moved: number }>
+    /** 批量复制：复制笔记与词条关联，不复制进度（本来也只有一份） */
+    copyMany(ids: number[], deckId: number): Promise<{ copied: number; noteIds: number[] }>
+    /** 批量删除：只有在词不再被任何笔记引用时才删词条与卡片 */
+    removeMany(ids: number[]): Promise<{ removed: number }>
+    /** 撤销上一次批量移动/复制（只记一步，重启后失效；删除不可撤销） */
+    undoBatch(): Promise<{ kind: 'move' | 'copy'; count: number } | null>
+  }
+  decks: {
+    list(): Promise<Deck[]>
+    create(input: DeckInput): Promise<number>
+    update(id: number, patch: DeckPatch): Promise<void>
+    /** 删库前必须指定把笔记移到哪个库；不能删最后一个库 */
+    remove(id: number, moveTo: number): Promise<{ moved: number }>
   }
   items: {
-    list(query?: { search?: string }): Promise<Item[]>
+    list(query?: { search?: string; deckId?: number | null }): Promise<Item[]>
     update(
       id: number,
       patch: Partial<
@@ -509,8 +569,8 @@ export interface WordmemoApi {
   }
   importer: {
     pickFiles(): Promise<string[]>
-    /** 传入本地绝对路径：解析 + AI 校验后立刻落盘成草稿，返回草稿 id */
-    parse(paths: string[]): Promise<ImportResult[]>
+    /** 传入本地绝对路径：解析 + AI 校验后立刻落盘成草稿，返回草稿 id；deckId = 这份草稿入库时进的库 */
+    parse(paths: string[], deckId?: number): Promise<ImportResult[]>
     /** 未入库草稿摘要列表（不含 payload，可以放心一次拉全） */
     listDrafts(): Promise<ImportDraftMeta[]>
     /** 打开某份草稿的完整内容（含识别结果与全部修改） */
@@ -535,9 +595,10 @@ export interface WordmemoApi {
     pathForFile(file: File): string
   }
   review: {
-    daily(): Promise<DailyPlan>
+    /** deckId 省略 = 全部库（测试与旧调用兼容；界面总是传当前库） */
+    daily(deckId?: number | null): Promise<DailyPlan>
     learn(itemId: number, known: boolean): Promise<void>
-    queue(mode?: ReviewMode, examId?: number): Promise<QueueCard[]>
+    queue(mode?: ReviewMode, examId?: number, deckId?: number | null): Promise<QueueCard[]>
     judge(cardId: number, answer: string): Promise<JudgeResult>
     submit(input: SubmitReview): Promise<{ dueAt: string; state: number }>
   }
@@ -549,10 +610,11 @@ export interface WordmemoApi {
     plan(id: number): Promise<ExamPlan>
   }
   stats: {
-    dashboard(): Promise<DashboardStats>
+    /** deckId 省略 = 全部库；按库过滤只影响数量类指标，热力图/连续天数始终跨库 */
+    dashboard(deckId?: number | null): Promise<DashboardStats>
   }
   search: {
-    query(query: string, sort?: NoteQuery['sort']): Promise<SearchResult>
+    query(query: string, sort?: NoteQuery['sort'], deckId?: number | null): Promise<SearchResult>
   }
   tts: {
     get(word: string, accent?: 'us' | 'uk'): Promise<TtsResult>
@@ -600,7 +662,8 @@ export const DEFAULT_SETTINGS: Settings = {
   remindEnabled: true,
   autoLaunch: false,
   quietHours: { start: '23:00', end: '07:00' },
-  ttsSources: ['youdao', 'baidu', 'freedict']
+  ttsSources: ['youdao', 'baidu', 'freedict'],
+  currentDeckId: 1
 }
 
 export const DIRECTION_LABEL: Record<CardDirection, string> = {

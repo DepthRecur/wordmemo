@@ -1,5 +1,8 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { DatabaseSync, type SqliteDatabase } from './sqlite'
-import { SCHEMA } from './schema'
+import { SCHEMA, SCHEMA_VERSION } from './schema'
+import { newUid } from './uid'
 import { dedupeItems } from './dedupe'
 
 let db: SqliteDatabase | null = null
@@ -62,6 +65,82 @@ function migrate(database: SqliteDatabase): void {
   dedupeItems(database)
   // 一个 headword 只允许一个词条；pos/kind 不再参与去重键
   database.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_items_headword_norm ON items(headword_norm)')
+
+  // 多个库（PLAN-DECKS D0）：老库的笔记全部进默认库
+  database.exec('BEGIN IMMEDIATE')
+  try {
+    migrateDecks(database)
+    database.exec('COMMIT')
+  } catch (err) {
+    try {
+      database.exec('ROLLBACK')
+    } catch {
+      /* ignore */
+    }
+    throw err
+  }
+  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+}
+
+/** decks 表由 SCHEMA 建好；这里只补列、建索引、建默认库并回填 */
+function migrateDecks(database: SqliteDatabase): void {
+  addColumnIfMissing(database, 'notes', 'deck_id', 'INTEGER NOT NULL DEFAULT 1')
+  addColumnIfMissing(database, 'import_drafts', 'deck_id', 'INTEGER')
+  database.exec('CREATE INDEX IF NOT EXISTS ix_notes_deck ON notes(deck_id, note_date)')
+
+  const row = database.prepare('SELECT COUNT(*) AS c FROM decks').get() as { c?: number } | undefined
+  if (!toInt(row?.c)) {
+    database
+      .prepare('INSERT INTO decks (uid, name, position, created_at) VALUES (?, ?, 0, ?)')
+      .run(newUid(), '默认库', localIso())
+  }
+
+  // 兜底：deck_id 指向不存在的库（补列时老笔记拿到的 1 未必是默认库的 id）
+  const first = database
+    .prepare('SELECT id FROM decks ORDER BY position ASC, id ASC LIMIT 1')
+    .get() as { id?: number } | undefined
+  if (first?.id) {
+    database
+      .prepare('UPDATE notes SET deck_id = ? WHERE deck_id IS NULL OR deck_id NOT IN (SELECT id FROM decks)')
+      .run(first.id)
+  }
+}
+
+/**
+ * 迁移前备份（总览 §7 的坑 1）：openDb() 内部就迁移，dailyBackup() 要晚得多，
+ * 所以必须在 openDb 之前调用。不需要迁移时什么都不做。
+ *
+ * 打开库只为 checkpoint WAL（否则复制出来的可能是迁移前的旧页），读完立刻关闭。
+ * 已经存在同版本的 pre-migrate 备份时保留旧的——那才是真正的「迁移前」。
+ */
+export function backupBeforeMigrate(dbFile: string, backupDir: string): string | null {
+  if (!fs.existsSync(dbFile)) return null
+  let version = 0
+  let hasDecks = false
+  const probe = new DatabaseSync(dbFile, { timeout: 4000 })
+  try {
+    const row = probe.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined
+    version = toInt(row?.user_version)
+    hasDecks = Boolean(
+      probe.prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'decks'").get()
+    )
+    probe.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+  } catch {
+    // 读不出结构（更坏的库）：照样备份，至少给用户留一份可以发过来的文件
+  } finally {
+    try {
+      probe.close()
+    } catch {
+      /* ignore */
+    }
+  }
+  if (version >= SCHEMA_VERSION && hasDecks) return null
+
+  fs.mkdirSync(backupDir, { recursive: true })
+  const target = path.join(backupDir, `wordmemo-pre-migrate-v${version}.db`)
+  if (fs.existsSync(target)) return target
+  fs.copyFileSync(dbFile, target)
+  return target
 }
 
 /**

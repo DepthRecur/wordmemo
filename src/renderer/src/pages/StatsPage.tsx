@@ -1,14 +1,56 @@
-import type { DashboardStats } from '@shared/types'
-import { Button, Empty, Progress } from '../components/UI'
+import { useCallback, useEffect, useState } from 'react'
+import type { DashboardStats, Deck } from '@shared/types'
+import { DeckSelect } from '../components/DeckPicker'
+import { Button, Progress, Spinner } from '../components/UI'
 import { formatDate, pct, weekdayCN } from '../lib/utils'
 
 const HEAT_COLORS = ['#2a3648', '#145c46', '#1f8a63', '#35c98a', '#9af0c9']
 
-export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats | null; onRefresh: () => void }) {
+interface Props {
+  stats: DashboardStats | null
+  onRefresh: () => Promise<void>
+  decks: Deck[]
+  deckId: number | null
+}
+
+export default function StatsPage({ stats: initialStats, onRefresh, decks, deckId }: Props) {
+  // 统计页可以单独看某个库（含「全部库」），和「当前库」是两件事
+  const [filter, setFilter] = useState<number | null>(deckId)
+  const [data, setData] = useState<DashboardStats | null>(initialStats)
+  const [loading, setLoading] = useState(false)
+
+  const load = useCallback(async (id: number | null) => {
+    setLoading(true)
+    try {
+      setData(await window.api.stats.dashboard(id))
+    } catch {
+      /* 失败保留上一次的数据 */
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    setFilter(deckId)
+  }, [deckId])
+
+  useEffect(() => {
+    void load(filter)
+  }, [filter, load])
+
+  // App 每 60 秒刷新当前库的统计；只看当前库时跟着它走，不用自己再拉
+  useEffect(() => {
+    if (filter === deckId && initialStats) setData(initialStats)
+  }, [initialStats, deckId, filter])
+
+  const stats = data
+
   if (!stats) {
     return (
       <div className="page">
-        <Empty icon="📊" title="正在统计…" />
+        <div className="empty">
+          <Spinner />
+        </div>
       </div>
     )
   }
@@ -25,10 +67,33 @@ export default function StatsPage({ stats, onRefresh }: { stats: DashboardStats 
           <h1 className="page-title">学习统计</h1>
           <div className="page-sub">复习量、记忆保持率和未来到期的分布。</div>
         </div>
-        <Button onClick={onRefresh}>刷新</Button>
+        <div className="page-actions">
+          <div className="row" style={{ gap: 6 }}>
+            <span className="hint">统计范围</span>
+            <DeckSelect
+              decks={decks}
+              value={filter}
+              includeAll
+              onChange={(id) => setFilter(id)}
+              style={{ width: 150 }}
+            />
+          </div>
+          <Button
+            onClick={() => {
+              void load(filter)
+              if (filter === deckId) void onRefresh()
+            }}
+          >
+            刷新
+          </Button>
+        </div>
       </div>
 
       <div className="page-scroll">
+        <div className="hint" style={{ marginBottom: 10 }}>
+          数量类指标按「{filter === null ? '全部库' : (decks.find((d) => d.id === filter)?.name ?? '当前库')}」统计；
+          热力图、连续天数和正确率跨库合并，跨库学习也算连续。
+        </div>
         <div className="grid grid-4">
         <div className="stat">
           <div className="stat-value stat-accent">{stats.dueToday}</div>
