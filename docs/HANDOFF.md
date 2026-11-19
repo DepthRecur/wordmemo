@@ -134,7 +134,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ### 5.2 多个库（2026-11-19，`feat/decks`，完成）
 
-实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的四件事**：
+实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的五件事**：
 
 1. **作用域只有一个入口**：所有按库过滤都走 `deckScope(column, deckId)` / `deckInClause`（`src/main/db/decks.ts`）。`deckId = null` 表示全部库；新加查询时先想清楚该不该拼它。
 2. **当前库是 `settings.currentDeckId`**：主进程托盘、提醒、导入默认目标都读它；渲染层切库走 `App.setDeck()`（写 settings + 刷新统计）。统计页顶部的「统计范围」是**独立过滤器**，不影响当前库。

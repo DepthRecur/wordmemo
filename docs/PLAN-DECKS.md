@@ -427,6 +427,8 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 | 7 合并/分裂 | ✅ 单测：移动 + 删空库 = 合并（同名词只算一次）；复制一半到新库 = 分裂 |
 | 8 同一个词进两库只扣一次进度 | ✅ 单测：学一次两边都不再算新词；dueQueue 两边看到同一张卡 |
 
+**真实老库迁移验证**：拿本机旧的开发库副本（17 份笔记 / 289 词条 / 624 张卡 / 1015 条复习记录，`user_version = 0`）启动：先写出 `backups/wordmemo-pre-migrate-v0.db`，迁移后 `user_version = 2`、`decks` 1 条（默认库）、17 份笔记全部 `deck_id = 1`，四张表的条数一条不少；`decks.list()` 给出 `noteCount 17 / itemCount 289 / unlearned 150 / due 17 / todayNew 20`。
+
 ### 15.4 以后再说
 
 - 每库独立进度（备选方案 B）仍未做，`cards.deck_id` 不在本版。
