@@ -1,6 +1,6 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-19　当前分支：`feat/decks`（从 `master` 拉出，尚未合并）　仓库：`DepthRecur/wordmemo`（本地已 init，尚未 push）
+> 最后更新：2026-11-19　当前分支：`master`（`feat/decks` 已合并）　仓库：`DepthRecur/wordmemo`
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
@@ -8,8 +8,8 @@
 ## 0. 一句话现状
 
 背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成：
-- **多供应商**（2026-11-18 ~ 19，master，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
-- **多个库**（2026-11-19，`feat/decks`）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
+- **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
+- **多个库**（2026-11-19，已合并 master）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库；后续打磨：删批量撤销、切库性能（10~30ms）、今日任务标题右侧库下拉、原生 select 全换自定义圆角下拉。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
 
 下一个功能是**便携版 + 自更新**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案）。
 
@@ -133,9 +133,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 **GLM 的坑（已修，别踩回去）**：`glm-5.x-flash` **强制思考**，不能发 `thinking: {type:'disabled'}`（中文 400）；GLM 现在 `whenOff: 'omit'`（不需要思考时干脆不发这个字段）。另外「保存并测试」的 max_tokens 从 8 提到 256，否则思考模型会把 token 全花在推理上返回空内容。
 
-### 5.2 多个库（2026-11-19，`feat/decks`，完成）
+### 5.2 多个库（2026-11-19，master，完成）
 
-实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的七件事**：
+提交：`edf98bc`（主体）、`0aa933d`（真实老库迁移记录）、`46869f8`（删批量撤销）、`08e58da`（切库性能）、`e8fb3db`（库下拉 + 圆角下拉）。
+
+实现记录（改动清单、与计划的差异、验收对照、二次打磨）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的七件事**：
 
 1. **作用域只有一个入口**：所有按库过滤都走 `deckScope(column, deckId)` / `deckInClause`（`src/main/db/decks.ts`）。`deckId = null` 表示全部库；新加查询时先想清楚该不该拼它。
 2. **当前库是 `settings.currentDeckId`**：主进程托盘、提醒、导入默认目标都读它；渲染层切库走 `App.setDeck()`（写 settings + 刷新统计）。统计页顶部的「统计范围」是**独立过滤器**，不影响当前库。
@@ -145,7 +147,15 @@ docs/               ← 四份计划 + 调研 + 本文件
 6. **笔记库切库不再等 400ms**：只有搜索输入防抖 300ms；切库/排序立即请求，并按「库 + 排序 + 搜索词」缓存一份结果（`version` 变化即清空）。3500 份笔记的极端库仍有 230ms 首屏，虚拟化还没做（P2 #13）。
 7. **不要再用原生 `<select>`**：它的弹出层是系统样式（方角、CSS 改不到），全部换成 `src/renderer/src/components/Select.tsx`（圆角列表、键盘 ↑↓/Enter/Esc、空间不够向上弹）；复选框保留方角是有意的。
 
-### 5.3 多供应商残留欠账（不阻塞便携版）
+### 5.3 多个库的已知剩余（不阻塞便携版）
+
+- **库颜色**：`decks.color` 列在、`Deck` 类型也有，设置页还没做取色器（首版没做）。
+- **统计没有独立的「按库汇总」表**：每库计数在笔记库标签/设置页的库行里；统计页是「统计范围」过滤视图。
+- **3500 份笔记的列表未虚拟化**：实测首屏 230ms（`notes.list` 73ms），先记在 PLAN-NEXT P2 #13；正常使用（每库几十份笔记）是 10~30ms。
+- **考试范围 UI 只有「整库 / 指定笔记」**：`cardsInScope` 支持 `tags` 且与库是 AND，但创建考试的表单没暴露标签条件（首版原本也没有）。
+- **库数量 >10 的「建议合并」提示**没做（PLAN-DECKS §12 的可选项）。
+
+### 5.4 多供应商残留欠账（不阻塞便携版）
 
 - models.dev 的 `tiers`（按上下文长度分段计价）没接，长上下文会低估。
 - 「厂商响应自报价格」（§4.2 第 1 级）只是枚举位，4 家都没给。
@@ -223,17 +233,19 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：git 已 init；多个库在 feat/decks 分支（typecheck 0 错误、npm test 12 文件 118 项全绿）。
+当前状态：git 已 init，多个库已合并到 master（typecheck 0 错误、npm test 12 文件 118 项全绿）。
 多供应商：四家可配 Key、角色路由 default/vision、设置页七分区、模型可搜索下拉、
 模型目录与价格自动化、按家统计、npm run ai-smoke；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
 多个库：decks 表 + notes.deck_id + 默认库迁移（迁移前备份）、查询全部按库作用域、
-笔记库批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库。
+笔记库批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库；切库 10~30ms、
+原生 select 已换成自定义圆角下拉（Select.tsx）。
 
 下一步：做「便携版 + 自更新」——
 1) 先确认 %APPDATA%\WordMemo 有数据、程序目录没有数据；
-2) electron-builder --dir 出 win-unpacked，写 app/version.json，启动器 v0；
+2) 读 PLAN-UPDATE §3.11，把 electron-builder 的 target 改 portable/zip 方向，
+   出 win-unpacked 或 zip，写 app/version.json，启动器 v0（scripts/Launcher.cs 是基础）；
 3) 验收照 PLAN-UPDATE §3.11 与 HANDOFF §7.2 的便携版动作。
-建议在 feat/decks 合并后再开 feat/portable；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
+多个库已合并，直接从 master 开 feat/portable；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
 ```
 
 ---
