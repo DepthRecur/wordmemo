@@ -7,7 +7,7 @@
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页四张卡片、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**功能已冻结**，只差 GLM 的真机验证（等 Key）和 OpenAI/Gemini 的社区反馈。下一个功能是**多个库**。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。现在要加 4 个功能，顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。第一个功能（多供应商）**P0–P3 全部完成并验证**：四家都能配 Key、角色路由（默认/视觉）、设置页四张卡片、模型目录与价格自动化、按家统计与 `npm run ai-smoke`。**DeepSeek 与 GLM 都已在真机验证**（GLM 2026-11-19，`npm run ai-smoke` 4/4）；OpenAI / Gemini 等社区反馈。下一个功能是**多个库**。
 
 ---
 
@@ -17,7 +17,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，11 个测试文件（101 项）必须全绿
+npm test             # vitest，11 个测试文件（106 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 

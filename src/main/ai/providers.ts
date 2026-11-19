@@ -13,6 +13,12 @@ export interface ReasoningCompat {
   /** thinking: `{ thinking: { type } }`；effort: `reasoning_effort: low|high` */
   style: 'thinking' | 'effort'
   field: string
+  /**
+   * 不需要思考时怎么处理这个字段：
+   * - `disabled`（默认）：显式发 `{type:'disabled'}`（DeepSeek 需要）
+   * - `omit`：干脆不发（GLM 的强制思考模型会拒绝 disabled，用默认值最安全）
+   */
+  whenOff?: 'disabled' | 'omit'
 }
 
 export interface ProviderSpec {
@@ -114,15 +120,16 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     id: 'glm',
     label: '智谱 GLM',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    // 作者还没有 GLM 的免费额度 Key：形状照官方文档，未真机验证
-    unverified: true,
+    // 2026-11-19 真机验证：4 个调用点通过（glm-5.3-flash，强制思考模型判分约 22s）
     paths: { chat: '/chat/completions', models: '/models' },
     capabilities: { vision: true },
     compat: {
       maxTokensField: 'max_tokens',
       temperature: true,
       jsonMode: 'force',
-      reasoning: { style: 'thinking', field: 'thinking' },
+      // 新版 glm-5.x-flash 强制思考、拒绝 thinking.disabled（实测 400）；
+      // 不发这个字段 = 用默认值，老模型默认不思考、新模型默认思考，两条路都不报错
+      reasoning: { style: 'thinking', field: 'thinking', whenOff: 'omit' },
       imageDetail: false,
       usageCache: 'none'
     }

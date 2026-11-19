@@ -509,3 +509,45 @@ OpenAI / Gemini / 智谱 GLM   SKIP（无 Key）
 - models.dev 只用于补名字和价格，不参与"能不能用"的判断。
 
 **验证**：typecheck 0；`npm test` **11 文件 101 项全绿**（新增 `ai-models` 6 项：API 名优先 / models.dev 回退 / 目录外模型费用未知 / 目录空则空列表 / 远程名字覆盖快照 / 刷新保留 name）；离屏截图确认下拉展开、搜索 `v4` 过滤、两行式条目不折行、console 无错误。
+
+### 2026-11-19　GLM 真机验证 + 「强制思考」模型兼容
+
+用户填了 GLM 的 Key，按约定跑 `npm run ai-smoke`，**发现一个真 bug**：
+
+```
+智谱 GLM 拒绝了这次请求：该模型始终思考，不支持关闭思考；请使用 low、high 或 max。
+```
+
+- 原因 1：GLM 新的 `glm-5.x-flash` **始终思考**，拒绝 `thinking: {type:'disabled'}`；
+- 原因 2：报错是**中文**，而 `normalizeHttpError` 的 `unknownParam` 只认英文、`degradeParam` 也只匹配 `thinking|reasoning` → 降级没触发；
+- 原因 3：「保存并测试」只发 `max_tokens: 8`，强制思考模型会把 8 个 token 全花在推理上 → 返回空内容。
+
+**实测**（直接打 GLM 接口，`glm-5.3-flash`）：
+
+| 请求 | 结果 |
+|---|---|
+| 不带 `thinking`，max_tokens 200 | 200，`ok`，completion 74（其中思考 70） |
+| `thinking: {type:'low'}` | **400**（仍然「不支持关闭思考」） |
+| 不带 `thinking`，max_tokens 2000 | 200，`ok`，completion 57 |
+
+**修法**
+
+1. `providers.ts` 的 `ReasoningCompat` 加 `whenOff: 'disabled' | 'omit'`，**GLM 用 `omit`**：不需要思考时干脆不发这个字段（老模型默认不思考、新模型默认思考，两条路都不报错）。DeepSeek 保持 `disabled`。
+2. `normalizeHttpError` 的「未知参数」判定加中文（不支持 / 未知参数 / 无效参数）；`degradeParam` 的 thinking 判定加「思考 / 推理」。
+3. 通用学习降级：某个 `provider:model` 一旦因为 thinking 被拒，本次会话不再发该字段（`omitThinkingFor` 集合），避免每次调用都先 400 一次；「保存并测试」也走这条逻辑。
+4. 「保存并测试」的 max_tokens 8 → **256**（普通模型仍然只回两三个 token，强制思考模型才有机会吐出内容）。
+
+**验证**
+
+- `npm test` **11 文件 106 项全绿**（新增：GLM 默认不发 thinking、中文 400 也算 unknownParam、学习降级后不再发 thinking、测试按钮自动重试）。
+- 真机 `npm run ai-smoke`（DeepSeek + GLM，各 4 个调用点）：
+
+```
+DeepSeek  结构化 1443ms / 校验 817ms / 判分 959ms  / 音标 1132ms   全通过
+智谱 GLM  结构化 2976ms / 校验 3047ms / 判分 21880ms / 音标 2159ms 全通过
+OpenAI / Gemini  SKIP（无 Key）
+合计：8 次调用，失败 0 次
+```
+
+- GLM 的 `unverified` 置为 `false`，README 状态表改成「已验证」。
+- **已知体验问题**：`glm-5.x-flash` 判分要约 22 秒（强制思考），用户如果嫌慢，可以在设置里换成 `glm-4.6` 这类非强制思考的模型——这也是模型下拉框要显示公开名的原因之一。

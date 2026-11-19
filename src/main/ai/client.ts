@@ -42,6 +42,23 @@ const DEEPSEEK_DEFAULT_MODEL = 'deepseek-flash'
 /** 预算降级成 token 上限时的粗估：$1 ≈ 200 万 token（有未定价调用时才用） */
 const TOKENS_PER_USD = 2_000_000
 
+/**
+ * 有些模型（如 GLM 新的 `*-flash`）**始终思考**，会拒绝 `thinking: { type: 'disabled' }`。
+ * 一旦某个 provider+model 报过这种错，本次会话就不再发 thinking 字段（对方用默认值），
+ * 省掉「每次调用都先 400 一次」的浪费。
+ */
+const omitThinkingFor = new Set<string>()
+
+function modelKey(spec: ProviderSpec, model: string): string {
+  return `${spec.id}:${model}`
+}
+
+/** 按学习到的结果，去掉或保留 thinking 能力 */
+function specFor(spec: ProviderSpec, model: string): ProviderSpec {
+  if (!omitThinkingFor.has(modelKey(spec, model))) return spec
+  return { ...spec, compat: { ...spec.compat, reasoning: null } }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -120,8 +137,10 @@ function stripImageDetail(messages: unknown[]): unknown[] {
  */
 function degradeParam(target: Target, req: ChatRequest, err: AiError): Target | null {
   const msg = err.message
-  if (/thinking|reasoning/i.test(msg) && target.spec.compat.reasoning) {
+  // 中文也要认：GLM 报的是「该模型始终思考，不支持关闭思考」
+  if (/thinking|reasoning|思考|推理/i.test(msg) && target.spec.compat.reasoning) {
     req.thinking = false
+    omitThinkingFor.add(modelKey(target.spec, target.model))
     return {
       ...target,
       spec: { ...target.spec, compat: { ...target.spec.compat, reasoning: null } }
@@ -160,7 +179,7 @@ async function requestOnce(target: Target, opts: ChatOptions, key: string): Prom
     timeoutMs: opts.timeoutMs
   }
 
-  let current = target
+  let current: Target = { ...target, spec: specFor(target.spec, target.model) }
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const result = await requestChat(
@@ -305,6 +324,36 @@ function testMessageFor(err: unknown): string {
   }
 }
 
+/** 「保存并测试」用的一条极短请求；撞上「模型始终思考」就记住并去掉 thinking 重试一次 */
+async function testMessage(target: Target, key: string): Promise<void> {
+  const send = () =>
+    requestChat(
+      specFor(target.spec, target.model),
+      { baseUrl: target.baseUrl, model: target.model, apiKey: key },
+      {
+        // 强制思考的模型会把 max_tokens 全花在推理上：给足 256，普通模型照样只回两三个 token
+        messages: [{ role: 'user', content: '回复 ok' }],
+        maxTokens: 256,
+        timeoutMs: 20_000
+      }
+    )
+  try {
+    await send()
+  } catch (err) {
+    if (
+      err instanceof AiError &&
+      err.unknownParam &&
+      /thinking|reasoning|思考|推理/i.test(err.message) &&
+      target.spec.compat.reasoning
+    ) {
+      omitThinkingFor.add(modelKey(target.spec, target.model))
+      await send()
+      return
+    }
+    throw err
+  }
+}
+
 /** 设置页「保存并测试」：provider 省略 = deepseek（旧签名兼容） */
 export async function testApiKey(
   provider: AiProviderId = 'deepseek',
@@ -324,11 +373,7 @@ export async function testApiKey(
 
   const started = Date.now()
   try {
-    await requestChat(
-      target.spec,
-      { baseUrl: target.baseUrl, model: target.model, apiKey: key },
-      { messages: [{ role: 'user', content: '回复 ok' }], maxTokens: 8, timeoutMs: 20_000 }
-    )
+    await testMessage(target, key)
     return {
       ok: true,
       message: '连接成功，Key 可用',

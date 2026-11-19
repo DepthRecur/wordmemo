@@ -250,8 +250,68 @@ describe('P1 角色路由与多供应商', () => {
     const info = aiSettingsInfo().providers
     expect(info.map((p) => p.id)).toEqual(['deepseek', 'openai', 'gemini', 'glm'])
     const glm = info.find((p) => p.id === 'glm')
-    expect(glm).toMatchObject({ keySet: true, model: 'glm-4-flash', unverified: true })
+    expect(glm).toMatchObject({ keySet: true, model: 'glm-4-flash', unverified: false })
     expect(JSON.stringify(info)).not.toContain('sk-glm')
     expect(info.find((p) => p.id === 'deepseek')).toMatchObject({ keySet: true, unverified: false })
+  })
+})
+
+describe('「模型始终思考」的降级（GLM 新模型）', () => {
+  const thinkingError = {
+    status: 400,
+    body: JSON.stringify({
+      error: { message: '该模型始终思考，不支持关闭思考；请使用 low、high 或 max。' }
+    })
+  }
+
+  it('GLM 默认就不发 thinking，不会先吃一次 400', async () => {
+    configureAi({ default: { provider: 'glm' }, providers: { glm: { model: 'glm-5.3-flash' } } })
+    setApiKey('glm', 'sk-glm-omit')
+    const calls = stubFetch(() => ({ body: OK_BODY }))
+
+    await expect(chat({ messages, kind: 'judge' })).resolves.toBe('ok')
+    expect(calls).toHaveLength(1)
+    expect(JSON.parse(calls[0].init.body).thinking).toBeUndefined()
+  })
+
+  it('万一还是撞上 400：去掉 thinking 重试一次，并记住这个模型', async () => {
+    // deepseek 的 spec 默认发 disabled，用它验证「通用学习降级」
+    configureAi({
+      default: { provider: 'deepseek' },
+      providers: { deepseek: { model: 'deepseek-always-think-a' } }
+    })
+
+    let n = 0
+    const calls = stubFetch(() => {
+      n++
+      return n === 1 ? thinkingError : { body: OK_BODY }
+    })
+
+    await expect(chat({ messages, kind: 'judge' })).resolves.toBe('ok')
+    expect(calls).toHaveLength(2)
+    expect(JSON.parse(calls[0].init.body).thinking).toEqual({ type: 'disabled' })
+    expect(JSON.parse(calls[1].init.body).thinking).toBeUndefined()
+
+    // 第二次调用：已经记住这家不吃 thinking，直接只请求一次
+    await expect(chat({ messages, kind: 'judge' })).resolves.toBe('ok')
+    expect(calls).toHaveLength(3)
+    expect(JSON.parse(calls[2].init.body).thinking).toBeUndefined()
+  })
+
+  it('「保存并测试」也会自动去掉 thinking 重试', async () => {
+    configureAi({
+      default: { provider: 'deepseek' },
+      providers: { deepseek: { model: 'deepseek-always-think-b' } }
+    })
+
+    let n = 0
+    const calls = stubFetch(() => {
+      n++
+      return n === 1 ? thinkingError : { body: OK_BODY }
+    })
+
+    await expect(testApiKey('deepseek')).resolves.toMatchObject({ ok: true, provider: 'deepseek' })
+    expect(calls).toHaveLength(2)
+    expect(JSON.parse(calls[1].init.body).thinking).toBeUndefined()
   })
 })

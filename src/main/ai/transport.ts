@@ -68,7 +68,9 @@ export function buildChatBody(
 
   if (spec.compat.reasoning) {
     if (spec.compat.reasoning.style === 'thinking') {
-      body.thinking = { type: req.thinking ? 'enabled' : 'disabled' }
+      // omit：不需要思考时干脆不发这个字段（GLM 的强制思考模型会拒绝 disabled）
+      if (req.thinking) body.thinking = { type: 'enabled' }
+      else if (spec.compat.reasoning.whenOff !== 'omit') body.thinking = { type: 'disabled' }
     } else if (req.thinking) {
       body.reasoning_effort = 'low'
     }
@@ -149,9 +151,11 @@ export function normalizeHttpError(spec: ProviderSpec, status: number, text: str
     })
   }
   if (status === 400) {
-    const unknownParam = /unknown|unsupported|not support|invalid.*(param|parameter|field)|unrecognized/i.test(
-      detail
-    )
+    // 英文/中文都认：GLM 的「不支持关闭思考」这类中文 400 也要能触发降级
+    const unknownParam =
+      /unknown|unsupported|not support|invalid.*(param|parameter|field)|unrecognized|不支持|未知参数|不支持的参数|无效参数/i.test(
+        detail
+      )
     return new AiError(`${spec.label} 拒绝了这次请求：${detail}`, { status, unknownParam })
   }
   return new AiError(`${spec.label} 返回 ${status}：${detail}`, { status })

@@ -41,6 +41,13 @@ describe('请求体装配', () => {
     expect(body.thinking).toEqual({ type: 'enabled' })
   })
 
+  it('GLM：不需要思考时不发 thinking（强制思考模型会拒绝 disabled）', () => {
+    expect(buildChatBody(glm, { model: 'glm-5.3-flash' }, { messages }).thinking).toBeUndefined()
+    expect(
+      buildChatBody(glm, { model: 'glm-5.3-flash' }, { messages, thinking: true }).thinking
+    ).toEqual({ type: 'enabled' })
+  })
+
   it('OpenAI：用 max_completion_tokens，不发 thinking；thinking 才发 reasoning_effort', () => {
     const plain = buildChatBody(oa, { model: 'gpt-x' }, { messages, maxTokens: 500 })
     expect(plain.max_completion_tokens).toBe(500)
@@ -126,5 +133,14 @@ describe('错误归一化', () => {
     const e = normalizeHttpError(oa, 400, '{"error":{"message":"Unknown parameter: thinking"}}')
     expect(e.unknownParam).toBe(true)
     expect(e.retryable).toBe(false)
+  })
+
+  it('中文的「不支持…」也算 unknownParam（GLM 的「不支持关闭思考」）', () => {
+    const e = normalizeHttpError(
+      glm,
+      400,
+      '{"error":{"message":"该模型始终思考，不支持关闭思考；请使用 low、high 或 max。"}}'
+    )
+    expect(e.unknownParam).toBe(true)
   })
 })
