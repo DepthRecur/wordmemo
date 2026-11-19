@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import type { Deck } from '@shared/types'
+import { Select, type SelectOption } from './Select'
 import { cls } from '../lib/utils'
 
 interface DeckTabsProps {
@@ -61,6 +62,7 @@ interface DeckSelectProps {
   includeAll?: boolean
   allLabel?: string
   disabled?: boolean
+  width?: number | string
   style?: CSSProperties
 }
 
@@ -72,22 +74,26 @@ export function DeckSelect({
   includeAll = false,
   allLabel = '全部库',
   disabled,
+  width,
   style
 }: DeckSelectProps) {
+  const options: SelectOption[] = []
+  if (includeAll) options.push({ value: 'all', label: allLabel })
+  for (const deck of decks) {
+    options.push({
+      value: String(deck.id),
+      label: deck.name,
+      hint: `${deck.noteCount} 份笔记 · 待学 ${deck.todayNew} · 到期 ${deck.dueCount}`
+    })
+  }
   return (
-    <select
-      className="select"
-      style={style}
+    <Select
       value={value === null ? 'all' : String(value)}
+      options={options}
+      onChange={(next) => onChange(next === 'all' ? null : Number(next))}
       disabled={disabled}
-      onChange={(e) => onChange(e.target.value === 'all' ? null : Number(e.target.value))}
-    >
-      {includeAll && <option value="all">{allLabel}</option>}
-      {decks.map((deck) => (
-        <option key={deck.id} value={deck.id}>
-          {deck.name}
-        </option>
-      ))}
-    </select>
+      width={width}
+      style={style}
+    />
   )
 }

@@ -75,7 +75,7 @@ export default function StatsPage({ stats: initialStats, onRefresh, decks, deckI
               value={filter}
               includeAll
               onChange={(id) => setFilter(id)}
-              style={{ width: 150 }}
+              width={150}
             />
           </div>
           <Button

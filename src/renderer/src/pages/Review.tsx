@@ -4,7 +4,7 @@ import type { DailyPlan, Deck, Item, JudgeResult, QueueCard, Settings } from '@s
 import { DIRECTION_LABEL } from '@shared/types'
 import { displayPhonetic } from '@shared/normalize'
 import { AudioButton, playWord } from '../components/AudioButton'
-import { DeckTabs } from '../components/DeckPicker'
+import { Select } from '../components/Select'
 import { Badge, Button, Empty, Progress, Spinner } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { cls } from '../lib/utils'
@@ -364,23 +364,31 @@ export default function Review({
       <div className="page review-shell">
         <div className="page-head">
           <div>
-            <h1 className="page-title">今日任务</h1>
+            <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <h1 className="page-title">今日任务</h1>
+              {!examId && (
+                <Select
+                  value={deckId === null ? '' : String(deckId)}
+                  width={210}
+                  title="切换当前库"
+                  options={decks.map((deck) => ({
+                    value: String(deck.id),
+                    label: deck.name,
+                    hint: `待学 ${deck.todayNew} · 到期 ${deck.dueCount}`
+                  }))}
+                  onChange={(next) => {
+                    const id = Number(next)
+                    if (Number.isInteger(id) && id !== deckId) void setDeck(id)
+                  }}
+                />
+              )}
+            </div>
             <div className="page-sub">先把新笔记学一遍，再复习到期的旧词。两部分都会计入 FSRS。</div>
           </div>
           <Button variant="ghost" size="sm" onClick={() => void init()}>
             <RotateCcw size={14} /> 刷新
           </Button>
         </div>
-
-        {!examId && (
-          <DeckTabs
-            decks={decks}
-            value={deckId}
-            onChange={(id) => {
-              if (id !== null && id !== deckId) void setDeck(id)
-            }}
-          />
-        )}
 
         <div className="task-grid">
           <div className="panel task-card learn">

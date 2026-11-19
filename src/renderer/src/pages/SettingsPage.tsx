@@ -13,6 +13,7 @@ import type {
 } from '@shared/types'
 import { Badge, Button, Field, Modal, Toggle } from '../components/UI'
 import { ModelPicker } from '../components/ModelPicker'
+import { Select } from '../components/Select'
 import type { Navigate, Notify } from '../App'
 import { cls, formatBytes } from '../lib/utils'
 
@@ -650,19 +651,14 @@ export default function SettingsPage({
           <div className="panel-title">AI 角色与预算</div>
           <div className="col">
             <Field label="默认模型" hint="导入、判分、音标、补搭配都走这家">
-              <select
-                className="select"
+              <Select
                 value={draft.ai.default.provider}
-                onChange={(e) => setDefaultRole(e.target.value as AiProviderId)}
-              >
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                    {p.model ? ` · ${modelLabel(p)}` : '（未填模型）'}
-                    {p.unverified ? '（未验证）' : ''}
-                  </option>
-                ))}
-              </select>
+                options={providers.map((p) => ({
+                  value: p.id,
+                  label: `${p.label}${p.model ? ` · ${modelLabel(p)}` : '（未填模型）'}${p.unverified ? '（未验证）' : ''}`
+                }))}
+                onChange={(next) => setDefaultRole(next as AiProviderId)}
+              />
             </Field>
             <Toggle
               checked={!!draft.ai.vision}
@@ -672,20 +668,16 @@ export default function SettingsPage({
             />
             {draft.ai.vision && (
               <Field label="图片识别用哪家">
-                <select
-                  className="select"
+                <Select
                   value={draft.ai.vision.provider}
-                  onChange={(e) => setVisionRole(e.target.value as AiProviderId)}
-                >
-                  {providers
+                  options={providers
                     .filter((p) => p.vision || p.id === draft.ai.vision?.provider)
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.label}
-                        {p.unverified ? '（未验证）' : ''}
-                      </option>
-                    ))}
-                </select>
+                    .map((p) => ({
+                      value: p.id,
+                      label: `${p.label}${p.unverified ? '（未验证）' : ''}`
+                    }))}
+                  onChange={(next) => setVisionRole(next as AiProviderId)}
+                />
               </Field>
             )}
             <Field
@@ -787,10 +779,14 @@ export default function SettingsPage({
             />
 
             <Field label="口音">
-              <select className="select" value={draft.accent} onChange={(e) => set('accent', e.target.value as 'us' | 'uk')}>
-                <option value="us">美式发音</option>
-                <option value="uk">英式发音</option>
-              </select>
+              <Select
+                value={draft.accent}
+                options={[
+                  { value: 'us', label: '美式发音' },
+                  { value: 'uk', label: '英式发音' }
+                ]}
+                onChange={(next) => set('accent', next as 'us' | 'uk')}
+              />
             </Field>
             <div className="hint">复习时不显示音标（避免通过音标反推拼写），需要时在词条详情里看。</div>
           </div>
@@ -1097,19 +1093,17 @@ export default function SettingsPage({
           <div>
             「{deleteDeck?.name}」里有 {deleteDeck?.noteCount ?? 0} 份笔记。删除前先把它们移到：
           </div>
-          <select
-            className="select"
-            value={deleteMoveTo ?? ''}
-            onChange={(e) => setDeleteMoveTo(Number(e.target.value))}
-          >
-            {decks
+          <Select
+            value={deleteMoveTo === null ? '' : String(deleteMoveTo)}
+            options={decks
               .filter((d) => d.id !== deleteDeck?.id)
-              .map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-          </select>
+              .map((d) => ({
+                value: String(d.id),
+                label: d.name,
+                hint: `${d.noteCount} 份笔记 · 待学 ${d.todayNew}`
+              }))}
+            onChange={(next) => setDeleteMoveTo(Number(next))}
+          />
           <div className="hint">
             只移动笔记的归属；词条、卡片和复习进度都不变。不能删掉最后一个库。
           </div>

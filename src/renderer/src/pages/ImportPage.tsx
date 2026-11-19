@@ -598,7 +598,7 @@ export default function ImportPage({
               onChange={(id) => {
                 if (id !== null) void setDeck(id)
               }}
-              style={{ width: 150 }}
+              width={150}
             />
           </div>
           <Button

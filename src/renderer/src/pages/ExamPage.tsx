@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CalendarClock, Plus, RefreshCw, Trash2, Play } from 'lucide-react'
 import type { Deck, Exam, ExamLevel, ExamPlan, NoteSummary, Settings } from '@shared/types'
 import { DeckSelect } from '../components/DeckPicker'
+import { Select } from '../components/Select'
 import { Badge, Button, Empty, Field, Modal, Progress, Spinner } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { formatDate, pct, todayKey, weekdayCN } from '../lib/utils'
@@ -301,15 +302,15 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
             />
           </Field>
           <Field label="要求">
-            <select
-              className="select"
+            <Select
               value={form.level}
-              onChange={(e) => setForm({ ...form, level: e.target.value as ExamLevel })}
-            >
-              <option value="dictate">听写（中→英 + 听→写）</option>
-              <option value="recognize">只要求认识（英→中）</option>
-              <option value="mixed">混合（全部方向）</option>
-            </select>
+              options={[
+                { value: 'dictate', label: '听写（中→英 + 听→写）' },
+                { value: 'recognize', label: '只要求认识（英→中）' },
+                { value: 'mixed', label: '混合（全部方向）' }
+              ]}
+              onChange={(next) => setForm({ ...form, level: next as ExamLevel })}
+            />
           </Field>
           <Field label="每天预算（分钟）">
             <input
@@ -333,14 +334,14 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
             />
           </Field>
           <Field label="范围">
-            <select
-              className="select"
+            <Select
               value={form.allNotes ? 'all' : 'custom'}
-              onChange={(e) => setForm({ ...form, allNotes: e.target.value === 'all' })}
-            >
-              <option value="all">全部笔记</option>
-              <option value="custom">指定笔记</option>
-            </select>
+              options={[
+                { value: 'all', label: '全部笔记' },
+                { value: 'custom', label: '指定笔记' }
+              ]}
+              onChange={(next) => setForm({ ...form, allNotes: next === 'all' })}
+            />
           </Field>
           <Field label="范围库" hint="与「范围」是与关系；选「全部库」= 不分库">
             <DeckSelect

@@ -401,7 +401,7 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 | 批量 | `src/main/db/notes.ts` | `moveNotes`/`copyNotes`/`deleteNotes`（一次事务、单次最多 500 份）；复制只复制笔记行 + `note_items` 关联 |
 | 导入 | `importDrafts.ts` / `ingest.ts` | 草稿落盘时记 `deck_id`；`commitDraft` 用草稿的库，老草稿（NULL）用当前库 |
 | IPC / preload | `ipc.ts` / `preload/index.ts` | `decks:*`、`notes:moveMany/copyMany/removeMany`、`review:daily(deckId)`、`stats:dashboard(deckId)`、`search:query(…, deckId)`、`importer:parse(paths, deckId)`；`settings:update`/批量动作/复习后立即刷新托盘 |
-| UI | `DeckPicker.tsx`（新）、`Notes.tsx`、`Review.tsx`、`ImportPage.tsx`、`ExamPage.tsx`、`StatsPage.tsx`、`SettingsPage.tsx` | 库标签栏 + 三态表头 + 全选/全不选/反选 + Shift 区间选 + `Ctrl+A`/`Esc` + 批量栏 + 移动/复制/删除对话框（移动对话框内可「新建并移动」）；今日任务库标签；导入目标库；考试范围库；统计顶部库过滤；设置页新增「笔记库」分区（改名/额度/上下移/删库前迁笔记） |
+| UI | `DeckPicker.tsx`（新）、`Select.tsx`（新）、`Notes.tsx`、`Review.tsx`、`ImportPage.tsx`、`ExamPage.tsx`、`StatsPage.tsx`、`SettingsPage.tsx` | 库标签栏 + 三态表头 + 全选/全不选/反选 + Shift 区间选 + `Ctrl+A`/`Esc` + 批量栏 + 移动/复制/删除对话框（移动对话框内可「新建并移动」）；**今日任务标题右侧库下拉**；导入目标库；考试范围库；统计顶部库过滤；设置页新增「笔记库」分区（改名/额度/上下移/删库前迁笔记）；**原生 `<select>` 全部换成自定义 `Select`**（弹出层也是圆角） |
 | 托盘 | `index.ts` + `tray-bridge.ts`（新） | 托盘计数只算当前库，tooltip 另给全部库总数；菜单里显示「当前库」 |
 
 **当前库**存在 `settings.currentDeckId`（主进程托盘也读同一个值）；笔记库/导入页切库会同时改它，统计页的「统计范围」是独立过滤器。
@@ -435,3 +435,10 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 - 每库独立进度（备选方案 B）仍未做，`cards.deck_id` 不在本版。
 - 移到目标库的「待学 +N」预告、库数量 >10 的合并提示、搜索结果的库徽标样式，都可以后续补。
 - 迁移备份目前只留同名一份（`pre-migrate-v0.db`）；如果以后 SCHEMA_VERSION 继续升级，旧备份文件名会区分版本，正好各留一份。
+
+### 15.5 二次打磨（2026-11-19）
+
+- **删除批量撤销**：见 §15.2，`undoLastBatch` 及相关 IPC/类型/按钮/测试全部移除。
+- **切库性能**：去掉「每次加载都等 400ms」的防抖，只保留搜索输入防抖 300ms；按「库 + 排序 + 搜索词」缓存一份结果，切回先画缓存再后台刷新。实测两库来回切 10~30ms（原 ~500ms），`notes.list` IPC 1~2ms。
+- **今日任务库选择器**：两个并排标签换成标题右侧的库下拉，选项带「待学 N · 到期 M」两行信息。
+- **圆角统一**：原生 `<select>` 的弹出层是系统方角、CSS 改不到，全部换成自定义 `Select`（按钮与弹出列表都是圆角，键盘 ↑↓/Enter/Esc、点外面关闭、空间不够时向上弹）。复选框仍是方角（允许的例外）。热力图格子/柱状图本身有 1~3px 圆角，保留。

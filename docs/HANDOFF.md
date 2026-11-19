@@ -92,6 +92,7 @@ src/main/db/
 src/main/index.ts  ← 启动、托盘（只统计当前库）、提醒、备份；迁移前备份；30 秒后后台刷新目录/价格
 src/main/tray-bridge.ts ← ipc.ts → index.ts 的托盘刷新回调（避免循环 import）
 src/renderer/src/components/DeckPicker.tsx ← 库标签栏（DeckTabs）与下拉（DeckSelect）
+src/renderer/src/components/Select.tsx ← 自定义下拉（原生 select 弹出层是系统方角，统一用它）
 src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
 src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分 + 顶部库过滤
@@ -134,14 +135,15 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ### 5.2 多个库（2026-11-19，`feat/decks`，完成）
 
-实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的六件事**：
+实现记录（改动清单、与计划的差异、验收对照）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的七件事**：
 
 1. **作用域只有一个入口**：所有按库过滤都走 `deckScope(column, deckId)` / `deckInClause`（`src/main/db/decks.ts`）。`deckId = null` 表示全部库；新加查询时先想清楚该不该拼它。
 2. **当前库是 `settings.currentDeckId`**：主进程托盘、提醒、导入默认目标都读它；渲染层切库走 `App.setDeck()`（写 settings + 刷新统计）。统计页顶部的「统计范围」是**独立过滤器**，不影响当前库。
-3. **笔记库标签栏切库会同时改当前库**；今日任务页的库标签只在总览页出现（答题中不允许切库）。
+3. **笔记库标签栏切库会同时改当前库**；今日任务页的库选择器在标题右侧（下拉），答题/学习过程中不提供切库。
 4. **没有撤销**：批量移动/复制/删除都不做撤销（2026-11-19 决定：操作简单，不值得多一套状态）；删除前对话框会写清后果。
 5. **迁移前备份已生效**：`openDb()` 之前 `backupBeforeMigrate()` 会写 `backups/wordmemo-pre-migrate-v<N>.db`（先 checkpoint WAL；同版本已有备份时保留旧的）。改 schema 记得升 `SCHEMA_VERSION`。
 6. **笔记库切库不再等 400ms**：只有搜索输入防抖 300ms；切库/排序立即请求，并按「库 + 排序 + 搜索词」缓存一份结果（`version` 变化即清空）。3500 份笔记的极端库仍有 230ms 首屏，虚拟化还没做（P2 #13）。
+7. **不要再用原生 `<select>`**：它的弹出层是系统样式（方角、CSS 改不到），全部换成 `src/renderer/src/components/Select.tsx`（圆角列表、键盘 ↑↓/Enter/Esc、空间不够向上弹）；复选框保留方角是有意的。
 
 ### 5.3 多供应商残留欠账（不阻塞便携版）
 

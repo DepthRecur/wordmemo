@@ -13,6 +13,7 @@ import { KIND_LABEL } from '@shared/types'
 import { displayPhonetic } from '@shared/normalize'
 import { AudioButton } from '../components/AudioButton'
 import { DeckTabs } from '../components/DeckPicker'
+import { Select } from '../components/Select'
 import { Badge, Button, Empty, Field, Modal, Spinner, Toggle } from '../components/UI'
 import type { Navigate, Notify } from '../App'
 import { cls, formatDate } from '../lib/utils'
@@ -516,11 +517,16 @@ export default function Notes({
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <select className="select" style={{ width: 140 }} value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
-            <option value="noteDate">按上课日期</option>
-            <option value="createdAt">按导入时间</option>
-            <option value="title">按标题</option>
-          </select>
+          <Select
+            value={sort}
+            width={140}
+            options={[
+              { value: 'noteDate', label: '按上课日期' },
+              { value: 'createdAt', label: '按导入时间' },
+              { value: 'title', label: '按标题' }
+            ]}
+            onChange={(next) => setSort(next as typeof sort)}
+          />
           <Button onClick={() => void load()} title="刷新">
             <RefreshCw size={15} />
           </Button>
@@ -882,17 +888,14 @@ export default function Notes({
         <div className="col">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <Field label="类型">
-              <select
-                className="select"
+              <Select
                 value={itemKind}
-                onChange={(e) => setItemKind(e.target.value as ItemKind)}
-              >
-                {(Object.keys(KIND_LABEL) as ItemKind[]).map((kind) => (
-                  <option key={kind} value={kind}>
-                    {KIND_LABEL[kind]}
-                  </option>
-                ))}
-              </select>
+                options={(Object.keys(KIND_LABEL) as ItemKind[]).map((kind) => ({
+                  value: kind,
+                  label: KIND_LABEL[kind]
+                }))}
+                onChange={(next) => setItemKind(next as ItemKind)}
+              />
             </Field>
             <Field label="词性（如 v. / n.）">
               <input
@@ -1193,18 +1196,18 @@ export default function Notes({
       >
         <div className="col">
           <div>目标库：</div>
-          <select
-            className="select"
-            value={batchDeckId ?? ''}
-            onChange={(e) => setBatchDeckId(Number(e.target.value))}
-          >
-            {decks.map((deck) => (
-              <option key={deck.id} value={deck.id}>
-                {deck.name}
-                {deck.id === filter ? '（当前筛选的库）' : ''}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={batchDeckId === null ? '' : String(batchDeckId)}
+            options={decks.map((deck) => ({
+              value: String(deck.id),
+              label: deck.name,
+              hint:
+                deck.id === filter
+                  ? '当前筛选的库'
+                  : `${deck.noteCount} 份笔记 · 待学 ${deck.todayNew} · 到期 ${deck.dueCount}`
+            }))}
+            onChange={(next) => setBatchDeckId(Number(next))}
+          />
           <div className="hint">
             只改笔记的归属，词条、卡片和复习进度一个都不动；目标库里还没学的词会立刻进入它的今日任务。
           </div>
@@ -1248,17 +1251,15 @@ export default function Notes({
       >
         <div className="col">
           <div>目标库：</div>
-          <select
-            className="select"
-            value={batchDeckId ?? ''}
-            onChange={(e) => setBatchDeckId(Number(e.target.value))}
-          >
-            {decks.map((deck) => (
-              <option key={deck.id} value={deck.id}>
-                {deck.name}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={batchDeckId === null ? '' : String(batchDeckId)}
+            options={decks.map((deck) => ({
+              value: String(deck.id),
+              label: deck.name,
+              hint: `${deck.noteCount} 份笔记 · 待学 ${deck.todayNew} · 到期 ${deck.dueCount}`
+            }))}
+            onChange={(next) => setBatchDeckId(Number(next))}
+          />
           <div className="hint">
             复制的是笔记内容（标题、日期、标签、原文与词条关联）；这些词的学习进度是共享的，不会重新开始。复制进同一个库会得到一份同名副本。
           </div>
