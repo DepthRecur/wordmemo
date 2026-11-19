@@ -1,7 +1,7 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
 > 最后更新：2026-11-19　当前分支：`master`（`feat/decks` 已合并）　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`origin` 已配置为 `https://github.com/DepthRecur/wordmemo.git`，但本机访问 github.com 超时（无代理），**尚未 push**；网络可用后执行 `git push -u origin master feat/decks` 即可。
+> **推送状态**：已 push（`master` 与 `feat/decks`）；远端仓库 `https://github.com/DepthRecur/wordmemo` 目前是 **private**（2026-11-19 为首次 push 创建），公开前按 §10 清理。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
