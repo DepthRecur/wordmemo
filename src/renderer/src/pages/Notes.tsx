@@ -65,6 +65,8 @@ export default function Notes({
   const [expandedTerms, setExpandedTerms] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  // 输入框的即时值 search → 防抖后的 term；切库/排序不经过它，立即请求
+  const [term, setTerm] = useState('')
   const [sort, setSort] = useState<'noteDate' | 'createdAt' | 'title'>('noteDate')
   const [detail, setDetail] = useState<NoteDetail | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
@@ -87,25 +89,42 @@ export default function Notes({
   const [confirmPhonetics, setConfirmPhonetics] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<NoteSummary | null>(null)
   const requestId = useRef(0)
+  /** 每个「库 + 排序 + 搜索词」的上一份结果：来回切库时先显示缓存，再后台刷新 */
+  const listCache = useRef(new Map<string, { notes: NoteSummary[]; items: Item[]; terms: string[] }>())
+  const cacheKey = `${filter ?? 'all'}|${sort}|${term.trim()}`
 
   const load = useCallback(async () => {
     const id = ++requestId.current
-    setLoading(true)
+    const key = cacheKey
+    const cached = listCache.current.get(key)
+    if (cached) {
+      // 有缓存就先画出来，绝不等网络/主进程
+      setNotes(cached.notes)
+      setItemResults(cached.items)
+      setExpandedTerms(cached.terms)
+      setLoading(false)
+    } else {
+      // 没缓存（第一次进这个库）：清掉上一份，避免标题是 A 库、列表还是 B 库
+      setNotes([])
+      setItemResults([])
+      setExpandedTerms([])
+      setLoading(true)
+    }
     try {
-      const term = search.trim()
-      if (!term) {
+      const keyword = term.trim()
+      let view: { notes: NoteSummary[]; items: Item[]; terms: string[] }
+      if (!keyword) {
         const list = await window.api.notes.list({ sort, order: 'desc', deckId: filter })
-        if (id !== requestId.current) return
-        setNotes(list)
-        setItemResults([])
-        setExpandedTerms([])
+        view = { notes: list, items: [], terms: [] }
       } else {
-        const result = await window.api.search.query(term, sort, filter)
-        if (id !== requestId.current) return
-        setNotes(result.notes)
-        setItemResults(result.items)
-        setExpandedTerms(result.expandedTerms)
+        const result = await window.api.search.query(keyword, sort, filter)
+        view = { notes: result.notes, items: result.items, terms: result.expandedTerms }
       }
+      if (id !== requestId.current) return
+      listCache.current.set(key, view)
+      setNotes(view.notes)
+      setItemResults(view.items)
+      setExpandedTerms(view.terms)
     } catch (err) {
       if (id === requestId.current) {
         notify(`加载笔记失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -113,11 +132,22 @@ export default function Notes({
     } finally {
       if (id === requestId.current) setLoading(false)
     }
-  }, [search, sort, filter, notify])
+  }, [cacheKey, filter, sort, term, notify])
+
+  // 数据被改过（version 变化）就丢掉缓存，避免显示旧列表
+  useEffect(() => {
+    listCache.current.clear()
+  }, [version])
+
+  // 只有输入搜索词才防抖；库/排序/刷新立即加载
+  useEffect(() => {
+    if (search === term) return
+    const timer = window.setTimeout(() => setTerm(search), 300)
+    return () => window.clearTimeout(timer)
+  }, [search, term])
 
   useEffect(() => {
-    const timer = setTimeout(() => void load(), 400)
-    return () => clearTimeout(timer)
+    void load()
   }, [load, version])
 
   // 筛选/搜索/排序变化时清空选区（PLAN-DECKS §7.1：全选只作用于当前结果）
@@ -235,7 +265,6 @@ export default function Notes({
       setEditing(false)
       setDetailOpen(false)
       onChanged()
-      void load()
     } catch (err) {
       notify(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     }
@@ -250,7 +279,6 @@ export default function Notes({
       setDetailOpen(false)
       onChanged()
       void refreshStats()
-      void load()
     } catch (err) {
       notify(`删除失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     }
@@ -388,7 +416,6 @@ export default function Notes({
       onChanged()
       await refreshDecks()
       void refreshStats()
-      void load()
     } catch (err) {
       notify(`移动失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
@@ -407,7 +434,6 @@ export default function Notes({
       onChanged()
       await refreshDecks()
       void refreshStats()
-      void load()
     } catch (err) {
       notify(`复制失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
@@ -425,7 +451,6 @@ export default function Notes({
       onChanged()
       await refreshDecks()
       void refreshStats()
-      void load()
     } catch (err) {
       notify(`删除失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
@@ -585,7 +610,7 @@ export default function Notes({
           </Button>
         </div>
 
-        {loading ? (
+        {loading && notes.length === 0 ? (
           <div className="empty">
             <Spinner />
           </div>
