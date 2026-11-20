@@ -452,9 +452,11 @@ WordMemo-Portable/
 
 ## 10. 实现记录
 
-### U0 便携版打包 + 启动器 v0（2026-11-19，`feat/portable`）
+### U0 便携版打包 + 启动器 v0（2026-11-19，`feat/portable`，已并入主线）
 
-**状态：完成。** `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB；解压后约 408 MB）。U1 / U2 / U3 未做。
+**状态：完成。** `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB；解压后约 408 MB）。U1 / U2 / U3 未做，起点见 §11。
+
+> **2026-11-20 复核**：U0 之后主线又进了多供应商修复、多个库第二轮修复（`BUGS-DECKS` 全部关闭）和自定义下拉的 portal 改造，`release/` 里的 zip 是这些修复**之前**打的。做 U1 验收前先重新 `npm run dist`，不要拿旧 zip 当基线。
 
 **落地内容**
 
@@ -487,7 +489,115 @@ WordMemo-Portable/
 
 **下一步**
 
-- **2026-11-20 用户指示：U1–U3 暂缓**，先保证无 Key 可用、再修两份 bug 清单（[BUGS-PROVIDERS](BUGS-PROVIDERS.md)、[BUGS-DECKS](BUGS-DECKS.md)）。恢复后再从这里继续。
-- **U1 兼容模式**：`sandbox-state.json` 探针 + `failStreak` 自愈 + 设置页开关；现在启动器无条件带 `--no-sandbox`。
+- **2026-11-20 用户指示**：U0 已完成，U1 → U2 → U3 现在恢复，交接清单见 §11。
+- **U1 兼容模式**（先做）：`sandbox-state.json` 探针 + `failStreak` 自愈 + 设置页开关；现在启动器无条件带 `--no-sandbox`，U1 要改成「只在 compatMode 时带」，否则"按需降级"没有意义。
 - **U2 自更新**：应用侧检查 `latest.json` → 下载 → 流式 sha256 → 解压 `update/app-new` → 写 `state.json`；启动器按 §3.11 七步换目录 + 回滚 + `error.log`。`update/` 目录已预留、`app/version.json` 已写。
 - **U3 CI 发版 + README 两条更新路径**：构建脚本已具备出 zip + sha256 的能力，`latest.json` 留给 U2/U3。
+
+---
+
+## 11. 交接：U1–U3 起点（2026-11-20）
+
+> 给接手的会话：先读 [HANDOFF.md](HANDOFF.md) 的 §1（命令）、§8（坑）、§9（开场提示词），再读本节。§3.11 是定稿方案，本节只写**从哪里下手、验收什么、别碰什么**。
+
+### 11.1 当前基线
+
+- 分支：`master`（= 之前的 `fix/decks-ui`，已包含 U0 + 多供应商修复 + 多库修复）。工作区应干净；`npm run typecheck` 0 错误、`npm test` 15 文件 / 150 项全绿、`npm run build` 通过。
+- 开始新分支：`git checkout -b feat/portable-u1`（U2 再 `feat/portable-u2`，U3 `feat/portable-u3`）。
+- 版本纪律：`package.json` 现在是 `0.3.0`。U1 可以不升版本（用户不可见的行为修复）；**U2 发版前升到 `0.4.0`**，并让 `app/version.json` 由构建脚本写入（`scripts/make-portable.mjs` 已这么做，别手改）。
+- 构建：`npm run dist`（约 1~2 分钟，产出 `release/WordMemo-<ver>-portable.zip` + `.sha256`）。`npm run dist:app` 只出 `win-unpacked`；`npm run launcher` 只重编启动器。
+- 测试数据：源码模式在 `.data/`，便携版在 `%APPDATA%\WordMemo`，两者不互通。做 U1/U2 验收前先确认 `%APPDATA%\WordMemo` 有可识别的数据（或先备份/改名），程序目录里不应该有 `*.db` / `settings.json` / `secrets*`。
+
+### 11.2 U1 兼容模式（先做，0.5~1 天）
+
+**目标**：这台必须 `--no-sandbox` 的机器解压即用；正常机器保持沙箱；启动器不再无条件降级。
+
+**落地建议**
+
+| 文件 | 改动 |
+|---|---|
+| `src/main/sandbox.ts`（新） | 读写 `userData/sandbox-state.json`：`{ compatMode, failStreak, probe: { pid, startedAt, ok } }`；`shouldDisableSandbox()`、`beginProbe()`、`markReady()`、`setCompatMode()`。用 tmp+rename 写，坏文件按默认值处理 |
+| `src/main/index.ts` | **模块顶层、`app.whenReady()` 之前**：`shouldDisableSandbox()` 为真时 `app.commandLine.appendSwitch('no-sandbox')` + `appendSwitch('disable-gpu-sandbox')`；`beginProbe()` 写 pid/startedAt/ok=false；窗口 `ready-to-show` 后 `markReady()`（ok=true、failStreak=0、清 probe） |
+| `scripts/Launcher.cs` | 读 `app/sandbox-state.json`（路径相对程序目录；userData 在 `%APPDATA%`，启动器没有 Electron 的 `app.getPath`，所以**判据文件要么放程序目录、要么由启动器按 `%APPDATA%\\WordMemo\\sandbox-state.json` 拼路径**——推荐后者，和数据同处）。只有 `compatMode === true` 才加 `--no-sandbox`；否则不加 |
+| 设置页「高级与诊断」 | 「兼容模式」开关 + 一句解释 + 「重新检测」（关掉后下次启动按正常模式试）；IPC：`sandbox:get` / `sandbox:setCompat` |
+| 首启提示 | 首次自动降级时给一条 `warn`（常驻铃铛）："检测到系统不支持沙箱，已切到兼容模式（功能不变，安全性略降）" |
+
+**关键判断**
+
+- 探针只在「`probe.ok === false` 且 pid 已不存在且 startedAt 距今 < 30 秒」时算一次失败，避免把正常退出/长时间运行算进去。
+- 连续 3 次失败才 `compatMode = true`；正常启动一次就清零。这个「先崩 3 次再自愈」是已知代价，写进 README/Issue 模板。
+- **启动器无条件传 `--no-sandbox` 会让 U1 失去意义**，必须改成按文件判断。第一次在新机器上崩 3 次后才切兼容模式，是 §3.3 三保险里的第 ③ 条在兜底。
+- 直接双击 `app/WordMemo.exe` 时启动器不参与：靠主进程的 `appendSwitch`（①）+ 探针（③）。
+
+**验收**
+
+1. 本机（沙箱不可用）：删掉 `%APPDATA%\WordMemo\sandbox-state.json` → 连续启动 3 次（前几次允许失败）→ 第 4 次双击启动器能开；文件里 `compatMode: true`；设置页能看到开关。
+2. 正常机器（或把 compatMode 手动置 false 后）：应用带沙箱启动，`process.argv` 里没有 `--no-sandbox`，`sandbox-state.json` 的 `failStreak = 0`。
+3. 三种入口都能开：启动器、直接双击 `app/WordMemo.exe`、开始菜单/快捷方式。
+4. `npm test` 覆盖 `sandbox.ts` 的判定函数（见 §6 的单元测试清单）。
+
+### 11.3 U2 自更新（1.5~2 天）
+
+**目标**：应用只下载+校验+解压；启动器换目录；失败回滚；数据不丢。
+
+**应用侧（`src/main/updater.ts` 新）**
+
+- 启动 60 秒后检查 `https://github.com/DepthRecur/wordmemo/releases/latest/download/latest.json`（静态资源，不吃 API 限额）；24h 一次；失败退避 1h→2h→4h→6h（可直接抄 Rocket.Chat 的 `updateCheckSchedule.ts`，MIT，36 行）。
+- `!app.isPackaged` 时整个模块不初始化（dev 下也没有 `app/version.json`）。
+- 流程：GET `latest.json` → 版本比较 → 下载 zip 到 `<程序目录>/update/<name>.zip`（**流式**算 sha256）→ 与 `latest.json.sha256` 比对 → 解压到 `update/app-new` → 校验 `app-new/WordMemo.exe` 和 `app-new/version.json` 的版本 → 写 `update/state.json = { ready: true, version, downloadedAt }` → 托盘/设置页提示「已下载，下次启动生效」。
+- **不要**在应用里替换 `app/`、不要 `quitAndInstall`、不要静默重启。
+- 解压优先用系统 `tar.exe -xf`（与 `make-portable.mjs` 一致，零依赖）；失败再评估 `adm-zip`（MIT）。下载中途失败要删半截文件。
+- 网络/403/404/JSON 坏掉：自动检查静默，手动检查给人话原因；45s 超时 + 一次重试。
+
+**启动器侧（`scripts/Launcher.cs` 扩到 ~250 行）**
+
+严格按 §3.11 的 7 步：
+1. 读 `app/version.json` 与 `update/state.json`；`state.version` 不新于当前 → 删 `app-new`，直接启动。
+2. 校验 `app-new`（exe + version.json 版本一致）。
+3. 上次的 `app-old` 存在 → 删（说明上次换成功后启动过）。
+4. `app` → `app-old`（同盘 rename）。
+5. `app-new` → `app`。
+6. 启动 `app/WordMemo.exe`（清 `ELECTRON_RUN_AS_NODE`；是否带 `--no-sandbox` 看 U1 的 compatMode）。
+7. 写 `update/state.json = { ready:false }`；`app-old` 保留到下次启动再删。
+
+任一步失败：回滚 `app-old → app`，写 `update/error.log`，启动旧版并提示「更新失败，已用回旧版」。
+
+**`latest.json` 格式（我们自定义，不用 `latest.yml`）**
+
+```json
+{ "version": "0.4.0", "zip": "WordMemo-0.4.0-portable.zip", "sha256": "…", "notes": "修复…" }
+```
+
+**验收**（对应 §5 U2 的四条）：0.4.0 解压 → 发 0.4.1 → 提示 → 下载 → 重启 → 启动器换目录 → 版本号变、词库/进度/设置全在；sha256 改坏 → 不产生 `app-new`；`app-new` 半截 → 启动器回滚且能开；断网 → 不报错不卡启动。
+
+**坑**
+
+- `update/` 在**程序目录**里，便携版可能被解压到只读位置（`Program Files`、只读 U 盘）→ 下载前先探测可写，失败就只提示「手动下载」。
+- 版本比较用 semver 风格（`0.1.10 > 0.1.9`），不要字符串比较；预发布号按「比同版本正式版小」处理。
+- 下载/解压期间不要让用户退出后留下半截 `app-new`：启动器第 2 步校验不过就删。
+- `app-old` 必须保留到**下一次启动成功后**再删，否则换完第一次启动崩溃就没有回滚副本。
+
+### 11.4 U3 CI 发版 + 路线 B（1 天）
+
+- `.github/workflows/release.yml`：只 `tag v*` 触发（+ 手动 dry-run）；`npm ci` → `typecheck` → `test` → `build` → `npm run dist` → 生成 `latest.json`（版本、zip 名、sha256、notes）→ 上传 `WordMemo-x.y.z-portable.zip`、`.sha256`、`latest.json` 到 Release。
+- `permissions: contents: write`；**不要** PR 触发；dry-run 不发布。
+- README：写清自动（正常）与手动（关程序 → 解压覆盖 `app/`）两条路；数据在 `%APPDATA%\WordMemo`，删程序目录不删词库；SmartScreen「更多信息 → 仍要运行」截图；sha256/VirusTotal。
+- Release Notes 三行：是否迁移数据（U1/U2 不改 schema，U3 发版时确认）、是否不可逆、修了什么。
+- 验收：Release 三件套齐全；从零解压能用；按 README 手动覆盖也能用；CI 在 test 失败时不发布。
+
+### 11.5 单元测试清单（`tests/updater.test.ts` 新）
+
+- 版本比较（`0.1.10 > 0.1.9`、预发布号、相等）。
+- 跳过版本（`skippedVersions` 数组；手动检查穿透跳过）。
+- 检查节流（24h 内不重复；失败退避 1h→6h；时钟回拨）。
+- 兼容模式判定（给定 `sandbox-state.json` 内容与 pid 状态 → 是否 `compatMode`）。
+- 备份命名/触发（复用 `backupBeforeMigrate` 的思路，U2 不需要新迁移）。
+- 不测：真实下载、真实换目录（放手动验收清单）。
+
+### 11.6 明确不要做
+
+- 不要引入 `electron-updater` / NSIS / `latest.yml` / 差分下载（§3.1~3.10 只是资料）。
+- 不要签名、不要自建更新服务器/镜像、不要遥测、不要强制更新、不要静默重启。
+- 不要动 `userData` 位置（`%APPDATA%\WordMemo`）；不要让数据落进程序目录。
+- 不要把 `app/` 的替换放进 Electron 进程里做。
+- 不要在 U1 里顺手改其它功能（本版只做兼容模式）。

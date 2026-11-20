@@ -1,22 +1,22 @@
-# 交接文档（给下一个会话 / 未来的自己）
+﻿# 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-20　当前分支：`fix/providers-bugs`（便携版 U0 在 `feat/portable`，未合并）　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 与 `feat/decks` 已 push；`feat/portable` 只在本地（2026-11-19 完成 U0）。远端仓库 `https://github.com/DepthRecur/wordmemo` 目前是 **private**（2026-11-19 为首次 push 创建），公开前按 §10 清理。
+> 最后更新：2026-11-20（第二轮修复后）　当前分支：`master`（已并入 `fix/decks-ui`：U0 + 供应商修复 + 多库修复）　仓库：`DepthRecur/wordmemo`
+> **推送状态**：`master` 已 push 到远端（private）；`feat/decks`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。远端仓库 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成，第三个完成 U0：
-- **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
-- **多个库**（2026-11-19，已合并 master）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库；后续打磨：删批量撤销、切库性能（10~30ms）、今日任务标题右侧库下拉、原生 select 全换自定义圆角下拉。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
-- **便携版 U0**（2026-11-19，`feat/portable`）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器 v0 可启动；数据固定在 `%APPDATA%\WordMemo`。**U1 兼容模式 / U2 自更新 / U3 CI 未做**（2026-11-20 用户指示暂缓）。实现记录与四个坑见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。
-- **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；图片/语义判分等 AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用。已去掉常驻红条、把导入提示降级为「解析提示」、无 Key 不请求价格目录（见 §5.6）。
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成并冻结，第三个完成 U0（便携打包 + 启动器 v0），**下一步是 U1 兼容模式**：
+- **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。bug 清单已处理完（P-07 决定不修，见 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)）。
+- **多个库**（2026-11-19 完成；2026-11-20 第二轮修 bug）：`decks` 表 + 全部查询按库作用域、每库新词额度、批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库。第二轮修完 [BUGS-DECKS.md](BUGS-DECKS.md) 全部条目（考试范围悬空、统计口径、空范围、删当前库、导入目标库、下拉被弹窗裁剪），`tests/decks.test.ts` 扩到 21 项。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
+- **便携版 U0**（2026-11-19，已并入主线）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器 v0 只负责拉起 `app\WordMemo.exe`；数据固定在 `%APPDATA%\WordMemo`。**U1 兼容模式 / U2 自更新 / U3 CI 未做**，交接清单见 [PLAN-UPDATE §11](PLAN-UPDATE.md)。
+- **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用（见 §5.6）。
 
-**待修清单**：多供应商与多个库的 bug 已分别整理成 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 和 [BUGS-DECKS.md](BUGS-DECKS.md)，交给对应会话修；本会话只做无 Key 打磨。
+**3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
 
-下一个要做的：按用户指示修两份 bug 清单；**U1 → U2 → U3 暂缓**，等用户明确恢复。
+下一个要做的：**U1 兼容模式**（[PLAN-UPDATE §11.2](PLAN-UPDATE.md)），然后 U2 自更新、U3 CI。
 
 ---
 
@@ -26,7 +26,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，12 个测试文件（118 项）必须全绿
+npm test             # vitest，15 个测试文件（150 项）必须全绿
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -67,7 +67,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 | [PLAN-NEXT.md](PLAN-NEXT.md) | 排序、共同约束、**已定/待定清单**、**坑点清单（§7）**、验证条件（§9） |
 | [PLAN-PROVIDERS.md](PLAN-PROVIDERS.md) | 做多供应商时；**§13 是当前实现记录与下一步** |
 | [PLAN-DECKS.md](PLAN-DECKS.md) | 做多个库时 |
-| [PLAN-UPDATE.md](PLAN-UPDATE.md) | 做便携版/自更新时（§3.11 是定稿方案、**§10 是 U0 实现记录**） |
+| [PLAN-UPDATE.md](PLAN-UPDATE.md) | 做便携版/自更新时（§3.11 定稿方案、**§10 是 U0 实现记录、§11 是 U1–U3 交接**） |
 | [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) | 修多供应商 bug 时（清单，交给对应会话） |
 | [BUGS-DECKS.md](BUGS-DECKS.md) | 修多个库 bug 时（清单，交给对应会话） |
 | [PLAN-SYNC.md](PLAN-SYNC.md) | 做同步时（§3.5 口令加密、S0 重放验证） |
@@ -103,11 +103,11 @@ src/main/index.ts  ← 启动、托盘（只统计当前库）、提醒、备份
 src/main/tray-bridge.ts ← ipc.ts → index.ts 的托盘刷新回调（避免循环 import）
 src/main/reviewSession.ts ← 复习现场（离开后回来接着上一张卡）→ userData/review-session.json
 src/renderer/src/components/DeckPicker.tsx ← 库标签栏（DeckTabs）与下拉（DeckSelect）
-src/renderer/src/components/Select.tsx ← 自定义下拉（原生 select 弹出层是系统方角，统一用它）
+src/renderer/src/components/Select.tsx ← 自定义下拉；列表 portal 到 body + fixed 定位（弹窗里也不会被 overflow 裁掉）
 src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
 src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分 + 顶部库过滤
-scripts/Launcher.cs   ← 便携版启动器（v0：只启动 app\WordMemo.exe；U2 再加换目录）
+scripts/Launcher.cs   ← 便携版启动器（v0：只启动 app\WordMemo.exe；U1 改成按 sandbox-state.json 决定是否带 --no-sandbox；U2 再加换目录）
 scripts/build-launcher.mjs ← 用 Windows 自带 csc.exe 编译启动器（不需要 SDK/新依赖）
 scripts/make-portable.mjs  ← npm run dist：build → electron-builder --dir → 组装 → zip + sha256
 scripts/portable-README.txt ← zip 里的使用/数据/手动更新说明（{{VERSION}} 构建时替换）
@@ -120,7 +120,7 @@ tests/
   ai-models.test.ts     ← 6 项：模型列表的公开名合并与目录边界
   ai-cache-key.test.ts  ← 2 项：ai_cache 唯一键重建
   ai-db.test.ts         ← 5 项：provider 列 + 老库迁移回填
-  decks.test.ts         ← 12 项：库作用域/额度/批量/合并分裂/删库/老库迁移+迁移前备份
+  decks.test.ts         ← 21 项：库作用域/额度/批量/合并分裂/删库引用（exam scope/草稿/当前库）/统计口径/空范围/导入目标库/老库迁移+迁移前备份
   settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存
   settings-ai.test.ts   ← 4 项：ai 深合并 + apiKeySet 跟随默认角色
   review-session.test.ts ← 5 项：复习现场存取/过期/坏文件/清理（见 §5.8）
@@ -148,9 +148,9 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 **GLM 的坑（已修，别踩回去）**：`glm-5.x-flash` **强制思考**，不能发 `thinking: {type:'disabled'}`（中文 400）；GLM 现在 `whenOff: 'omit'`（不需要思考时干脆不发这个字段）。另外「保存并测试」的 max_tokens 从 8 提到 256，否则思考模型会把 token 全花在推理上返回空内容。
 
-### 5.2 多个库（2026-11-19，master，完成）
+### 5.2 多个库（2026-11-19 完成；2026-11-20 第二轮修 bug）
 
-提交：`edf98bc`（主体）、`0aa933d`（真实老库迁移记录）、`46869f8`（删批量撤销）、`08e58da`（切库性能）、`e8fb3db`（库下拉 + 圆角下拉）。
+提交：`edf98bc`（主体）、`0aa933d`（真实老库迁移记录）、`46869f8`（删批量撤销）、`08e58da`（切库性能）、`e8fb3db`（库下拉 + 圆角下拉）、`6bb4380`（下拉 portal）、`dd304b6`（第二轮引用/统计/导入修复）、`48a2d0e`（测试）、`9f3262e`（文档）。
 
 实现记录（改动清单、与计划的差异、验收对照、二次打磨）在 [PLAN-DECKS §15](PLAN-DECKS.md)，这里只写**接手时最容易忘的七件事**：
 
@@ -159,14 +159,14 @@ docs/               ← 四份计划 + 调研 + 本文件
 3. **笔记库标签栏切库会同时改当前库**；今日任务页的库选择器在标题右侧（下拉），答题/学习过程中不提供切库。
 4. **没有撤销**：批量移动/复制/删除都不做撤销（2026-11-19 决定：操作简单，不值得多一套状态）；删除前对话框会写清后果。
 5. **迁移前备份已生效**：`openDb()` 之前 `backupBeforeMigrate()` 会写 `backups/wordmemo-pre-migrate-v<N>.db`（先 checkpoint WAL；同版本已有备份时保留旧的）。改 schema 记得升 `SCHEMA_VERSION`。
-6. **笔记库切库不再等 400ms**：只有搜索输入防抖 300ms；切库/排序立即请求，并按「库 + 排序 + 搜索词」缓存一份结果（`version` 变化即清空）。3500 份笔记的极端库仍有 230ms 首屏，虚拟化还没做（P2 #13）。
-7. **不要再用原生 `<select>`**：它的弹出层是系统样式（方角、CSS 改不到），全部换成 `src/renderer/src/components/Select.tsx`（圆角列表、键盘 ↑↓/Enter/Esc、空间不够向上弹）；复选框保留方角是有意的。
+6. **笔记库切库不再等 400ms**：只有搜索输入防抖 300ms；切库/排序立即请求，并按「库 + 排序 + 搜索词」缓存一份结果（`version` 变化即清空）。3500 份笔记的极端库复测为 274ms 首屏 / 滚动 60fps，**列表不需要虚拟化**（§5.10）。
+7. **不要再用原生 `<select>`**：它的弹出层是系统样式（方角、CSS 改不到），全部换成 `src/renderer/src/components/Select.tsx`。列表 **portal 到 body + fixed**（弹窗的 `.modal-body` 是 overflow:auto，留在里面会被裁掉）；只有视口下方放不下且上方更宽裕才向上翻。复选框保留方角是有意的。
 
 ### 5.3 多个库的已知剩余与「已决定不做」
 
 - **库颜色：不做（2026-11-19 决定）**。理由：库少时看名字更快；库多时预设色板不够用，颜色一多、相近色反而降低辨识效率。`decks.color` 列保留（同步/以后可能用），但本版不提供取色 UI，也不要在界面里渲染颜色。
 - **按库汇总表：不做（2026-11-19 决定）**。没有看出对应需求；每库计数已经在笔记库标签和「设置 → 笔记库」的行里，统计页保留「统计范围」过滤即可。
-- **3500 份笔记的列表未虚拟化**：实测首屏 230ms（`notes.list` 73ms），先记在 PLAN-NEXT P2 #13；正常使用（每库几十份笔记）是 10~30ms。
+- ~~3500 份笔记的列表未虚拟化~~：2026-11-20 实测（§5.10）结论是**不需要**，P2 #13 的列表部分关闭。
 - **考试范围 UI 只有「整库 / 指定笔记」**：`cardsInScope` 支持 `tags` 且与库是 AND，但创建考试的表单没暴露标签条件（首版原本也没有）。
 - **库数量 >10 的「建议合并」提示**没做（PLAN-DECKS §12 的可选项）。
 
@@ -177,7 +177,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 冒烟复制数据目录时必须连 **`Local State`** 一起复制（safeStorage 密钥在那）。
 - `glm-5.x-flash` 判分约 22 秒（强制思考）；想快就让用户换 `glm-4.6` / `glm-4.7`。
 
-### 5.5 便携版 U0（2026-11-19，`feat/portable`，完成）
+### 5.5 便携版 U0（2026-11-19，已并入主线，完成）
 
 `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ `.sha256`；启动器 v0、`app/version.json`、数据路径都已落定。实现记录与验收见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。接手时最容易忘的五件事：
 
@@ -204,7 +204,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 - **库管理去掉「保存」按钮**：设置 → 笔记库的库行改成改动 500ms 后自动落库（和本页「改动会自动保存」一致）；空名字不写（避免边打字边报「库名不能为空」），写失败保留草稿并报错，删库时丢掉该行草稿。`SettingsPage.tsx` 的 `saveDeckRow` 已换成 `flushDeckDrafts` + 防抖 effect。
 - **允许一个库都没有**：`removeDeck(id, null)` 删最后一个库时把笔记 `deck_id` 置 0（未归类，不删笔记），并更新 `import_drafts` 与 `settings.currentDeckId`；`migrateDecks` 只在**老库迁移**时补默认库，之后启动不会自己长出来；`settings.currentDeckId` 允许 0。UI：删库对话框对最后一个库给"笔记变未归类"的说明，笔记库/导入页/今日任务都有"还没有库"的空状态。
 - **笔记库列表瘦身**：删掉「到期」列和标题后的黄色「N 待核对」标签（`Notes.tsx`）；到期数仍在库标签栏、今日任务、统计页出现。
-- `npm test` 现在是 **15 文件 142 项**（本文其它地方写的 12/118 是旧数字）。
+- `npm test` 现在是 **15 文件 150 项**（本文其它地方出现的 12/118/142 都是旧数字）。
 
 ### 5.8 复习现场恢复（2026-11-20）
 
@@ -220,7 +220,31 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 已知没做：**学习阶段的进度不在现场里**（`rateLearn` 本来就即时写库，回来会从下一个没学的词继续，只是要先点一次「开始学习」）。
 - 单元测试：`tests/review-session.test.ts`（存取往返、未提交状态、过期作废、坏文件、清理）。
 
-多供应商与多个库的待修问题分别在 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 与 [BUGS-DECKS.md](BUGS-DECKS.md)；**U1–U3 按用户 2026-11-20 指示暂缓**，不要主动开工。
+### 5.9 多个库第二轮修 bug（2026-11-20）
+
+[BUGS-DECKS.md](BUGS-DECKS.md) 的 D-01~D-07 全部关闭（D-02/D-05/D-07 与 D-03 界面部分此前已修，这次补测试/清死代码）。改动集中在四处：
+
+1. **下拉框**：`Select` 列表改 portal + fixed，弹窗里不再向上弹、不再被 `.modal-body` 裁掉；只有视口下方放不下才上翻（`6bb4380`）。
+2. **删库后的引用**：`removeDeck` 同一事务里改写 `exams.scope.deckId`（删最后一个库则删掉该字段 = 全部库）；`currentDeckId` 的写入挪出事务；`settings.json` 改 tmp+rename 原子写。
+3. **统计与范围**：`dashboardStats` 的「今天已复习/总复习数」按库（join cards + `deckScope`）；`cardsInScope` 区分 `undefined`（不过滤）与 `[]`（空集合）；删掉没人用的 `NoteSummary.dueCount`。
+4. **导入目标库**：`saveDraft` 可写 `import_drafts.deck_id`；导入页下拉显示「打开草稿的库」，改下拉同时改草稿与当前库，新文件按下拉显示值入库。
+
+`tests/decks.test.ts` 12 → 21 项；`npm test` 15 文件 150 项。细节与验收表见 [BUGS-DECKS 修复记录](BUGS-DECKS.md) 与 [PLAN-DECKS §15.6](PLAN-DECKS.md)。
+
+### 5.10 3500 压力测试（2026-11-20，只测不改）
+
+测试 profile 造数：一个库 3500 份笔记；另一个库 1 份笔记 3500 个词条。`npm run build` + Electron + CDP 计时。
+
+| 场景 | 结果 |
+|---|---|
+| `notes.list`（3500 份，IPC 含 SQL） | 89ms |
+| 笔记列表首屏 / 滚动 | 274ms / 中位 16.6ms（60fps） |
+| 笔记详情首屏（3500 词条） | 802ms（10.2 万 DOM 节点） |
+| 笔记详情滚动 | 中位 33.4ms（约 30fps） |
+
+结论：**列表不需要虚拟化**；**详情是真热点**。详情行高随释义/搭配变化，真虚拟化要么固定行高截断内容、要么变高测量易跳行，这次没动代码；优先考虑「详情加筛选/搜索」或「默认只渲染前 N 条」。完整记录见 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
+
+多供应商与多个库的 bug 清单都已关闭（[BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)、[BUGS-DECKS.md](BUGS-DECKS.md)）；**下一步是 U1 兼容模式**，见 [PLAN-UPDATE §11](PLAN-UPDATE.md)。
 
 ---
 
@@ -228,7 +252,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 | 功能 | 第一步 | 注意 |
 |---|---|---|
-| 便携版 | U0 已完成；下一步 **U1 兼容模式**（`sandbox-state.json` 探针 + 设置页开关） | 数据必须留在 `%APPDATA%\WordMemo`；打包前先确认程序目录没有数据 |
+| 便携版 | U0 已完成；下一步 **U1 兼容模式**（`sandbox-state.json` 探针 + 设置页开关 + 启动器按 compatMode 传参），交接见 [PLAN-UPDATE §11.2](PLAN-UPDATE.md) | 数据必须留在 `%APPDATA%\WordMemo`；打包前先确认程序目录没有数据；先重新 `npm run dist` |
 | 同步 | S0：`uid` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
 
 ---
@@ -274,7 +298,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 3. **批量删除连带删词条**：`deleteNotes` 会清理孤儿 items（卡片/复习记录一起没）；对话框已写明；删除**不可恢复**。
 4. **便携版数据不能放程序目录**：dev 分支仍写 `.data`；打包版由 `src/main/index.ts` 的 `else` 分支显式 `setPath('userData', %APPDATA%\WordMemo)`。改动这段前先看 PLAN-UPDATE §3.11。
 5. **库的作用域漏一处就串库**：新查询一律用 `deckScope()`/`deckInClause()`；审计 `grep "FROM cards\|FROM items\|FROM notes"`。`deckId = null` = 全部库，别把 null 当 0。
-6. **`--no-sandbox` 是这台机器的硬需求**：启动器现在无条件传；U1 才改成按 `sandbox-state.json` 探测（代码开关 + 启动器 + 崩溃探针）。
+6. **`--no-sandbox` 是这台机器的硬需求**：启动器 v0 无条件传，U1 要改成按 `sandbox-state.json` 的 `compatMode` 判断（代码侧在 `app.whenReady()` 之前 `appendSwitch`，启动器侧读同一文件；探针连续 3 次失败才降级）。
 7. **electron-builder 25 打不出能跑的包**：依赖树漏 hoisted 包（`call-bind-apply-helpers`），exceljs 启动即崩；必须 26.18+，别退回。
 8. **打包版的 `%APPDATA%\WordMemo` 与源码模式的 `.data` 不互通**：切换/迁移要手动复制（含 `Local State`）；删程序目录不影响 `%APPDATA%`。
 9. **今日任务的队列每次都会重新抽方向**：`dailyPlan` 里 `oneCardPerItem` 用 `Math.random` 从同一个词的多个方向里挑一张，所以两次 `daily()` 的「第 3 张」可能不是同一张卡。任何「按 cardId 回队列里找回来」的写法都会失效（复习现场恢复就是这么踩的，见 §5.8）；要恢复某张具体卡就把它连同词条一起存下来。
@@ -285,32 +309,29 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
-再读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）；
-要做「便携版」时读 docs/PLAN-UPDATE.md（§3.11 是定稿方案、§10 是 U0 实现记录），要动多个库时读 docs/PLAN-DECKS.md §15；
-多供应商已冻结（PLAN-PROVIDERS §13），多个库已完成（PLAN-DECKS §15），两者都只修 bug。
+再读 docs/PLAN-UPDATE.md：§3.11 是定稿方案，§10 是 U0 实现记录，§11 是 U1–U3 的交接清单；
+需要背景时读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）。
+
+当前状态（2026-11-20）：master 已包含全部已完成工作——多供应商（冻结）、多个库 + 第二轮 bug 修复、
+便携版 U0（启动器 v0 + zip + app/version.json）。typecheck 0 错误、npm test 15 文件 150 项全绿、npm run build 通过。
+下一步：从 master 开 feat/portable-u1，做 U1 兼容模式；验收后再做 U2 自更新、U3 CI。
+release/ 里现有的 0.3.0 zip 是旧代码打的，先重新 npm run dist。
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
 - 只做 DeepSeek/OpenAI/Gemini/GLM；不装 pi-ai；不做自定义端点
-- 便携版 zip + 启动器换目录；不做安装包、不做签名、不用 electron-updater
+- 便携版 zip + 启动器换目录；不做安装包、不做签名、不用 electron-updater / latest.yml
+- 数据永远在 %APPDATA%\WordMemo；应用只下载，启动器换目录；不做静默重启
 - 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-当前状态：多个库已合并到 master；便携版 U0 在 feat/portable 完成
-（typecheck 0 错误、npm test 12 文件 118 项全绿；从解压 zip 启动验证过数据落在 %APPDATA%\WordMemo）。
-多供应商：四家可配 Key、角色路由 default/vision、设置页七分区、模型可搜索下拉、
-模型目录与价格自动化、按家统计、npm run ai-smoke；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
-多个库：decks 表 + notes.deck_id + 默认库迁移（迁移前备份）、查询全部按库作用域、
-笔记库批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库；切库 10~30ms、
-原生 select 已换成自定义圆角下拉（Select.tsx）。
-便携版 U0：npm run dist 出 WordMemo-0.3.0-portable.zip + 启动器 v0 + app/version.json；
-electron-builder 已升 26.18（25 的依赖树 bug 会让包打不开）。
-无 Key 模式：2026-11-20 已修掉常驻红条/导入待处理项/价格目录请求；没有 Key 也能正常用。
+U1 的关键点（详见 PLAN-UPDATE §11.2）：
+- 主进程模块顶层、app.whenReady() 之前读 userData/sandbox-state.json，按 compatMode appendSwitch；
+- probe 只在「上次 ok=false 且 pid 不存在且 startedAt < 30 秒」计一次失败，连续 3 次才 compatMode=true；
+- 启动器不能再无条件传 --no-sandbox，必须读同一个文件判断；
+- 验收：本机解压即可用、正常机器保持沙箱、三种入口都能开、单测覆盖判定函数。
 
-待修清单（交给各自的会话）：docs/BUGS-PROVIDERS.md、docs/BUGS-DECKS.md。
-
-下一步：按用户指示先修上面两份 bug 清单；便携版的 U1 → U2 → U3 暂缓，除非用户明确恢复。
-从 feat/portable 继续；做完在对应文档里记一笔并 commit（git commit -s）。
+每做完一阶段：npm run typecheck + npm test + npm run build，在 PLAN-UPDATE §10 记一笔，git commit -s。
 ```
 
 ---
@@ -318,10 +339,15 @@ electron-builder 已升 26.18（25 的依赖树 bug 会让包打不开）。
 ## 10. 维护纪律
 
 - **一次只做一个功能**，做完在对应计划的「实现记录」里写一笔，然后 commit。
-- 建议每个功能开一个分支：`feat/providers`、`feat/decks`、`feat/portable`、`feat/sync`。
+- 建议每个功能开一个分支：`feat/providers`、`feat/decks`、`feat/portable-u1`、`feat/portable-u2`、`feat/portable-u3`、`feat/sync`。
 - 提交信息用 `feat|fix|refactor|docs(scope): ...`。
 - 贡献者用 DCO（`git commit -s`），不引入 CLA。
 - **便携版产物不进 git**：`release/` 与 `WordMemo-Portable/` 都已 gitignore；发版时只上传 `WordMemo-x.y.z-portable.zip` + `.sha256`。
 - **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
 - **用户可见消息的级别**（2026-11-20 定）：错误 = 功能结果出错/不可用（红色、常驻铃铛）；警告 = 异常但不影响功能（黄色/内嵌提示、不常驻）；提示 = 成功、进度、少做一个前置动作。细节与判定顺序见 [MESSAGES.md](MESSAGES.md)，**改文案前先按它定级**，不要为了让提示显眼就升成 `err`。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。
+
+
+
+
+
