@@ -621,7 +621,14 @@ export default function SettingsPage({
                             onChange={(id) => patchProvider(p.id, { model: id })}
                           />
                         </Field>
-                        <Field label="Base URL" hint="留空 = 官方端点；只有代理/中转才需要改">
+                        <Field
+                          label="Base URL"
+                          hint={
+                            p.fixedCatalogUrl
+                              ? '只影响聊天请求；模型目录固定从官方端点拉取'
+                              : '留空 = 官方端点；只有代理/中转才需要改'
+                          }
+                        >
                           <input
                             className="input"
                             value={cfg.baseUrl ?? ''}

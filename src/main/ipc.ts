@@ -40,6 +40,7 @@ import { semanticSearch } from './search'
 import { lookupPhonetic } from './media/phonetic'
 import { getDb } from './db/connection'
 import { testApiKey } from './ai/client'
+import { muteBudgetNotice } from './ai/budget'
 import { aiSettingsInfo } from './ai/info'
 import { refreshCatalog } from './ai/catalog'
 import { refreshPricing } from './ai/pricing'
@@ -109,6 +110,7 @@ export function registerIpc(): void {
     testApiKey(asProviderId(provider), typeof key === 'string' ? key : undefined)
   )
   ipcMain.handle('settings:aiProviders', () => aiSettingsInfo())
+  ipcMain.handle('settings:muteBudgetNotice', () => muteBudgetNotice())
   ipcMain.handle(
     'settings:refreshCatalog',
     async (_e, provider?: string, force?: boolean) => {

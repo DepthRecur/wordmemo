@@ -4,9 +4,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { closeDb, openDb } from '../src/main/db/connection'
 import { replaceCatalog, writeRemotePricing } from '../src/main/db/ai'
-import { initSettings } from '../src/main/settings'
+import { initSettings, setApiKey, updateSettings } from '../src/main/settings'
 import { aiSettingsInfo } from '../src/main/ai/info'
 import { knownModels, refreshPricing } from '../src/main/ai/pricing'
+import { catalogUrl, refreshCatalog } from '../src/main/ai/catalog'
+import { PROVIDERS } from '../src/main/ai/providers'
 
 /**
  * 模型下拉框的候选：只来自 /models 目录；公开名按 API → models.dev → id 合并。
@@ -101,6 +103,48 @@ describe('模型列表：只来自 /models，名字三级合并', () => {
       input: 1,
       output: 2
     })
+  })
+})
+
+describe('P-08 目录地址的选择', () => {
+  it('Gemini 固定官方端点，不跟随自定义 Base URL；别家跟随', () => {
+    expect(catalogUrl(PROVIDERS.gemini, 'https://my.proxy/gemini')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/models'
+    )
+    expect(catalogUrl(PROVIDERS.deepseek, 'https://my.proxy/v1')).toBe(
+      'https://my.proxy/v1/models'
+    )
+  })
+
+  it('刷新 Gemini 目录时请求的是官方端点（Base URL 只影响聊天）', async () => {
+    openDb(tmpDb())
+    initSettings()
+    setApiKey('gemini', 'sk-gemini-catalog')
+    updateSettings({
+      ai: {
+        default: { provider: 'gemini' },
+        vision: null,
+        providers: { gemini: { baseUrl: 'https://my.proxy/gemini' } }
+      }
+    })
+
+    const realFetch = globalThis.fetch
+    const urls: string[] = []
+    globalThis.fetch = (async (url: unknown) => {
+      urls.push(String(url))
+      return new Response(JSON.stringify({ models: [{ name: 'models/gemini-x' }] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }) as typeof fetch
+    try {
+      const snapshot = await refreshCatalog('gemini', true)
+      expect(snapshot.error).toBeNull()
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    expect(urls[0]).toBe('https://generativelanguage.googleapis.com/v1beta/models')
   })
 })
 

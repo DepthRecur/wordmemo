@@ -3,7 +3,7 @@ import { isGiveUpAnswer, matchChinese, matchEnglish, normalizeEn, normalizeZh } 
 import { getCardRow } from './db/cards'
 import { getItem } from './db/items'
 import { getSettings } from './settings'
-import { aiAvailable, chatJson, overBudget } from './ai/client'
+import { aiAvailable, chatJson } from './ai/client'
 import { JUDGE_EN_SYSTEM, JUDGE_SYSTEM } from './ai/prompts'
 import { hashKey } from './ai/import'
 
@@ -34,7 +34,7 @@ export async function judgeAnswer(cardId: number, answer: string): Promise<Judge
     if (m) return { correct: true, confidence: 1, source: m }
     // 本地没命中：括号可选词、占位符、缩写等写法差异交 AI 判一次。
     // AI 不可用时维持原来的严格判错，不改变离线体验。
-    if (!settings.aiJudge || !aiAvailable() || overBudget()) {
+    if (!settings.aiJudge || !aiAvailable()) {
       return { correct: false, confidence: 1, source: 'exact', reason: '拼写不正确' }
     }
     const content = `词条：${item.headword}
@@ -90,13 +90,13 @@ export async function judgeAnswer(cardId: number, answer: string): Promise<Judge
     return { correct: true, confidence: 1, source: 'local', normalized: clean }
   }
 
-  if (!settings.aiJudge || !aiAvailable() || overBudget()) {
+  if (!settings.aiJudge || !aiAvailable()) {
     return {
       correct: false,
       uncertain: true,
       confidence: 0,
       source: 'manual',
-      reason: overBudget() ? '本月 AI 预算已用完，请自评' : '无法自动判定，请自评'
+      reason: '无法自动判定，请自评'
     }
   }
 

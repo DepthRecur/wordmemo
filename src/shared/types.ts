@@ -385,6 +385,15 @@ export interface AiSettings {
   /** null = 图片识别跟随 default */
   vision: AiRoleConfig | null
   providers: Partial<Record<AiProviderId, AiProviderConfig>>
+  /** 「本月不再提示预算」记的是 2026-11 这样的月份；换月自动失效（P-02） */
+  budgetMutedMonth?: string
+}
+
+/** 超预算提醒（只提醒，不拦调用） */
+export interface AiBudgetNotice {
+  spent: number
+  budget: number
+  month: string
 }
 
 export interface Settings {
@@ -465,6 +474,8 @@ export interface AiProviderInfo {
   id: AiProviderId
   label: string
   baseUrl: string
+  /** 目录固定走的官方端点（Gemini）；null = 目录跟随 Base URL（P-08） */
+  fixedCatalogUrl: string | null
   /** 实际会用的模型名（可能为空：还没填） */
   model: string
   keySet: boolean
@@ -531,6 +542,8 @@ export interface WordmemoApi {
     refreshCatalog(provider: AiProviderId, force?: boolean): Promise<AiRefreshResult>
     /** 刷新 models.dev 价格目录；force = 忽略 7 天 TTL */
     refreshPricing(force?: boolean): Promise<AiRefreshResult>
+    /** 预算用完提醒里点「本月不再提示」：静音到月底（P-02） */
+    muteBudgetNotice(): Promise<string>
   }
   notes: {
     list(query?: NoteQuery): Promise<NoteSummary[]>
@@ -638,6 +651,8 @@ export interface WordmemoApi {
   events: {
     onNavigate(cb: (route: string) => void): () => void
     onRefresh(cb: () => void): () => void
+    /** 本月 AI 预算用完：只提醒，调用照常继续（P-02） */
+    onBudgetExhausted(cb: (info: AiBudgetNotice) => void): () => void
   }
 }
 

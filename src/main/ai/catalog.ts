@@ -113,8 +113,16 @@ export function cachedCatalog(provider: AiProviderId): CatalogSnapshot {
   }
 }
 
+/**
+ * 目录地址（P-08）：Gemini 的 /models 是 Google 自己的响应形状，只能走官方端点；
+ * 用户填的 Base URL 只影响聊天请求。别家跟随 Base URL（中转也可能提供 /models）。
+ */
+export function catalogUrl(spec: ProviderSpec, baseUrl: string): string {
+  return spec.modelsConfig?.url ?? modelsEndpoint(spec, baseUrl)
+}
+
 async function doRefresh(spec: ProviderSpec, key: string): Promise<CatalogSnapshot> {
-  const url = spec.modelsConfig?.url ?? modelsEndpoint(spec, providerBaseUrl(spec.id))
+  const url = catalogUrl(spec, providerBaseUrl(spec.id))
   const headers: Record<string, string> = { accept: 'application/json' }
   if (spec.modelsConfig?.auth === 'google') headers['x-goog-api-key'] = key
   else headers.Authorization = `Bearer ${key}`

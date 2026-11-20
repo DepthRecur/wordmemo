@@ -14,6 +14,7 @@ import { localDate } from './db/connection'
 import { getDiagnostics, getIntegrity, log, setTrayState } from './diagnostics'
 import { setTrayRefresher } from './tray-bridge'
 import { scheduleCatalogRefresh } from './ai/catalog'
+import { onBudgetExhausted } from './ai/budget'
 import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
 
@@ -339,6 +340,10 @@ async function bootstrap(): Promise<void> {
     examRetention: settings.examRetention
   })
   registerIpc()
+  // 预算用完只提醒一次，不拦调用（P-02）；提醒由渲染进程右下角通知条展示
+  onBudgetExhausted((info) => {
+    mainWindow?.webContents.send('ai:budget', info)
+  })
 
   createWindow()
   buildTray()

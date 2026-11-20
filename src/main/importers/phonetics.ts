@@ -1,5 +1,5 @@
 import type { Item, ParsedItem, PhoneticRefreshResult } from '@shared/types'
-import { aiAvailable, overBudget } from '../ai/client'
+import { aiAvailable } from '../ai/client'
 import { phoneticForItems } from '../ai/import'
 import { getDraft } from '../db/importDrafts'
 import { getNote } from '../db/notes'
@@ -120,7 +120,7 @@ export async function fillPhoneticsForDrafts(
 
   // 词组 + 词典没查到的词交给 AI（整批，每 30 个一批）
   const aiCandidates = [...phrases, ...wordFailed]
-  const aiEnabled = aiCandidates.length > 0 && aiAvailable() && !overBudget()
+  const aiEnabled = aiCandidates.length > 0 && aiAvailable()
   if (aiEnabled) {
     for (let start = 0; start < aiCandidates.length; start += AI_CHUNK) {
       const chunk = aiCandidates.slice(start, start + AI_CHUNK)
@@ -208,7 +208,7 @@ export async function refreshNotePhonetics(noteId: number): Promise<PhoneticRefr
 
   // 词组 + 词典没查到的词：交给 AI（美式在前、英式在后）
   const aiCandidates = [...phrases, ...words.filter((item) => !next.has(item.id))]
-  if (aiCandidates.length && aiAvailable() && !overBudget()) {
+  if (aiCandidates.length && aiAvailable()) {
     for (let start = 0; start < aiCandidates.length; start += AI_CHUNK) {
       const chunk = aiCandidates.slice(start, start + AI_CHUNK)
       try {

@@ -44,6 +44,7 @@ export function aiSettingsInfo(): AiSettingsInfo {
       id,
       label: spec.label,
       baseUrl: providerBaseUrl(id),
+      fixedCatalogUrl: spec.modelsConfig?.url ?? null,
       model,
       keySet: !!getApiKey(id),
       vision: spec.capabilities.vision,

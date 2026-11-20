@@ -1,7 +1,8 @@
 import type { AiProviderId, AiRoleConfig, AiTestResult } from '@shared/types'
 import { DEEPSEEK_DEFAULT_MODEL, resolveProviderModel } from '@shared/aiModel'
 import { getApiKey, getSettings } from '../settings'
-import { getAiCache, logAiUsage, monthAiCost, setAiCache } from '../db/ai'
+import { getAiCache, logAiUsage, setAiCache } from '../db/ai'
+import { noteBudget } from './budget'
 import { estimateCostUsd, priceFor } from './pricing'
 import {
   PROVIDERS,
@@ -40,7 +41,6 @@ interface Target {
 }
 
 /** 预算降级成 token 上限时的粗估：$1 ≈ 200 万 token（有未定价调用时才用） */
-const TOKENS_PER_USD = 2_000_000
 
 /**
  * 有些模型（如 GLM 新的 `*-flash`）**始终思考**，会拒绝 `thinking: { type: 'disabled' }`。
@@ -200,20 +200,8 @@ export function aiAvailable(role: AiRole = 'default'): boolean {
   return !!getApiKey(target.spec.id) && !!target.model
 }
 
-/**
- * 预算：有价按金额；这个月只要出现过「没有价格」的调用，就同时按 token 上限兜底
- * （`TOKENS_PER_USD` 是粗估，宁可早点提示，也不要因为看不到价格就无限花）。
- */
-export function overBudget(): boolean {
-  const s = getSettings()
-  if (!s.monthlyBudgetUsd || s.monthlyBudgetUsd <= 0) return false
-  const month = monthAiCost()
-  if (month.cost >= s.monthlyBudgetUsd) return true
-  if (month.unpricedCalls > 0) {
-    return month.tokens >= s.monthlyBudgetUsd * TOKENS_PER_USD
-  }
-  return false
-}
+/** 预算判断在 budget.ts；这里 re-export 保持调用方不变 */
+export { overBudget } from './budget'
 
 /** 能从文本里找出一个 JSON 值就返回它；纯文本回复返回 undefined */
 function parseJsonLoose(text: string): unknown {
@@ -241,6 +229,9 @@ export async function chat(opts: ChatOptions): Promise<string> {
   if (!target.model) {
     throw new AiError(`还没有给 ${target.spec.label} 填模型名，请先到设置页填写`, { status: 400 })
   }
+
+  // P-02：超预算只提醒，不拦这次调用
+  noteBudget()
 
   if (opts.cacheKey) {
     const cached = getAiCache(target.spec.id, opts.kind, opts.cacheKey)

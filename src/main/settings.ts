@@ -118,11 +118,18 @@ function mergeAi(raw: Partial<AiSettings> | null | undefined): AiSettings {
         ? { ...base.default, ...raw.vision }
         : null
       : base.vision
-  return {
+  const merged: AiSettings = {
     default: { ...base.default, ...(raw?.default ?? {}) },
     vision,
     providers
   }
+  // 「本月不再提示预算」是设置页会整份覆盖 ai 的字段之一：raw 没带就沿用现值，
+  // 免得在设置页改别的选项把静音状态顺手清掉
+  const mutedMonth = raw?.budgetMutedMonth ?? cache?.ai.budgetMutedMonth
+  if (typeof mutedMonth === 'string' && /^\d{4}-\d{2}$/.test(mutedMonth)) {
+    merged.budgetMutedMonth = mutedMonth
+  }
+  return merged
 }
 
 function merge(raw: Partial<Settings> | null): Settings {

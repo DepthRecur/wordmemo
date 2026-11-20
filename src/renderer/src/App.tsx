@@ -54,7 +54,9 @@ type NoticeType = 'ok' | 'info' | 'err'
 
 interface NoticeAction {
   label: string
-  route: RouteName
+  route?: RouteName
+  /** 就地处理的按钮（如「本月不再提示」）：有它就不跳页面 */
+  onClick?: () => void
 }
 
 interface Notice {
@@ -354,6 +356,23 @@ export default function App() {
     syncSystemNotice('drafts', present, message, { label: '去处理', route: 'import' })
   }, [ready, draftIssues, syncSystemNotice])
 
+  // 本月 AI 预算用完：只提醒，不拦调用（P-02）。点「本月不再提示」静音到月底。
+  useEffect(() => {
+    return window.api.events.onBudgetExhausted((info) => {
+      syncSystemNotice(
+        'ai-budget',
+        true,
+        `本月 AI 预算已用完：估算 ≈$${info.spent.toFixed(4)}，预算 $${info.budget}。AI 调用照常继续，这里只是提醒。`,
+        {
+          label: '本月不再提示',
+          onClick: () => {
+            void window.api.settings.muteBudgetNotice()
+          }
+        }
+      )
+    })
+  }, [syncSystemNotice])
+
   const persistentNotices = useMemo(() => notices.filter((n) => n.persistent), [notices])
   const visibleNotices = notices.filter((n) => !n.hidden).slice(-3)
 
@@ -532,7 +551,12 @@ export default function App() {
                     size="sm"
                     onClick={() => {
                       setBellOpen(false)
-                      navigate(notice.action!.route)
+                      if (notice.action!.onClick) {
+                        notice.action!.onClick()
+                        resolveNotice(notice.id)
+                        return
+                      }
+                      if (notice.action!.route) navigate(notice.action!.route)
                     }}
                   >
                     {notice.action.label}

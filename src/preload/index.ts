@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
+  AiBudgetNotice,
   DeckInput,
   DeckPatch,
   ExamInput,
@@ -24,7 +25,8 @@ const api: WordmemoApi = {
     aiProviders: () => ipcRenderer.invoke('settings:aiProviders'),
     refreshCatalog: (provider, force) =>
       ipcRenderer.invoke('settings:refreshCatalog', provider, force),
-    refreshPricing: (force) => ipcRenderer.invoke('settings:refreshPricing', force)
+    refreshPricing: (force) => ipcRenderer.invoke('settings:refreshPricing', force),
+    muteBudgetNotice: () => ipcRenderer.invoke('settings:muteBudgetNotice')
   },
   notes: {
     list: (query?: NoteQuery) => ipcRenderer.invoke('notes:list', query),
@@ -122,6 +124,11 @@ const api: WordmemoApi = {
       const listener = () => cb()
       ipcRenderer.on('refresh', listener)
       return () => ipcRenderer.removeListener('refresh', listener)
+    },
+    onBudgetExhausted: (cb: (info: AiBudgetNotice) => void) => {
+      const listener = (_e: unknown, info: AiBudgetNotice) => cb(info)
+      ipcRenderer.on('ai:budget', listener)
+      return () => ipcRenderer.removeListener('ai:budget', listener)
     }
   }
 }
