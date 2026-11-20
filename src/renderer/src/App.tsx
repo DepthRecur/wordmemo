@@ -30,7 +30,7 @@ export interface NavTarget {
   section?: string
 }
 
-export type Notify = (message: string, type?: 'info' | 'ok' | 'err') => void
+export type Notify = (message: string, type?: 'info' | 'ok' | 'warn' | 'err') => void
 export type Navigate = (route: RouteName, examId?: number, draftId?: number, section?: string) => void
 
 /** 页面公共 props：库相关的四个字段由 App 统一提供，各页不必自己记「当前库」 */
@@ -50,7 +50,13 @@ export interface CommonProps extends DeckProps {
   refreshStats: () => Promise<void>
 }
 
-type NoticeType = 'ok' | 'info' | 'err'
+/**
+ * 消息级别（docs/MESSAGES.md）：
+ * - err = 功能结果出错/不可用，红色、常驻；
+ * - warn = 出了异常但不影响功能（降级、只读失败、内容可疑），黄色、**也常驻**（用户要能稍后回看）；
+ * - ok/info = 成功与进度，3 秒消失。
+ */
+type NoticeType = 'ok' | 'info' | 'warn' | 'err'
 
 interface NoticeAction {
   label: string
@@ -64,7 +70,7 @@ interface Notice {
   message: string
   type: NoticeType
   createdAt: number
-  /** 失败类常驻，直到在铃铛里标记已处理；成功/提示 3 秒后消失 */
+  /** 错误与警告常驻，直到在铃铛里标记已处理；成功/提示 3 秒后消失 */
   persistent: boolean
   /** 只从右下角隐藏，仍然留在铃铛未处理列表里 */
   hidden?: boolean
@@ -130,7 +136,8 @@ export default function App() {
   const noticeTimers = useRef<Map<string, number>>(new Map())
 
   const notify: Notify = useCallback((message, type = 'info') => {
-    const persistent = type === 'err'
+    // 错误与警告都常驻铃铛：都要允许用户「稍后再看」，不许自己消失
+    const persistent = type === 'err' || type === 'warn'
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
     setNotices((list) =>
       trimVisible([...list, { id, message, type, createdAt: Date.now(), persistent }])
@@ -165,7 +172,14 @@ export default function App() {
 
   /** 系统类通知：条件成立时显示，条件消失时自动移除；手动叉掉后本次会话不再弹 */
   const syncSystemNotice = useCallback(
-    (systemId: string, present: boolean, message: string, action?: NoticeAction) => {
+    (
+      systemId: string,
+      present: boolean,
+      message: string,
+      action?: NoticeAction,
+      /** 默认按错误（功能不可用）；只是提醒/建议时传 'warn'（docs/MESSAGES.md） */
+      level: 'err' | 'warn' = 'err'
+    ) => {
       setNotices((list) => {
         if (!present) return list.filter((n) => n.systemId !== systemId)
         if (dismissedSystem.current.has(systemId)) return list
@@ -174,12 +188,15 @@ export default function App() {
           if (
             existing.message === message &&
             existing.action?.label === action?.label &&
-            existing.action?.route === action?.route
+            existing.action?.route === action?.route &&
+            existing.type === level
           ) {
             return list
           }
           return list.map((n) =>
-            n.systemId === systemId ? { ...n, message, action, createdAt: Date.now() } : n
+            n.systemId === systemId
+              ? { ...n, message, action, type: level, createdAt: Date.now() }
+              : n
           )
         }
         return trimVisible([
@@ -187,7 +204,7 @@ export default function App() {
           {
             id: `sys-${systemId}`,
             message,
-            type: 'err',
+            type: level,
             createdAt: Date.now(),
             persistent: true,
             systemId,
@@ -353,7 +370,8 @@ export default function App() {
     if (!ready) return
     const present = draftIssues.unresolved > 0
     const message = `有 ${draftIssues.draftsWithIssues} 份草稿共 ${draftIssues.unresolved} 处校验提示待处理。`
-    syncSystemNotice('drafts', present, message, { label: '去处理', route: 'import' })
+    // 校验提示只是「内容可疑」，不阻塞任何操作 → 警告（黄色、常驻），不是错误
+    syncSystemNotice('drafts', present, message, { label: '去处理', route: 'import' }, 'warn')
   }, [ready, draftIssues, syncSystemNotice])
 
   // 本月 AI 预算用完：只提醒，不拦调用（P-02）。点「本月不再提示」静音到月底。
@@ -368,7 +386,9 @@ export default function App() {
           onClick: () => {
             void window.api.settings.muteBudgetNotice()
           }
-        }
+        },
+        // 预算用完不拦任何调用 → 警告，不是错误
+        'warn'
       )
     })
   }, [syncSystemNotice])
@@ -503,7 +523,12 @@ export default function App() {
         {visibleNotices.map((notice) => (
           <div
             key={notice.id}
-            className={cls('toast', notice.type === 'ok' && 'ok', notice.type === 'err' && 'err')}
+            className={cls(
+              'toast',
+              notice.type === 'ok' && 'ok',
+              notice.type === 'warn' && 'warn',
+              notice.type === 'err' && 'err'
+            )}
           >
             <div className="toast-body">{notice.message}</div>
             {notice.persistent && (
@@ -541,7 +566,10 @@ export default function App() {
         ) : (
           <div className="notice-list">
             {persistentNotices.map((notice) => (
-              <div key={notice.id} className="notice-item">
+              <div
+                key={notice.id}
+                className={cls('notice-item', notice.type === 'warn' && 'warn')}
+              >
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <div>{notice.message}</div>
                   <div className="notice-time">{formatNoticeTime(notice.createdAt)}</div>

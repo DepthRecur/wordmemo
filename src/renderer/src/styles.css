@@ -664,9 +664,6 @@ select {
 .table tr.warn td {
   background: rgba(245, 196, 81, 0.07);
 }
-.table tr.err td {
-  background: rgba(255, 107, 122, 0.07);
-}
 @keyframes row-flash {
   0% {
     background-color: rgba(108, 140, 255, 0.38);
@@ -729,9 +726,10 @@ select {
   font-size: 12px;
   line-height: 1.6;
 }
+/* 高置信度的校验提示也只是「内容可疑」：用深一点的暖色，不要用错误红 */
 .issue.error {
-  border-color: var(--red);
-  background: rgba(255, 107, 122, 0.07);
+  border-color: #f0913c;
+  background: rgba(240, 145, 60, 0.09);
 }
 
 .dropzone.compact {
@@ -1041,6 +1039,10 @@ select {
 .toast.ok {
   border-left-color: var(--green);
 }
+/* 警告：功能仍然可用，只是降级/可疑/只是提醒（docs/MESSAGES.md） */
+.toast.warn {
+  border-left-color: var(--yellow);
+}
 .toast.err {
   border-left-color: var(--red);
 }
@@ -1088,6 +1090,10 @@ select {
   border-radius: 8px;
   background: var(--panel-2);
   font-size: 13px;
+}
+/* 警告也常驻（允许稍后回看），但用黄色，别和「功能坏了」混在一起 */
+.notice-item.warn {
+  border-left-color: var(--yellow);
 }
 .notice-time {
   color: var(--muted);

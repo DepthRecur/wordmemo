@@ -217,7 +217,8 @@ export default function Review({
     try {
       const phonetic = await window.api.items.ensurePhonetic(current.id)
       if (!phonetic) {
-        notify('暂时查不到音标，可以在笔记详情的词条编辑里手动填写', 'err')
+        // 查不到音标不影响复习（只是少了这条信息）→ 警告，不是错误
+        notify('暂时查不到音标，可以在笔记详情的词条编辑里手动填写', 'warn')
         return
       }
       setQueue((items) =>
@@ -228,8 +229,9 @@ export default function Review({
         )
       )
       setPhoneticHint(true)
-    } catch (err) {
-      notify(`音标查询失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } catch {
+      // 只读查询失败：复习照常继续，旧状态完好 → 警告（不回显技术异常原文）
+      notify('这次没查到音标，稍后再试或手动填写', 'warn')
     } finally {
       setPhoneticBusy(false)
     }
@@ -366,7 +368,7 @@ export default function Review({
           <div>
             <div className="row" style={{ gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
               <h1 className="page-title">今日任务</h1>
-              {!examId && (
+              {!examId && decks.length > 0 && (
                 <Select
                   value={deckId === null ? '' : String(deckId)}
                   width={210}
@@ -381,6 +383,11 @@ export default function Review({
                     if (Number.isInteger(id) && id !== deckId) void setDeck(id)
                   }}
                 />
+              )}
+              {!examId && decks.length === 0 && (
+                <span className="hint">
+                  还没有笔记库：<button className="word-link" onClick={() => navigate('library')}>去建一个</button>
+                </span>
               )}
             </div>
             <div className="page-sub">先把新笔记学一遍，再复习到期的旧词。两部分都会计入 FSRS。</div>

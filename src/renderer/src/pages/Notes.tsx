@@ -466,9 +466,11 @@ export default function Notes({
       return
     }
     setBatchBusy(true)
+    const wasEmpty = decks.length === 0
     try {
       const id = await window.api.decks.create({ name })
       await refreshDecks()
+      if (wasEmpty) await setDeck(id)
       await doMove(id, name)
     } catch (err) {
       notify(`新建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -482,12 +484,15 @@ export default function Notes({
       notify('先给新库起个名字', 'info')
       return
     }
+    const wasEmpty = decks.length === 0
     try {
       const id = await window.api.decks.create({ name })
       setNewDeckName('')
       setCreateDeckOpen(false)
       await refreshDecks()
       setFilter(id)
+      // 从「一个库都没有」建起来的：顺手设为当前库
+      if (wasEmpty) await setDeck(id)
       notify(`已创建「${name}」`, 'ok')
     } catch (err) {
       notify(`新建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -623,13 +628,15 @@ export default function Notes({
         ) : notes.length === 0 ? (
           <Empty
             icon="📚"
-            title={search ? '没有匹配的笔记' : '还没有笔记'}
+            title={search ? '没有匹配的笔记' : decks.length === 0 ? '还没有笔记库' : '还没有笔记'}
             desc={
               search
                 ? '换个关键词试试'
-                : filter === null
-                  ? '把老师发的图片、Word、Excel 或 txt 拖进「导入笔记」。'
-                  : '这个库还是空的：去「导入笔记」把目标库切到这里再导入，或从别的库移动几份过来。'
+                : decks.length === 0
+                  ? '先点上面的「新建库」建一个库；不建也能导入，只是那些笔记会记成「未归类」。'
+                  : filter === null
+                    ? '把老师发的图片、Word、Excel 或 txt 拖进「导入笔记」。'
+                    : '这个库还是空的：去「导入笔记」把目标库切到这里再导入，或从别的库移动几份过来。'
             }
           />
         ) : (
@@ -681,7 +688,7 @@ export default function Notes({
                     <td className="tiny muted">{formatDate(n.noteDate ?? n.createdAt)}</td>
                     <td className="tiny muted">{n.itemCount}</td>
                     <td>
-                      <Badge>{n.deckName}</Badge>
+                      <Badge>{n.deckName || '未归类'}</Badge>
                     </td>
                   </tr>
                 ))}
@@ -1201,6 +1208,9 @@ export default function Notes({
           <div className="hint">
             只改笔记的归属，词条、卡片和复习进度一个都不动；目标库里还没学的词会立刻进入它的今日任务。
           </div>
+          {decks.length === 0 && (
+            <div className="hint">现在一个库都没有：在下面新建一个，这些笔记就会移进去。</div>
+          )}
           <div className="row">
             <input
               className="input"

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync, type SqliteDatabase } from './sqlite'
-import { SCHEMA, SCHEMA_VERSION } from './schema'
+import { SCHEMA, DECKS_SCHEMA_VERSION, SCHEMA_VERSION } from './schema'
 import { newUid } from './uid'
 import { dedupeItems } from './dedupe'
 
@@ -18,6 +18,11 @@ export function openDb(file: string): SqliteDatabase {
 }
 
 function migrate(database: SqliteDatabase): void {
+  // 迁移前先记下老版本号：migrateDecks 只在「还没升到多个库」的老库上建默认库
+  const fromVersion = toInt(
+    (database.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined)
+      ?.user_version
+  )
   const itemColumns = database.prepare('PRAGMA table_info(items)').all() as unknown as { name: string }[]
   if (!itemColumns.some((c) => c.name === 'learned_at')) {
     database.exec('ALTER TABLE items ADD COLUMN learned_at TEXT')
@@ -69,7 +74,7 @@ function migrate(database: SqliteDatabase): void {
   // 多个库（PLAN-DECKS D0）：老库的笔记全部进默认库
   database.exec('BEGIN IMMEDIATE')
   try {
-    migrateDecks(database)
+    migrateDecks(database, fromVersion < DECKS_SCHEMA_VERSION)
     database.exec('COMMIT')
   } catch (err) {
     try {
@@ -82,26 +87,38 @@ function migrate(database: SqliteDatabase): void {
   database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }
 
-/** decks 表由 SCHEMA 建好；这里只补列、建索引、建默认库并回填 */
-function migrateDecks(database: SqliteDatabase): void {
+/**
+ * decks 表由 SCHEMA 建好；这里只补列、建索引、建默认库并回填。
+ *
+ * `legacy` = 这个库还没升到「多个库」的版本。只有这时才建默认库；
+ * 已经升过的库允许「一个库都没有」（用户把库删光了），启动时不许再补一个。
+ */
+function migrateDecks(database: SqliteDatabase, legacy: boolean): void {
   addColumnIfMissing(database, 'notes', 'deck_id', 'INTEGER NOT NULL DEFAULT 1')
   addColumnIfMissing(database, 'import_drafts', 'deck_id', 'INTEGER')
   database.exec('CREATE INDEX IF NOT EXISTS ix_notes_deck ON notes(deck_id, note_date)')
 
-  const row = database.prepare('SELECT COUNT(*) AS c FROM decks').get() as { c?: number } | undefined
-  if (!toInt(row?.c)) {
-    database
-      .prepare('INSERT INTO decks (uid, name, position, created_at) VALUES (?, ?, 0, ?)')
-      .run(newUid(), '默认库', localIso())
+  if (legacy) {
+    const row = database.prepare('SELECT COUNT(*) AS c FROM decks').get() as { c?: number } | undefined
+    if (!toInt(row?.c)) {
+      database
+        .prepare('INSERT INTO decks (uid, name, position, created_at) VALUES (?, ?, 0, ?)')
+        .run(newUid(), '默认库', localIso())
+    }
   }
 
-  // 兜底：deck_id 指向不存在的库（补列时老笔记拿到的 1 未必是默认库的 id）
+  // 兜底：deck_id 指向不存在的库（补列时老笔记拿到的 1 未必是默认库的 id）。
+  // deck_id = 0 是「未归类」（用户删光了库），这是正常状态，不要把它扫进任何库。
   const first = database
     .prepare('SELECT id FROM decks ORDER BY position ASC, id ASC LIMIT 1')
     .get() as { id?: number } | undefined
   if (first?.id) {
     database
-      .prepare('UPDATE notes SET deck_id = ? WHERE deck_id IS NULL OR deck_id NOT IN (SELECT id FROM decks)')
+      .prepare(
+        `UPDATE notes SET deck_id = ?
+         WHERE COALESCE(deck_id, -1) <> 0
+           AND COALESCE(deck_id, -1) NOT IN (SELECT id FROM decks)`
+      )
       .run(first.id)
   }
 }

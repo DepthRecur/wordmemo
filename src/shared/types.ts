@@ -28,7 +28,7 @@ export interface Item {
 
 export interface NoteSummary {
   id: number
-  /** 所属库；老库迁移后都是默认库 */
+  /** 所属库；0 = 未归类（用户把库删光了），只在「全部」里出现 */
   deckId: number
   deckName: string
   title: string
@@ -422,7 +422,7 @@ export interface Settings {
   autoLaunch: boolean
   quietHours: { start: string; end: string }
   ttsSources: ('youdao' | 'baidu' | 'freedict')[]
-  /** 当前库：今日任务、导入、托盘都跟着它（PLAN-DECKS §7） */
+  /** 当前库：今日任务、导入、托盘都跟着它（PLAN-DECKS §7）；没有库时相关视图退回「全部」 */
   currentDeckId: number
 }
 
@@ -562,8 +562,11 @@ export interface WordmemoApi {
     list(): Promise<Deck[]>
     create(input: DeckInput): Promise<number>
     update(id: number, patch: DeckPatch): Promise<void>
-    /** 删库前必须指定把笔记移到哪个库；不能删最后一个库 */
-    remove(id: number, moveTo: number): Promise<{ moved: number }>
+    /**
+     * 删库：moveTo = 把笔记移过去的库；null = 删掉最后一个库，笔记保留但变成未归类。
+     * （2026-11-20 起允许没有任何库）
+     */
+    remove(id: number, moveTo: number | null): Promise<{ moved: number; unassigned: number }>
   }
   items: {
     list(query?: { search?: string; deckId?: number | null }): Promise<Item[]>

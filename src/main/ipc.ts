@@ -167,8 +167,9 @@ export function registerIpc(): void {
     updateDeck(Number(id), patch ?? {})
     requestTrayRefresh()
   })
-  ipcMain.handle('decks:remove', (_e, id: number, moveTo: number) => {
-    const result = removeDeck(Number(id), Number(moveTo))
+  ipcMain.handle('decks:remove', (_e, id: number, moveTo: number | null) => {
+    // moveTo = null：删最后一个库，笔记变「未归类」（允许一个库都没有）
+    const result = removeDeck(Number(id), moveTo === null || moveTo === undefined ? null : Number(moveTo))
     requestTrayRefresh()
     return result
   })

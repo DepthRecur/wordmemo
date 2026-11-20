@@ -84,13 +84,13 @@ export default function ImportPage({
   onDraftsChanged,
   focusDraftId
 }: Props) {
-  // 导入目标库：跟着「当前库」走；库被删了用第一个库兜底
+  // 导入目标库：跟着「当前库」走；库被删了用第一个库兜底；一个库都没有 = 未归类
   const targetDeckId = deckId ?? decks[0]?.id ?? null
   const deckName = (id: number | null | undefined) =>
-    (id ? decks.find((deck) => deck.id === id)?.name : null) ?? '默认库'
+    (id ? decks.find((deck) => deck.id === id)?.name : null) ?? '未归类'
   /** 老草稿（deckId = null）入库时进当前库 */
   const draftDeckLabel = (id: number | null | undefined) =>
-    id ? deckName(id) : `当前库（${deckName(targetDeckId)}）`
+    decks.length === 0 ? '未归类' : id ? deckName(id) : `当前库（${deckName(targetDeckId)}）`
   const [metas, setMetas] = useState<ImportDraftMeta[]>([])
   const [draft, setDraft] = useState<ImportDraft | null>(null)
   const [busy, setBusy] = useState(false)
@@ -378,7 +378,8 @@ export default function ImportPage({
     if (!current) return
     const selected = current.items.filter((it) => it.selected && it.headword.trim())
     if (!selected.length) {
-      notify('至少选择一个词条才能入库', 'err')
+      // 只是少做了一个动作，什么都没坏 → 提示
+      notify('至少选择一个词条才能入库', 'info')
       return
     }
     await flushSave()
@@ -535,12 +536,11 @@ export default function ImportPage({
     )
   }
 
-  const rowState = (it: ParsedItem): 'warn' | 'err' | '' => {
-    const list = issueFor(it.tempId)
-    if (list.some((i) => i.severity === 'error')) return 'err'
-    if (list.length) return 'warn'
-    return ''
-  }
+  /**
+   * 行高亮：校验提示再吓人也只是「内容可疑」，不阻塞入库（docs/MESSAGES.md）。
+   * 所以整行只用警告色，两档 severity 的区别体现在右侧面板的标题上。
+   */
+  const rowState = (it: ParsedItem): 'warn' | '' => (issueFor(it.tempId).length ? 'warn' : '')
 
   const resolveIssue = (index: number) => {
     const current = draftRef.current
@@ -592,14 +592,24 @@ export default function ImportPage({
         <div className="page-actions">
           <div className="row" style={{ gap: 6 }}>
             <span className="hint">导入到</span>
-            <DeckSelect
-              decks={decks}
-              value={targetDeckId}
-              onChange={(id) => {
-                if (id !== null) void setDeck(id)
-              }}
-              width={150}
-            />
+            {decks.length > 0 ? (
+              <DeckSelect
+                decks={decks}
+                value={targetDeckId}
+                onChange={(id) => {
+                  if (id !== null) void setDeck(id)
+                }}
+                width={150}
+              />
+            ) : (
+              <button
+                className="btn btn-ghost btn-sm"
+                title="一个库都没有时，导入的笔记会记成「未归类」，之后可以移进新库"
+                onClick={() => navigate('library')}
+              >
+                未归类（去新建库）
+              </button>
+            )}
           </div>
           <Button
             variant="ghost"
@@ -647,7 +657,9 @@ export default function ImportPage({
                   </div>
                   <div className="draft-meta">
                     {m.itemCount} 条 · 已选 {m.selectedCount}
-                    {m.errorCount > 0 && <span style={{ color: 'var(--red)' }}> · {m.errorCount} 待核对</span>}
+                    {m.errorCount > 0 && (
+                      <span style={{ color: 'var(--yellow)' }}> · {m.errorCount} 待核对</span>
+                    )}
                   </div>
                   <div className="draft-meta">
                     {formatWhen(m.updatedAt)}
@@ -884,7 +896,7 @@ export default function ImportPage({
                       resolved.includes(idx) ? null : (
                         <div key={idx} className={cls('issue', is.severity === 'error' && 'error')}>
                           <div style={{ fontWeight: 600 }}>
-                            {is.severity === 'error' ? '可能影响记忆' : '建议核对'}
+                            {is.severity === 'error' ? '很可能错' : '建议核对'}
                             {is.tempId ? '' : ' · 整份笔记'}
                           </div>
                           <div style={{ marginTop: 3 }}>{is.message}</div>
@@ -939,7 +951,7 @@ export default function ImportPage({
               </div>
               {unresolvedErrors > 0 && (
                 <div className="hint" style={{ color: 'var(--yellow)', marginBottom: 10 }}>
-                  还有 {unresolvedErrors} 处「可能影响记忆」的提示未处理，建议先核对。
+                  还有 {unresolvedErrors} 处「很可能错」的提示未处理，建议先核对。
                 </div>
               )}
               <Button

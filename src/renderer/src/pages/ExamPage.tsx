@@ -358,7 +358,8 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
             <div className="field-label" style={{ marginBottom: 6 }}>选择笔记</div>
             <div className="col" style={{ gap: 4, maxHeight: 220, overflow: 'auto' }}>
               {notes
-                .filter((n) => !form.deckId || n.deckId === form.deckId)
+                // deckId 现在是 number | null，0 是「未归类」，不能当假值处理
+                .filter((n) => form.deckId === null || n.deckId === form.deckId)
                 .map((n) => (
                 <label key={n.id} className="row" style={{ gap: 8, cursor: 'pointer' }}>
                   <input

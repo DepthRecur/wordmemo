@@ -1,7 +1,7 @@
 import type { Deck, DeckPatch } from '@shared/types'
 import { getDb, localIso, toInt, tx } from './connection'
 import { newUid } from './uid'
-import { getSettings } from '../settings'
+import { getSettings, updateSettings } from '../settings'
 
 /**
  * 多库作用域（PLAN-DECKS §5）。
@@ -220,24 +220,48 @@ export function updateDeck(id: number, patch: DeckPatch): void {
 }
 
 /**
- * 删库：先把这个库的笔记全部移到 moveTo，再删（PLAN-DECKS §7.4）。
- * 不允许删最后一个库，也不允许「连笔记一起删」。
+ * 删库（PLAN-DECKS §7.4；2026-11-20 放宽为「允许一个库都没有」）。
+ *
+ * - `moveTo` = 目标库：笔记全部移过去（原来唯一的做法）；
+ * - `moveTo` = null：只用于删**最后一个**库。笔记不删，`deck_id` 置 0 = 未归类，
+ *   只在笔记库的「全部」里出现，以后可以批量移动到新库。绝不静默丢笔记。
  */
-export function removeDeck(id: number, moveTo: number): { moved: number } {
+export function removeDeck(
+  id: number,
+  moveTo: number | null
+): { moved: number; unassigned: number } {
   if (!isDeck(id)) throw new Error('库不存在')
-  if (id === moveTo) throw new Error('不能把笔记移到正在删除的库')
-  const total = count('SELECT COUNT(*) AS c FROM decks')
-  if (total <= 1) throw new Error('至少要保留一个库')
-  if (!deckExists(moveTo)) throw new Error('目标库不存在')
   if (!deckExists(id)) throw new Error('要删除的库不存在')
+  if (moveTo === null) {
+    if (count('SELECT COUNT(*) AS c FROM decks') > 1) {
+      throw new Error('还有别的库，请先选择这些笔记要移到哪个库')
+    }
+  } else {
+    if (!isDeck(moveTo)) throw new Error('目标库不存在')
+    if (id === moveTo) throw new Error('不能把笔记移到正在删除的库')
+    if (!deckExists(moveTo)) throw new Error('目标库不存在')
+  }
 
   return tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
-    getDb()
-      .prepare('UPDATE notes SET deck_id = ?, updated_at = ? WHERE deck_id = ?')
-      .run(moveTo, localIso(), id)
+    if (moveTo === null) {
+      getDb()
+        .prepare('UPDATE notes SET deck_id = 0, updated_at = ? WHERE deck_id = ?')
+        .run(localIso(), id)
+      // 这些草稿原本要入这个库：入库时按「未归类」处理，不要指向已删的库
+      getDb().prepare('UPDATE import_drafts SET deck_id = 0 WHERE deck_id = ?').run(id)
+    } else {
+      getDb()
+        .prepare('UPDATE notes SET deck_id = ?, updated_at = ? WHERE deck_id = ?')
+        .run(moveTo, localIso(), id)
+      getDb().prepare('UPDATE import_drafts SET deck_id = ? WHERE deck_id = ?').run(moveTo, id)
+    }
     getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
-    return { moved: before }
+    // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。0 = 没有库
+    if (getSettings().currentDeckId === id) {
+      updateSettings({ currentDeckId: moveTo ?? 0 })
+    }
+    return { moved: before, unassigned: moveTo === null ? before : 0 }
   })
 }
 

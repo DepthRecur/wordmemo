@@ -108,6 +108,7 @@ export default function SettingsPage({
   notify,
   settings,
   refreshSettings,
+  refreshStats,
   decks,
   deckId,
   setDeck,
@@ -302,9 +303,15 @@ export default function SettingsPage({
     try {
       const res = await window.api.settings.refreshCatalog(p.id, true)
       setInfo(res.info)
-      notify(res.ok ? `${p.label}：${res.message}` : `${p.label}：${res.message}`, res.ok ? 'ok' : 'err')
-    } catch (err) {
-      notify(`刷新目录失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+      // 只读刷新失败：旧列表还在、模型也能手填，功能没坏 → 警告（docs/MESSAGES.md）
+      notify(
+        res.ok
+          ? `${p.label}：${res.message}`
+          : `这次没刷新到 ${p.label} 的模型列表：${res.message}（旧列表还能用，也可以手填）`,
+        res.ok ? 'ok' : 'warn'
+      )
+    } catch {
+      notify(`这次没刷新到 ${p.label} 的模型列表（旧列表还能用，也可以手填）`, 'warn')
     } finally {
       setRefreshing((r) => ({ ...r, [p.id]: false }))
     }
@@ -315,9 +322,13 @@ export default function SettingsPage({
     try {
       const res = await window.api.settings.refreshPricing(true)
       setInfo(res.info)
-      notify(res.message, res.ok ? 'ok' : 'err')
-    } catch (err) {
-      notify(`刷新价格失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+      // 价格刷不到就用随包快照估算，不影响任何功能 → 警告
+      notify(
+        res.ok ? res.message : `这次没刷新到价格：${res.message}（仍按随包快照估算）`,
+        res.ok ? 'ok' : 'warn'
+      )
+    } catch {
+      notify('这次没刷新到价格（仍按随包快照估算）', 'warn')
     } finally {
       setPricingBusy(false)
     }
@@ -339,7 +350,8 @@ export default function SettingsPage({
       await navigator.clipboard.writeText(lines.join('\n'))
       notify('诊断信息已复制（不含 Key），可以直接贴出来', 'ok')
     } catch {
-      notify('复制失败：请手动截图上面那一行提示', 'err')
+      // 剪贴板不可用：信息还在屏幕上，用户可以截图 → 警告，不是错误
+      notify('没能复制，请手动截图上面那一行提示', 'warn')
     }
   }
 
@@ -421,11 +433,14 @@ export default function SettingsPage({
       notify('先给新库起个名字', 'info')
       return
     }
+    const wasEmpty = decks.length === 0
     setDeckBusy(true)
     try {
-      await window.api.decks.create({ name })
+      const id = await window.api.decks.create({ name })
       setNewDeckName('')
       await refreshDecks()
+      // 从「一个库都没有」建起来的：顺手设为当前库，别让托盘/导入还在 0 上
+      if (wasEmpty) await setDeck(id)
       notify(`已创建「${name}」`, 'ok')
     } catch (err) {
       notify(`创建库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -458,27 +473,36 @@ export default function SettingsPage({
 
   const removeDeckRow = async () => {
     if (!deleteDeck) return
-    const target = deleteMoveTo ?? decks.find((d) => d.id !== deleteDeck.id)?.id ?? null
-    if (target === null) {
-      notify('至少要保留一个库', 'err')
+    // 最后一个库：没有别的库可以接收，笔记变成「未归类」（允许一个库都没有）
+    const isLast = decks.filter((d) => d.id !== deleteDeck.id).length === 0
+    const target = isLast ? null : (deleteMoveTo ?? decks.find((d) => d.id !== deleteDeck.id)?.id ?? null)
+    if (!isLast && target === null) {
+      notify('先选一个库来接收这些笔记', 'info')
       return
     }
     setDeckBusy(true)
     try {
       const res = await window.api.decks.remove(deleteDeck.id, target)
       const next = await refreshDecks()
+      // 侧边栏/统计页的计数跟着刷新（D-07），不必等 60 秒轮询
+      void refreshStats()
       if (deckId === deleteDeck.id) {
         const active = next.some((d) => d.id === deckId) ? deckId : (next[0]?.id ?? null)
         if (active) await setDeck(active)
       }
-      const targetName = next.find((d) => d.id === target)?.name ?? ''
+      const targetName = target === null ? '' : (next.find((d) => d.id === target)?.name ?? '')
       // 这一行的本地草稿也跟着删掉，别让自动保存再往已删的库里写
       setDeckDrafts((prev) => {
         const rest = { ...prev }
         delete rest[deleteDeck.id]
         return rest
       })
-      notify(`已删除「${deleteDeck.name}」，${res.moved} 份笔记移到了「${targetName}」`, 'ok')
+      notify(
+        target === null
+          ? `已删除最后一个库「${deleteDeck.name}」，${res.unassigned} 份笔记变成「未归类」（在笔记库的「全部」里，可以再移进新库）`
+          : `已删除「${deleteDeck.name}」，${res.moved} 份笔记移到了「${targetName}」`,
+        'ok'
+      )
       setDeleteDeck(null)
     } catch (err) {
       notify(`删除库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
@@ -919,7 +943,7 @@ export default function SettingsPage({
                       <Button
                         size="sm"
                         variant="danger"
-                        disabled={decks.length <= 1 || deckBusy}
+                        disabled={deckBusy}
                         onClick={() => {
                           setDeleteDeck(deck)
                           setDeleteMoveTo(decks.find((d) => d.id !== deck.id)?.id ?? null)
@@ -933,6 +957,11 @@ export default function SettingsPage({
               )
             })}
           </div>
+          {decks.length === 0 && (
+            <div className="hint" style={{ marginTop: 4 }}>
+              现在一个库都没有。笔记会记成「未归类」，在笔记库的「全部」里能看到；建一个库以后可以把它们移过去。
+            </div>
+          )}
           <div className="row" style={{ marginTop: 12 }}>
             <input
               className="input"
@@ -951,6 +980,7 @@ export default function SettingsPage({
           </div>
           <div className="hint" style={{ marginTop: 8 }}>
             删除库时，库里的笔记会先移到你选的目标库，不会连笔记一起删。合并 = 全选移到目标库再删空库。
+            删到最后一个库也可以：那些笔记会变成「未归类」，不会丢。
           </div>
         </div>
 
@@ -1133,29 +1163,46 @@ export default function SettingsPage({
           <>
             <Button onClick={() => setDeleteDeck(null)}>取消</Button>
             <Button variant="danger" onClick={() => void removeDeckRow()} disabled={deckBusy}>
-              移动笔记并删除
+              {decks.filter((d) => d.id !== deleteDeck?.id).length === 0
+                ? '删除这个库'
+                : '移动笔记并删除'}
             </Button>
           </>
         }
       >
         <div className="col">
-          <div>
-            「{deleteDeck?.name}」里有 {deleteDeck?.noteCount ?? 0} 份笔记。删除前先把它们移到：
-          </div>
-          <Select
-            value={deleteMoveTo === null ? '' : String(deleteMoveTo)}
-            options={decks
-              .filter((d) => d.id !== deleteDeck?.id)
-              .map((d) => ({
-                value: String(d.id),
-                label: d.name,
-                hint: `${d.noteCount} 份笔记 · 待学 ${d.todayNew}`
-              }))}
-            onChange={(next) => setDeleteMoveTo(Number(next))}
-          />
-          <div className="hint">
-            只移动笔记的归属；词条、卡片和复习进度都不变。不能删掉最后一个库。
-          </div>
+          {decks.filter((d) => d.id !== deleteDeck?.id).length === 0 ? (
+            <>
+              <div>
+                「{deleteDeck?.name}」是最后一个笔记库，里面有 {deleteDeck?.noteCount ?? 0} 份笔记。
+                删掉之后就没有任何库了。
+              </div>
+              <div className="hint">
+                笔记不会删：它们会变成「未归类」，只在笔记库的「全部」里显示；新建库以后可以在那里批量移到新库。
+                词条、卡片和复习进度都不受影响。
+              </div>
+            </>
+          ) : (
+            <>
+              <div>
+                「{deleteDeck?.name}」里有 {deleteDeck?.noteCount ?? 0} 份笔记。删除前先把它们移到：
+              </div>
+              <Select
+                value={deleteMoveTo === null ? '' : String(deleteMoveTo)}
+                options={decks
+                  .filter((d) => d.id !== deleteDeck?.id)
+                  .map((d) => ({
+                    value: String(d.id),
+                    label: d.name,
+                    hint: `${d.noteCount} 份笔记 · 待学 ${d.todayNew}`
+                  }))}
+                onChange={(next) => setDeleteMoveTo(Number(next))}
+              />
+              <div className="hint">
+                只移动笔记的归属；词条、卡片和复习进度都不变。
+              </div>
+            </>
+          )}
         </div>
       </Modal>
     </div>

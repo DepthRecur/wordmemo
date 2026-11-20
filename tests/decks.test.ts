@@ -276,10 +276,31 @@ describe('库管理', () => {
     addNote(from, ['del1', 'del2'])
     expect(() => removeDeck(from, from)).toThrow(/正在删除/)
     expect(() => removeDeck(from, 999999)).toThrow(/目标库不存在/)
+    // 还有别的库时不能「丢成未归类」：必须指名目标库
+    expect(() => removeDeck(from, null)).toThrow(/还有别的库/)
     const result = removeDeck(from, to)
     expect(result.moved).toBe(1)
+    expect(result.unassigned).toBe(0)
     expect(listNotes({ deckId: to }).some((note) => note.deckId === to)).toBe(true)
     expect(listDecks().some((deck) => deck.id === from)).toBe(false)
+  })
+
+  it('删掉最后一个库：笔记变成「未归类」，不丢', () => {
+    const only = createDeck({ name: '最后一个库' })
+    const noteId = addNote(only, ['lastword'])
+    // 把别处的库先清空，确保这里真的是最后一个
+    for (const deck of listDecks()) {
+      if (deck.id !== only) removeDeck(deck.id, only)
+    }
+    const result = removeDeck(only, null)
+    expect(result.unassigned).toBeGreaterThanOrEqual(1)
+    expect(listDecks()).toHaveLength(0)
+    const note = getNote(noteId)!
+    expect(note.deckId).toBe(0)
+    expect(note.deckName).toBe('未归类')
+    expect(listNotes({}).some((item) => item.id === noteId)).toBe(true)
+    // 词条/卡片都还在：只是没了库
+    expect(itemIdOf('lastword')).toBeGreaterThan(0)
   })
 })
 
@@ -387,7 +408,19 @@ describe('迁移：老库进默认库，迁移前先备份', () => {
     // 结构版本已升到当前版本；再启动不需要备份
     expect(backupBeforeMigrate(legacyFile, backupDir)).toBeNull()
 
-    // 只剩一个库时不能删
-    expect(() => removeDeck(decks[0].id, 999999)).toThrow(/至少/)
+    // 2026-11-20 起允许一个库都没有：删最后一个库 → 笔记变「未归类」，不删数据
+    const removed = removeDeck(decks[0].id, null)
+    expect(removed.unassigned).toBe(1)
+    expect(listDecks()).toHaveLength(0)
+    const left = listNotes({})
+    expect(left).toHaveLength(1)
+    expect(left[0].deckId).toBe(0)
+    expect(left[0].deckName).toBe('未归类')
+
+    // 重启后不许自己长出默认库（用户主动删空的库要保住）
+    closeDb()
+    openDb(legacyFile)
+    expect(listDecks()).toHaveLength(0)
+    expect(listNotes({})[0].deckName).toBe('未归类')
   })
 })

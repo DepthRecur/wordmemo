@@ -69,6 +69,21 @@ describe('解析后立即落盘草稿', () => {
   })
 })
 
+describe('一条都没识别出来', () => {
+  it('草稿照样留住，但结果是失败（不能报成「已识别」）', async () => {
+    const file = writeNote('这节课只是讲语法，没有单词。')
+    const result = await ingestFile(file)
+    expect(result.ok).toBe(false)
+    expect(result.draftId).toBeGreaterThan(0)
+    expect(result.error).toContain('没有从这份文件里识别出词条')
+
+    const draft = getDraft(result.draftId!)!
+    expect(draft.items).toHaveLength(0)
+    // 原文还在，用户可以在草稿里手动整理后再入库
+    expect(draft.rawText).toContain('讲语法')
+  })
+})
+
 describe('草稿编辑与持久化', () => {
   it('改过的标题/标签/词条在重开数据库后还在', async () => {
     const file = writeNote('record n. / v. 记录；唱片')

@@ -33,5 +33,17 @@ export async function ingestFile(filePath: string, deckId?: number | null): Prom
     preview
   })
 
+  // 一条都没识别出来 = 这次导入没有任何产出（docs/MESSAGES.md：功能结果为空算错误，
+  // 不能因为「没抛异常」就报成功）。草稿照样留着，用户可以在原文里手动整理。
+  if (!preview.items.length) {
+    return {
+      ok: false,
+      fileName,
+      filePath,
+      draftId,
+      error: '没有从这份文件里识别出词条（已存为草稿，可以打开原文手动整理）'
+    }
+  }
+
   return { ok: true, fileName, filePath, draftId, resumed: false }
 }

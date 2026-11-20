@@ -71,6 +71,7 @@ export const VALIDATE_SYSTEM = `你是严谨的英语老师，负责检查即将
   ]
 }
 severity 取值：error（很可能错，建议必须核对）、warning（建议核对）。
+两种都只是提示：入库不会因为它们被拦住，所以不要为了「更严重」乱用 error。
 field 取值：headword、pos、meaning、example、line。
 suggestion 只填写修正后的最终值，不要写“补充：/改为：/建议：”之类的前缀。
 例如词性直接写 "v."，多个词性写 "n. / v."；释义直接写 "放弃；抛弃"。`

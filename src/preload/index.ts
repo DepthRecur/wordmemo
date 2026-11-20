@@ -42,7 +42,7 @@ const api: WordmemoApi = {
     list: () => ipcRenderer.invoke('decks:list'),
     create: (input: DeckInput) => ipcRenderer.invoke('decks:create', input),
     update: (id: number, patch: DeckPatch) => ipcRenderer.invoke('decks:update', id, patch),
-    remove: (id: number, moveTo: number) => ipcRenderer.invoke('decks:remove', id, moveTo)
+    remove: (id: number, moveTo: number | null) => ipcRenderer.invoke('decks:remove', id, moveTo)
   },
   items: {
     list: (query?: { search?: string; deckId?: number | null }) => ipcRenderer.invoke('items:list', query),

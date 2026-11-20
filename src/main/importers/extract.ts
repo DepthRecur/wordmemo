@@ -285,9 +285,8 @@ export async function analyzeFile(file: string): Promise<ImportPreview> {
     }
   }
 
-  if (!items.length) {
-    warnings.push('没有自动识别出词条，请检查原文或手动编辑后再入库。')
-  }
+  // 「一条都没识别出来」由 ingestFile 报成错误（ImportResult.ok = false），
+  // 不再写进「解析提示」：那是警告区，会把「结果为空」说轻了。
 
   items = items.map((it, idx) => ({
     ...it,

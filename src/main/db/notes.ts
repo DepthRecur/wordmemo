@@ -43,7 +43,8 @@ function mapSummary(row: SummaryRow): NoteSummary {
   return {
     id: toInt(row.id),
     deckId: toInt(row.deck_id),
-    deckName: row.deck_name ?? '默认库',
+    // LEFT JOIN 没匹配上 = 用户把库删光了，笔记变成「未归类」
+    deckName: row.deck_name ?? '未归类',
     title: row.title,
     noteDate: row.note_date,
     tags: parseJson<string[]>(row.tags, []),
@@ -136,7 +137,7 @@ export function getNote(id: number): NoteDetail | null {
   }
 }
 
-/** 库 id 来自主进程内部或 IPC：不认识的 id 一律退回默认库 */
+/** 库 id 来自主进程内部或 IPC：不认识的 id 一律退回默认库（一个库都没有时是 0 = 未归类） */
 function resolveDeckId(deckId?: number | null): number {
   if (deckId === null || deckId === undefined) return defaultDeckId()
   const id = toInt(deckId)

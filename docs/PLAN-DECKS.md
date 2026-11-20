@@ -146,6 +146,7 @@ ALTER TABLE import_drafts ADD COLUMN deck_id INTEGER;
 
 约定：
 - 不允许多于一个「默认库」，也不允许删掉最后一个库。
+  （**2026-11-20 放宽**：允许一个库都没有——删最后一个库时笔记变 `deck_id = 0`「未归类」，不删数据；见 [HANDOFF §5.7](HANDOFF.md)）
 - 库名唯一（`UNIQUE` 可后加；首版用代码校验即可，避免老数据卡住迁移）。
 - `position` 用于排序，简单 `↑/↓` 调整即可，不做拖拽。
 
@@ -291,7 +292,7 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 - [ ] 同一个词在两个库：在 A 学 → B 不再当新词；在 A 复习 → B 当天不再出该卡。
 - [ ] 移动笔记到「同一个库」：按钮禁用 / 后端直接返回 0。
 - [ ] 复制到「同一个库」：允许，但提示会产生同名副本。
-- [ ] 删除库：必须先迁移笔记；不能删最后一个库。
+- [ ] 删除库：必须先迁移笔记；不能删最后一个库。（2026-11-20 放宽：最后一个库可以删，笔记转为「未归类」）
 - [ ] 删除笔记：只在该词不再被任何笔记引用时才删词条与卡片（沿用现有逻辑）。
 - [ ] 3500 词的库：列表分页/懒渲染（笔记详情一次展示 3500 条词条会卡，先测再决定是否虚拟化）。
 - [ ] 考试范围（`ExamScope`）指定库 + 标签时，两个条件是与关系。
@@ -335,7 +336,7 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 - 额度：库覆盖 5 vs 全局 20；`learnedTodayCount` 只算本库。
 - 批量：`moveNotes` 幂等；`copyNotes` 复制后 `note_items` 条数相等且 `item_id` 不变；`deleteNotes` 只在无引用时删词条。
 - 合并/分裂：模拟 200 词 B → 全量移入 A → A 计数 = 两者之和（同名词只算一次）→ 再分裂 100 词到 C，三库互不重叠。
-- 库删除：`removeDeck(id, moveTo)` 后笔记全部在 `moveTo`，`decks` 少一条；删最后一个库抛错。
+- 库删除：`removeDeck(id, moveTo)` 后笔记全部在 `moveTo`，`decks` 少一条；~~删最后一个库抛错~~（2026-11-20 改为 `removeDeck(id, null)`：笔记变 `deck_id = 0`「未归类」，笔记一条不删）。
 
 **手动验收**：§1 的 8 条，外加「导入 3500 词的库之后，另一个库的今日任务新词数量不变」。
 

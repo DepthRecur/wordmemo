@@ -1,6 +1,13 @@
 /** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
 export const SCHEMA_VERSION = 2
 
+/**
+ * 「多个库」是从这个版本开始的结构版本。
+ * 低于它的库才算老库（需要建默认库并把笔记收进去）；之后**允许一个库都没有**，
+ * 所以启动时不能再补默认库，否则用户删空的库会自己长回来。
+ */
+export const DECKS_SCHEMA_VERSION = 2
+
 export const SCHEMA = `
 -- 笔记库（PLAN-DECKS）：库 = 笔记容器 + 学习范围，卡片与进度仍然全局一份
 CREATE TABLE IF NOT EXISTS decks (
