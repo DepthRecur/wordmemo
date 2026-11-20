@@ -3,6 +3,7 @@ import { guessKind, guessPos, mergePosText, normalizeEn, splitMeanings } from '@
 import { splitEntryLine } from '@shared/ocrLayout'
 import { getSettings } from '../settings'
 import { aiAvailable } from '../ai/client'
+import { PROVIDERS } from '../ai/providers'
 import { ocrImage, structurize, validateItems, enrichItems, type AiStructItem } from '../ai/import'
 import { parseFile, fileTitle, guessDateFromName } from './files'
 import { findExistingItemId } from '../db/items'
@@ -381,12 +382,10 @@ export async function analyzeFile(file: string): Promise<ImportPreview> {
       warnings.push(`AI 校验未完成：${err instanceof Error ? err.message : String(err)}`)
     }
   } else if (!aiAvailable() && settings.aiValidate && items.length) {
-    issues.push({
-      severity: 'warning',
-      field: 'general',
-      message: '尚未配置 DeepSeek API Key，本次跳过了 AI 校验',
-      suggestion: '到设置页填写 Key 后可重新校验'
-    })
+    // 没配 Key 是正常状态（用户可以不启用 AI），只作为「解析提示」展示，
+    // 不算待处理的校验问题；文案跟随默认角色那家，不再写死 DeepSeek。
+    const label = PROVIDERS[settings.ai.default.provider]?.label ?? '默认模型'
+    warnings.push(`尚未配置 ${label} 的 API Key，本次跳过了 AI 校验`)
   }
 
   return {

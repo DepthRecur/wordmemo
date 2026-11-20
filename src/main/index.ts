@@ -344,9 +344,10 @@ async function bootstrap(): Promise<void> {
   buildTray()
   startReminderLoop()
   dailyBackup()
-  // 模型目录 / 价格：启动 30 秒后后台刷新（过期才真的联网，见 PLAN-PROVIDERS §4.1/§4.2）
+  // 模型目录 / 价格：启动 30 秒后后台刷新（过期才真的联网，见 PLAN-PROVIDERS §4.1/§4.2）。
+  // 没有 Key 时 AI 功能整体不用，价格目录也没有意义，不要发这个请求。
   scheduleCatalogRefresh()
-  schedulePricingRefresh()
+  if (getSettings().apiKeySet) schedulePricingRefresh()
 
   try {
     app.setLoginItemSettings({ openAtLogin: settings.autoLaunch })

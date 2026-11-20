@@ -127,8 +127,9 @@ describe('文本解析', () => {
     expect(preview.items.length).toBeGreaterThan(8)
     expect(preview.items.some((i) => i.headword === 'abandon')).toBe(true)
     expect(preview.rawText.length).toBeGreaterThan(0)
-    // 未配置 AI Key 时应有明确提示
-    expect(preview.issues.some((i) => i.message.includes('API Key'))).toBe(true)
+    // 未配置 AI Key 时给「解析提示」，但不计入待处理的校验问题（不影响无 Key 使用）
+    expect(preview.warnings.some((w) => w.includes('API Key'))).toBe(true)
+    expect(preview.issues.some((i) => i.message.includes('API Key'))).toBe(false)
   })
 })
 

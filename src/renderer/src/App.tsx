@@ -333,16 +333,9 @@ export default function App() {
     }
   }, [ready])
 
-  // 系统通知源：API Key、托盘/权限、草稿校验；条件消失时自动移除
-  useEffect(() => {
-    if (!ready) return
-    syncSystemNotice(
-      'api-key',
-      !settings.apiKeySet,
-      '尚未配置 API Key：图片识别、AI 校验和语义判分都不可用。在「设置 → AI 供应商」里填默认模型那家的 Key。',
-      { label: '去设置', route: 'settings' }
-    )
-  }, [ready, settings.apiKeySet, syncSystemNotice])
+  // 系统通知源：托盘/权限、草稿校验；条件消失时自动移除
+  // 注意：没配 API Key 是「用户可以选择不用 AI」的正常状态，不做常驻红条提醒。
+  // 需要的入口在设置页「AI 供应商」，AI 控件的 tooltip 也会说明。
 
   useEffect(() => {
     if (!buildInfo) return
