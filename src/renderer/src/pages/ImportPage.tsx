@@ -30,7 +30,7 @@ interface Props {
   settings: Settings
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
-  refreshStats: () => Promise<void>
+  refreshStats: (deckId?: number | null) => Promise<void>
   decks: Deck[]
   deckId: number | null
   setDeck: (id: number) => Promise<void>
@@ -84,13 +84,7 @@ export default function ImportPage({
   onDraftsChanged,
   focusDraftId
 }: Props) {
-  // 导入目标库：跟着「当前库」走；库被删了用第一个库兜底；一个库都没有 = 未归类
-  const targetDeckId = deckId ?? decks[0]?.id ?? null
-  const deckName = (id: number | null | undefined) =>
-    (id ? decks.find((deck) => deck.id === id)?.name : null) ?? '未归类'
-  /** 老草稿（deckId = null）入库时进当前库 */
-  const draftDeckLabel = (id: number | null | undefined) =>
-    decks.length === 0 ? '未归类' : id ? deckName(id) : `当前库（${deckName(targetDeckId)}）`
+  // 导入目标库：有打开的草稿就跟着草稿走（看到的 = 会进的），否则跟当前库
   const [metas, setMetas] = useState<ImportDraftMeta[]>([])
   const [draft, setDraft] = useState<ImportDraft | null>(null)
   const [busy, setBusy] = useState(false)
@@ -106,6 +100,21 @@ export default function ImportPage({
   const [managerOpen, setManagerOpen] = useState(false)
   const [loadingList, setLoadingList] = useState(true)
   const [commitOpen, setCommitOpen] = useState(false)
+
+  const currentTargetDeckId = deckId ?? decks[0]?.id ?? null
+  const draftDeckId =
+    draft?.deckId && decks.some((deck) => deck.id === draft.deckId) ? draft.deckId : null
+  const targetDeckId = draftDeckId ?? currentTargetDeckId
+  const deckName = (id: number | null | undefined) =>
+    (id ? decks.find((deck) => deck.id === id)?.name : null) ?? '未归类'
+  /** 老草稿（deckId = null）或目标库已被删：入库时按当前库（settings，不是下拉里显示的草稿库） */
+  const draftDeckLabel = (id: number | null | undefined) => {
+    if (decks.length === 0) return '未归类'
+    if (!id || !decks.some((deck) => deck.id === id)) {
+      return `当前库（${deckName(currentTargetDeckId)}）`
+    }
+    return deckName(id)
+  }
 
   const draftRef = useRef<ImportDraft | null>(null)
   const saveTimer = useRef<number | null>(null)
@@ -145,6 +154,7 @@ export default function ImportPage({
                   selectedCount: current.items.filter((it) => it.selected && it.headword.trim()).length,
                   issueCount: current.issues.length,
                   errorCount: current.issues.filter((is) => is.severity === 'error').length,
+                  deckId: current.deckId,
                   edited: true,
                   updatedAt: nowIso()
                 }
@@ -597,7 +607,10 @@ export default function ImportPage({
                 decks={decks}
                 value={targetDeckId}
                 onChange={(id) => {
-                  if (id !== null) void setDeck(id)
+                  if (id === null) return
+                  // 改「导入到」= 改这份草稿的库（下一份新文件也进这里）
+                  if (draftRef.current) applyPatch({ deckId: id })
+                  void setDeck(id)
                 }}
                 width={150}
               />

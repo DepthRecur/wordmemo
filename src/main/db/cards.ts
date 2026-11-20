@@ -165,26 +165,35 @@ export function cardsInScope(scope: {
     clauses.push(deck.clause)
     params.push(...deck.params)
   }
-  if (scope.itemIds?.length) {
-    clauses.push(`c.item_id IN (${scope.itemIds.map(() => '?').join(',')})`)
-    params.push(...scope.itemIds)
+  if (scope.itemIds !== undefined) {
+    if (!scope.itemIds.length) clauses.push('1 = 0')
+    else {
+      clauses.push(`c.item_id IN (${scope.itemIds.map(() => '?').join(',')})`)
+      params.push(...scope.itemIds)
+    }
   }
-  if (scope.noteIds?.length) {
-    clauses.push(
-      `c.item_id IN (SELECT item_id FROM note_items WHERE note_id IN (${scope.noteIds
-        .map(() => '?')
-        .join(',')}))`
-    )
-    params.push(...scope.noteIds)
+  if (scope.noteIds !== undefined) {
+    if (!scope.noteIds.length) clauses.push('1 = 0')
+    else {
+      clauses.push(
+        `c.item_id IN (SELECT item_id FROM note_items WHERE note_id IN (${scope.noteIds
+          .map(() => '?')
+          .join(',')}))`
+      )
+      params.push(...scope.noteIds)
+    }
   }
-  if (scope.tags?.length) {
-    const tagClauses = scope.tags.map(() => `n.tags LIKE ?`)
-    clauses.push(
-      `c.item_id IN (SELECT ni.item_id FROM note_items ni JOIN notes n ON n.id = ni.note_id WHERE ${tagClauses.join(
-        ' OR '
-      )})`
-    )
-    params.push(...scope.tags.map((t) => `%${t}%`))
+  if (scope.tags !== undefined) {
+    if (!scope.tags.length) clauses.push('1 = 0')
+    else {
+      const tagClauses = scope.tags.map(() => `n.tags LIKE ?`)
+      clauses.push(
+        `c.item_id IN (SELECT ni.item_id FROM note_items ni JOIN notes n ON n.id = ni.note_id WHERE ${tagClauses.join(
+          ' OR '
+        )})`
+      )
+      params.push(...scope.tags.map((t) => `%${t}%`))
+    }
   }
 
   const rows = d

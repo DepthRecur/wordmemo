@@ -35,7 +35,7 @@ interface Props {
   settings: Settings
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
-  refreshStats: () => Promise<void>
+  refreshStats: (deckId?: number | null) => Promise<void>
   decks: Deck[]
   deckId: number | null
   setDeck: (id: number) => Promise<void>
@@ -482,13 +482,15 @@ export default function SettingsPage({
     }
     setDeckBusy(true)
     try {
+      const removedCurrent = deckId === deleteDeck.id
       const res = await window.api.decks.remove(deleteDeck.id, target)
       const next = await refreshDecks()
-      // 侧边栏/统计页的计数跟着刷新（D-07），不必等 60 秒轮询
-      void refreshStats()
-      if (deckId === deleteDeck.id) {
-        const active = next.some((d) => d.id === deckId) ? deckId : (next[0]?.id ?? null)
-        if (active) await setDeck(active)
+      // 统计按删除后的当前库刷新（D-07）；删的是当前库时目标库由主进程决定，可能为 null
+      void refreshStats(removedCurrent ? target : undefined)
+      if (removedCurrent) {
+        // 主进程已经把 currentDeckId 写成 moveTo（或 0 = 没有库），这里只同步本地设置；
+        // 不要自己挑「第一个库」覆盖它（D-05）
+        await refreshSettings()
       }
       const targetName = target === null ? '' : (next.find((d) => d.id === target)?.name ?? '')
       // 这一行的本地草稿也跟着删掉，别让自动保存再往已删的库里写

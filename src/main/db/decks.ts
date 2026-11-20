@@ -1,5 +1,5 @@
-import type { Deck, DeckPatch } from '@shared/types'
-import { getDb, localIso, toInt, tx } from './connection'
+import type { Deck, DeckPatch, ExamScope } from '@shared/types'
+import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { newUid } from './uid'
 import { getSettings, updateSettings } from '../settings'
 
@@ -242,7 +242,8 @@ export function removeDeck(
     if (!deckExists(moveTo)) throw new Error('目标库不存在')
   }
 
-  return tx(() => {
+  const wasCurrent = getSettings().currentDeckId === id
+  const result = tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
     if (moveTo === null) {
       getDb()
@@ -256,12 +257,35 @@ export function removeDeck(
         .run(moveTo, localIso(), id)
       getDb().prepare('UPDATE import_drafts SET deck_id = ? WHERE deck_id = ?').run(moveTo, id)
     }
-    getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
-    // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。0 = 没有库
-    if (getSettings().currentDeckId === id) {
-      updateSettings({ currentDeckId: moveTo ?? 0 })
+    // 考试范围是 JSON，没有外键：不同步就会留下永远查不到卡的悬空 deckId（D-01）。
+    // 用 JS 解析/写回，避免依赖 SQLite JSON1；moveTo = null（删最后一个库）时
+    // 删掉 deckId = 退回「全部库」，不要写 0（0 在 deckInClause 里是「未归类」）。
+    const examRows = getDb().prepare('SELECT id, scope FROM exams').all() as {
+      id: number
+      scope: string
+    }[]
+    if (examRows.length) {
+      const updateScope = getDb().prepare('UPDATE exams SET scope = ? WHERE id = ?')
+      for (const exam of examRows) {
+        const scope = parseJson<ExamScope>(exam.scope, {})
+        if (toInt(scope.deckId) !== id) continue
+        if (moveTo === null) delete scope.deckId
+        else scope.deckId = moveTo
+        updateScope.run(JSON.stringify(scope), toInt(exam.id))
+      }
     }
+    getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
     return { moved: before, unassigned: moveTo === null ? before : 0 }
   })
+  // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。
+  // 放在事务外：事务回滚时不该已经改了磁盘上的 settings.json。
+  if (wasCurrent) {
+    try {
+      updateSettings({ currentDeckId: moveTo ?? 0 })
+    } catch {
+      /* 设置写失败不影响库已删除的结果；下次启动 currentDeckId 会兜底到第一个库 */
+    }
+  }
+  return result
 }
 

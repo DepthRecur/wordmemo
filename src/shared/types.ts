@@ -39,7 +39,6 @@ export interface NoteSummary {
   createdAt: string
   updatedAt: string
   itemCount: number
-  dueCount: number
   issueCount: number
 }
 
@@ -200,7 +199,10 @@ export interface ImportDraft {
 
 export type ImportDraftPatch = Partial<
   Pick<ImportDraft, 'title' | 'noteDate' | 'tags' | 'items' | 'issues' | 'resolved'>
->
+> & {
+  /** 改这份草稿入库的目标库（与 payload 字段分开处理） */
+  deckId?: number
+}
 
 export interface ImportCommitResult {
   noteId: number

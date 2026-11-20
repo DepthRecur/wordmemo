@@ -52,7 +52,10 @@ export function dashboardStats(deckId?: number | null): DashboardStats {
     allDecks ? 'SELECT COUNT(*) AS c FROM notes' : 'SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?',
     allDecks ? [] : [toInt(deckId)]
   )
-  const totalReviews = count('SELECT COUNT(*) AS c FROM reviews')
+  const totalReviews = count(
+    `SELECT COUNT(*) AS c FROM reviews r JOIN cards c ON c.id = r.card_id WHERE 1 = 1${cardScope.clause}`,
+    cardScope.params
+  )
   const learnAhead = Math.max(0, Number(settings.learnAheadMinutes ?? 20))
   const learnCutoff = localIso(new Date(Date.now() + learnAhead * 60_000))
   const dueToday = count(
@@ -69,9 +72,11 @@ export function dashboardStats(deckId?: number | null): DashboardStats {
   const introduced = learnedTodayCount(deckId)
   const unlearned = countUnlearned(deckId)
   const newToday = Math.min(Math.max(0, deckNewPerDay(deckId) - introduced), unlearned)
-  const reviewedToday = count('SELECT COUNT(*) AS c FROM reviews WHERE substr(reviewed_at, 1, 10) = ?', [
-    today
-  ])
+  const reviewedToday = count(
+    `SELECT COUNT(*) AS c FROM reviews r JOIN cards c ON c.id = r.card_id
+     WHERE substr(r.reviewed_at, 1, 10) = ?${cardScope.clause}`,
+    [today, ...cardScope.params]
+  )
 
   const retentionRow = d
     .prepare(

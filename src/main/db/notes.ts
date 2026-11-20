@@ -21,7 +21,6 @@ interface NoteRow {
 
 interface SummaryRow extends NoteRow {
   item_count: number
-  due_count: number
   issue_count: number
 }
 
@@ -29,8 +28,6 @@ const SUMMARY_SELECT = `
 SELECT n.*,
   d.name AS deck_name,
   (SELECT COUNT(*) FROM note_items ni WHERE ni.note_id = n.id) AS item_count,
-  (SELECT COUNT(*) FROM note_items ni JOIN cards c ON c.item_id = ni.item_id
-     WHERE ni.note_id = n.id AND c.suspended = 0 AND c.due_at <= ?) AS due_count,
   (SELECT COUNT(*) FROM validation_issues vi WHERE vi.note_id = n.id AND vi.resolved = 0) AS issue_count,
   s.original_name AS source_name,
   s.kind AS source_kind
@@ -53,15 +50,13 @@ function mapSummary(row: SummaryRow): NoteSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     itemCount: toInt(row.item_count),
-    dueCount: toInt(row.due_count),
     issueCount: toInt(row.issue_count)
   }
 }
 
 export function listNotes(query: NoteQuery = {}): NoteSummary[] {
   const d = getDb()
-  const now = localIso()
-  const params: any[] = [now]
+  const params: any[] = []
   const clauses: string[] = []
 
   // 不传 deckId = 全部库（笔记库的「全部」视图）；传了就只列这个库
@@ -102,7 +97,7 @@ export function listNotes(query: NoteQuery = {}): NoteSummary[] {
 
 export function getNote(id: number): NoteDetail | null {
   const d = getDb()
-  const row = d.prepare(`${SUMMARY_SELECT} WHERE n.id = ?`).get(localIso(), id) as SummaryRow | undefined
+  const row = d.prepare(`${SUMMARY_SELECT} WHERE n.id = ?`).get(id) as SummaryRow | undefined
   if (!row) return null
 
   const itemRows = d

@@ -26,7 +26,7 @@ interface Props {
   settings: Settings
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
-  refreshStats: () => Promise<void>
+  refreshStats: (deckId?: number | null) => Promise<void>
   decks: Deck[]
   deckId: number | null
   setDeck: (id: number) => Promise<void>

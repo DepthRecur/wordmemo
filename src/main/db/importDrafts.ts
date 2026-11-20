@@ -233,10 +233,19 @@ export function getDraft(id: number): ImportDraft | null {
 export function saveDraft(id: number, patch: ImportDraftPatch): void {
   const row = rowById(id)
   if (!row) throw new Error('草稿不存在（可能已经被入库或丢弃）')
-  const payload: DraftPayload = { ...payloadOf(row), ...patch }
+  // deckId 是表列，不是 payload 字段：单独取出，别混进 payload
+  const { deckId, ...payloadPatch } = patch
+  const payload: DraftPayload = { ...payloadOf(row), ...payloadPatch }
+  const nextDeckId =
+    deckId === undefined ? row.deck_id : deckExists(toInt(deckId)) ? toInt(deckId) : null
+  if (deckId !== undefined && nextDeckId === null) {
+    throw new Error('目标库不存在（可能已经被删除）')
+  }
   getDb()
-    .prepare('UPDATE import_drafts SET payload = ?, summary = ?, edited = 1, updated_at = ? WHERE id = ?')
-    .run(JSON.stringify(payload), JSON.stringify(summarize(payload)), localIso(), id)
+    .prepare(
+      'UPDATE import_drafts SET payload = ?, summary = ?, deck_id = ?, edited = 1, updated_at = ? WHERE id = ?'
+    )
+    .run(JSON.stringify(payload), JSON.stringify(summarize(payload)), nextDeckId, localIso(), id)
 }
 
 function storedPathReferenced(relPath: string | null): boolean {

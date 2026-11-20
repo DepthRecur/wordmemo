@@ -179,8 +179,12 @@ export function updateSettings(patch: SettingsPatch): Settings {
   const next = merge({ ...getSettings(), ...patch })
   // 派生字段只给界面看，不写进 settings.json
   const { apiKeySet: _apiKeySet, modelSet: _modelSet, aiReady: _aiReady, ...persisted } = next
-  fs.mkdirSync(path.dirname(settingsPath()), { recursive: true })
-  fs.writeFileSync(settingsPath(), JSON.stringify(persisted, null, 2), 'utf8')
+  const file = settingsPath()
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  // 临时文件 + rename：写到一半被杀也不会留下截断的 settings.json（否则下次启动全部回默认）
+  const tmp = `${file}.tmp`
+  fs.writeFileSync(tmp, JSON.stringify(persisted, null, 2), 'utf8')
+  fs.renameSync(tmp, file)
   cache = next
   return next
 }

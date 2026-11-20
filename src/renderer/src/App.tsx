@@ -47,7 +47,7 @@ export interface CommonProps extends DeckProps {
   settings: Settings
   refreshSettings: () => Promise<Settings>
   navigate: Navigate
-  refreshStats: () => Promise<void>
+  refreshStats: (deckId?: number | null) => Promise<void>
 }
 
 /**
@@ -266,9 +266,10 @@ export default function App() {
   const deckIdRef = useRef<number | null>(deckId)
   deckIdRef.current = deckId
 
-  const refreshStats = useCallback(async () => {
+  /** 不传 deckId = 当前库（常规刷新）；删库后可以明确指定新的库/全部 */
+  const refreshStats = useCallback(async (id?: number | null) => {
     try {
-      setStats(await window.api.stats.dashboard(deckIdRef.current))
+      setStats(await window.api.stats.dashboard(id === undefined ? deckIdRef.current : id))
     } catch {
       /* ignore */
     }
