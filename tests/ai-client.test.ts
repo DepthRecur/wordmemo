@@ -5,6 +5,7 @@ import type { AiSettings } from '../src/shared/types'
 import { closeDb, getDb, openDb } from '../src/main/db/connection'
 import { initSettings, setApiKey, updateSettings } from '../src/main/settings'
 import { chat, chatJson, testApiKey } from '../src/main/ai/client'
+import { validateItems } from '../src/main/ai/import'
 import { aiSettingsInfo } from '../src/main/ai/info'
 
 /**
@@ -395,5 +396,47 @@ describe('P-06 视觉首轮就清洗 detail', () => {
       messages: { content: { image_url: { detail?: string } }[] }[]
     }
     expect(body.messages[0].content[1].image_url.detail).toBeUndefined()
+  })
+})
+
+describe('P-04 校验分批', () => {
+  const items = (n: number, tag = ''): { headword: string; pos: string; meanings: string[] }[] =>
+    Array.from({ length: n }, (_, i) => ({
+      headword: `word${tag}${i + 1}`,
+      pos: 'n.',
+      meanings: [`义项${i + 1}`]
+    }))
+
+  it('120 条按 50 条一批发出去，issue 的 index 换算回整份笔记的序号', async () => {
+    const calls = stubFetch(() => ({
+      body: JSON.stringify({
+        choices: [{ message: { content: '{"issues":[{"index":1,"message":"拼写可疑"}]}' } }]
+      })
+    }))
+
+    const issues = await validateItems(items(120))
+
+    expect(calls).toHaveLength(3)
+    const sizes = calls
+      .map((c) => (JSON.parse(c.init.body) as { messages: { content: string }[] }).messages[1].content.split('\n').length)
+      .sort((a, b) => a - b)
+    expect(sizes).toEqual([20, 50, 50])
+    expect(issues.map((i) => i.index)).toEqual([1, 51, 101])
+  })
+
+  it('任一批失败就抛错，不返回「半份校验结果」', async () => {
+    let n = 0
+    stubFetch(() => {
+      n++
+      return n === 2
+        ? { status: 402, body: '{}' }
+        : {
+            body: JSON.stringify({
+              choices: [{ message: { content: '{"issues":[{"index":1,"message":"拼写可疑"}]}' } }]
+            })
+          }
+    })
+
+    await expect(validateItems(items(120, 'b'))).rejects.toThrow(/余额不足/)
   })
 })

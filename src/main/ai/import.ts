@@ -71,23 +71,68 @@ export async function structurize(rawText: string): Promise<AiStructResult> {
   })
 }
 
+/** 校验分批（P-04）：一份 3000 词的笔记不再拼成一条超长 prompt */
+const VALIDATE_BATCH = 50
+/** 同时最多几个批次在飞；四家厂商都扛得住，太小反而白等 */
+const VALIDATE_CONCURRENCY = 5
+
 export async function validateItems(
   items: { headword: string; pos?: string | null; meanings: string[] }[]
 ): Promise<AiIssue[]> {
   if (!aiAvailable() || !items.length) return []
-  const lines = items
-    .map((it, i) => `${i + 1} | ${it.headword} | ${it.pos ?? ''} | ${it.meanings.join('；')}`)
-    .join('\n')
-  const result = await chatJson<{ issues?: AiIssue[] }>({
-    kind: 'validate',
-    messages: [
-      { role: 'system', content: VALIDATE_SYSTEM },
-      { role: 'user', content: lines }
-    ],
-    maxTokens: 3000,
-    cacheKey: hashKey(['validate-v1', lines])
-  })
-  return Array.isArray(result.issues) ? result.issues : []
+
+  const batches: { start: number; items: typeof items }[] = []
+  for (let start = 0; start < items.length; start += VALIDATE_BATCH) {
+    batches.push({ start, items: items.slice(start, start + VALIDATE_BATCH) })
+  }
+
+  const issues: AiIssue[] = []
+  let next = 0
+  let failure: unknown = null
+
+  const runOne = async (start: number, chunk: typeof items): Promise<void> => {
+    const lines = chunk
+      .map((it, i) => `${i + 1} | ${it.headword} | ${it.pos ?? ''} | ${it.meanings.join('；')}`)
+      .join('\n')
+    const result = await chatJson<{ issues?: AiIssue[] }>({
+      kind: 'validate',
+      messages: [
+        { role: 'system', content: VALIDATE_SYSTEM },
+        { role: 'user', content: lines }
+      ],
+      maxTokens: 3000,
+      cacheKey: hashKey(['validate-v1', lines])
+    })
+    for (const issue of Array.isArray(result.issues) ? result.issues : []) {
+      const local = Number(issue.index)
+      // 批次内部从 1 开始编号，返回前换算回整份笔记的序号
+      const index =
+        Number.isInteger(local) && local >= 1 && local <= chunk.length ? start + local : issue.index
+      issues.push({ ...issue, index })
+    }
+  }
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      if (failure) return
+      const batch = batches[next++]
+      if (!batch) return
+      try {
+        await runOne(batch.start, batch.items)
+      } catch (err) {
+        // 只要有一批没校验成功，就不返回「半份结果」：宁可整次失败，也不让用户
+        // 以为剩下的词条都检查过了
+        failure ??= err
+      }
+    }
+  }
+
+  await Promise.all(
+    Array.from({ length: Math.min(VALIDATE_CONCURRENCY, batches.length) }, () => worker())
+  )
+  if (failure) throw failure
+  // 并发执行后按序号排好，界面上的问题列表才稳定
+  return issues.sort((a, b) => (Number(a.index) || 0) - (Number(b.index) || 0))
 }
 
 export interface AiEnrichItem {

@@ -362,24 +362,22 @@ export async function analyzeFile(file: string): Promise<ImportPreview> {
   }
 
   if (aiAvailable() && settings.aiValidate && items.length) {
-    try {
-      const aiIssues = await validateItems(items)
-      for (const raw of aiIssues) {
-        const idx = Number(raw.index) - 1
-        const target = Number.isInteger(idx) && idx >= 0 && idx < items.length ? items[idx] : null
-        const field = (raw.field ?? 'general') as ValidationIssue['field']
-        issues.push({
-          tempId: target?.tempId ?? null,
-          severity: raw.severity === 'error' ? 'error' : 'warning',
-          field: ['headword', 'pos', 'meaning', 'example', 'line'].includes(field as string)
-            ? field
-            : 'general',
-          message: raw.message?.trim() || 'AI 未说明原因',
-          suggestion: raw.suggestion?.trim() || null
-        })
-      }
-    } catch (err) {
-      warnings.push(`AI 校验未完成：${err instanceof Error ? err.message : String(err)}`)
+    // 校验失败不能降级成 warning：没校验过的词条会被当成「检查过了」入库。
+    // 直接抛给调用方，让用户看到失败并重试。
+    const aiIssues = await validateItems(items)
+    for (const raw of aiIssues) {
+      const idx = Number(raw.index) - 1
+      const target = Number.isInteger(idx) && idx >= 0 && idx < items.length ? items[idx] : null
+      const field = (raw.field ?? 'general') as ValidationIssue['field']
+      issues.push({
+        tempId: target?.tempId ?? null,
+        severity: raw.severity === 'error' ? 'error' : 'warning',
+        field: ['headword', 'pos', 'meaning', 'example', 'line'].includes(field as string)
+          ? field
+          : 'general',
+        message: raw.message?.trim() || 'AI 未说明原因',
+        suggestion: raw.suggestion?.trim() || null
+      })
     }
   } else if (!aiAvailable() && settings.aiValidate && items.length) {
     // 没配 Key 是正常状态（用户可以不启用 AI），只作为「解析提示」展示，
