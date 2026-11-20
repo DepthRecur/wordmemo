@@ -1455,9 +1455,10 @@ select {
   min-width: 100%;
   max-width: 360px;
 }
-.select-list.drop-up {
-  top: auto;
-  bottom: calc(100% + 4px);
+/* 列表经 portal 挂到 body：fixed 定位，避开 .modal-body 的 overflow 裁剪 */
+.combo-list.select-portal {
+  position: fixed;
+  z-index: 150;
 }
 .combo-item:disabled {
   opacity: 0.5;
