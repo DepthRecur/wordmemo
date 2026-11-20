@@ -1,7 +1,7 @@
 ﻿# 交接文档（给下一个会话 / 未来的自己）
 
 > 最后更新：2026-11-20（第二轮修复后）　当前分支：`master`（已并入 `fix/decks-ui`：U0 + 供应商修复 + 多库修复）　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 已 push 到远端（private）；`feat/decks`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。远端仓库 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。
+> **推送状态**：`master` 已在本地快进到最新（含 U0 + 全部修复 + 本文档），但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
@@ -346,6 +346,7 @@ U1 的关键点（详见 PLAN-UPDATE §11.2）：
 - **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
 - **用户可见消息的级别**（2026-11-20 定）：错误 = 功能结果出错/不可用（红色、常驻铃铛）；警告 = 异常但不影响功能（黄色/内嵌提示、不常驻）；提示 = 成功、进度、少做一个前置动作。细节与判定顺序见 [MESSAGES.md](MESSAGES.md)，**改文案前先按它定级**，不要为了让提示显眼就升成 `err`。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。
+
 
 
 
