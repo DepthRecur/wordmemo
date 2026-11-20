@@ -2,12 +2,14 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { app } from 'electron'
+import { addDays, dateKey } from '@shared/normalize'
 import { DatabaseSync } from '../src/main/db/sqlite'
 import { backupBeforeMigrate, closeDb, openDb } from '../src/main/db/connection'
-import { getSettings, initSettings } from '../src/main/settings'
+import { getSettings, initSettings, updateSettings } from '../src/main/settings'
 import { initFsrs } from '../src/main/fsrs'
 import {
   createDeck,
+  currentDeckId,
   deckNewPerDay,
   listDecks,
   removeDeck,
@@ -28,8 +30,18 @@ import {
   learnedTodayCount,
   upsertItem
 } from '../src/main/db/items'
-import { countDue, dailyPlan, dueQueue, markItemLearned } from '../src/main/db/cards'
+import {
+  applyReview,
+  cardsInScope,
+  countDue,
+  dailyPlan,
+  dueQueue,
+  markItemLearned
+} from '../src/main/db/cards'
 import { dashboardStats } from '../src/main/db/stats'
+import { createExam, getExam } from '../src/main/db/exams'
+import { buildExamPlan } from '../src/main/planner'
+import { commitDraft, createDraft, getDraft, saveDraft } from '../src/main/db/importDrafts'
 
 const dataDir = app.getPath('userData')
 const dbFile = path.join(dataDir, 'decks.db')
@@ -422,5 +434,176 @@ describe('迁移：老库进默认库，迁移前先备份', () => {
     openDb(legacyFile)
     expect(listDecks()).toHaveLength(0)
     expect(listNotes({})[0].deckName).toBe('未归类')
+  })
+})
+
+function makeDraft(deckId: number, headword: string): number {
+  return createDraft({
+    sha256: null,
+    storedPath: null,
+    fileName: `${headword}.txt`,
+    sourceKind: 'txt',
+    originalPath: null,
+    deckId,
+    preview: {
+      fileName: `${headword}.txt`,
+      sourceKind: 'txt',
+      rawText: headword,
+      title: headword,
+      items: [
+        {
+          tempId: 't1',
+          kind: 'word',
+          headword,
+          meanings: [`${headword} 的释义`],
+          examples: [],
+          selected: true
+        }
+      ],
+      issues: [],
+      warnings: [],
+      aiUsed: false
+    }
+  })
+}
+
+describe('删库后的引用（D-01 / D-02 / D-05）', () => {
+  it('考试范围跟着笔记一起搬到目标库（D-01）', () => {
+    const A = createDeck({ name: 'exam-scope-A' })
+    const B = createDeck({ name: 'exam-scope-B' })
+    addNote(A, ['examword1', 'examword2'])
+    const examId = createExam({
+      title: '范围库 A',
+      examDate: addDays(dateKey(), 7),
+      scope: { deckId: A },
+      level: 'dictate',
+      targetRetention: 0.95,
+      dailyMinutes: 20
+    })
+    expect(buildExamPlan(examId).totalCards).toBeGreaterThan(0)
+
+    removeDeck(A, B)
+    expect(getExam(examId)!.scope.deckId).toBe(B)
+    expect(buildExamPlan(examId).totalCards).toBeGreaterThan(0)
+  })
+
+  it('范围是「全部库」的考试不受删库影响（D-01）', () => {
+    const examId = createExam({
+      title: '全部库',
+      examDate: addDays(dateKey(), 7),
+      scope: {},
+      level: 'dictate',
+      targetRetention: 0.95,
+      dailyMinutes: 20
+    })
+    const C = createDeck({ name: 'exam-scope-C' })
+    const D = createDeck({ name: 'exam-scope-D' })
+    removeDeck(C, D)
+    expect(getExam(examId)!.scope.deckId).toBeUndefined()
+  })
+
+  it('删库后草稿入库进 moveTo，而不是当前库（D-02）', () => {
+    const A = createDeck({ name: 'draft-A' })
+    const B = createDeck({ name: 'draft-B' })
+    const C = createDeck({ name: 'draft-C' })
+    const prev = getSettings().currentDeckId
+    try {
+      updateSettings({ currentDeckId: C })
+      const draftId = makeDraft(A, 'draftword1')
+      removeDeck(A, B)
+      const { noteId } = commitDraft(draftId)
+      expect(getNote(noteId)!.deckId).toBe(B)
+    } finally {
+      updateSettings({ currentDeckId: prev })
+    }
+  })
+
+  it('删当前库后 currentDeckId 指向目标库，删别的库不动它（D-05）', () => {
+    const prev = getSettings().currentDeckId
+    try {
+      const A = createDeck({ name: 'cur-A' })
+      const B = createDeck({ name: 'cur-B' })
+      updateSettings({ currentDeckId: A })
+      removeDeck(A, B)
+      expect(getSettings().currentDeckId).toBe(B)
+      expect(currentDeckId()).toBe(B)
+
+      const C = createDeck({ name: 'cur-C' })
+      removeDeck(C, B)
+      expect(getSettings().currentDeckId).toBe(B)
+    } finally {
+      updateSettings({ currentDeckId: prev })
+    }
+  })
+})
+
+describe('统计与范围口径（D-04 / D-06）', () => {
+  it('今天已复习 / 总复习数按库过滤，热力图/连续天数/正确率仍跨库（D-04）', () => {
+    const A = createDeck({ name: 'rev-A' })
+    const B = createDeck({ name: 'rev-B' })
+    addNote(A, ['reva1'])
+    addNote(B, ['revb1'])
+    markItemLearned(itemIdOf('reva1'), true)
+    markItemLearned(itemIdOf('revb1'), true)
+
+    const base = dashboardStats(null)
+    for (const deck of [A, B]) {
+      const card = dueQueue(50, deck)[0]
+      expect(card).toBeTruthy()
+      applyReview({
+        cardId: card.id,
+        rating: 3,
+        answer: '',
+        correct: true,
+        elapsedMs: 100,
+        mode: 'longterm',
+        judgeBy: 'manual'
+      })
+    }
+
+    const all = dashboardStats(null)
+    expect(all.reviewedToday).toBe(base.reviewedToday + 2)
+    expect(all.totalReviews).toBe(base.totalReviews + 2)
+    expect(dashboardStats(A).reviewedToday).toBe(base.reviewedToday + 1)
+    expect(dashboardStats(A).totalReviews).toBe(base.totalReviews + 1)
+    expect(dashboardStats(B).reviewedToday).toBe(base.reviewedToday + 1)
+
+    // 复习记录没有库维度：这三项始终跨库
+    expect(dashboardStats(A).heatmap).toEqual(all.heatmap)
+    expect(dashboardStats(A).streak).toBe(all.streak)
+    expect(dashboardStats(A).retention30d).toBe(all.retention30d)
+  })
+
+  it('cardsInScope 的空数组 = 空集合，undefined 才不过滤（D-06）', () => {
+    const deck = createDeck({ name: 'scope-empty' })
+    const noteId = addNote(deck, ['scopex1'])
+
+    expect(cardsInScope({ noteIds: [noteId] }).length).toBeGreaterThan(0)
+    expect(cardsInScope({ noteIds: [] })).toEqual([])
+    expect(cardsInScope({ tags: [] })).toEqual([])
+    expect(cardsInScope({ itemIds: [] })).toEqual([])
+    expect(cardsInScope({}).length).toBeGreaterThan(0)
+  })
+})
+
+describe('导入目标库（U-2）', () => {
+  it('改草稿的 deckId 后入库进新库', () => {
+    const A = createDeck({ name: 'switch-A' })
+    const B = createDeck({ name: 'switch-B' })
+    const draftId = makeDraft(A, 'switchword1')
+    expect(getDraft(draftId)!.deckId).toBe(A)
+
+    saveDraft(draftId, { deckId: B })
+    expect(getDraft(draftId)!.deckId).toBe(B)
+
+    const { noteId } = commitDraft(draftId)
+    expect(getNote(noteId)!.deckId).toBe(B)
+  })
+
+  it('改成不存在的库会被拒绝，草稿保持原库', () => {
+    const A = createDeck({ name: 'switch-C' })
+    const draftId = makeDraft(A, 'switchword2')
+    expect(() => saveDraft(draftId, { deckId: 999999 })).toThrow(/目标库不存在/)
+    expect(getDraft(draftId)!.deckId).toBe(A)
   })
 })
