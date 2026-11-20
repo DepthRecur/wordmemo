@@ -28,6 +28,8 @@ interface ChatOptions {
   timeoutMs?: number
   cacheKey?: string
   temperature?: number
+  /** 调用方要求「结果必须是 JSON」：不是 JSON 的回复不写缓存（P-01） */
+  expectJson?: boolean
 }
 
 interface Target {
@@ -234,6 +236,25 @@ export function overBudget(): boolean {
   return false
 }
 
+/** 能从文本里找出一个 JSON 值就返回它；纯文本回复返回 undefined */
+function parseJsonLoose(text: string): unknown {
+  try {
+    return JSON.parse(text)
+  } catch {
+    /* 继续尝试截取 */
+  }
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start >= 0 && end > start) {
+    try {
+      return JSON.parse(text.slice(start, end + 1))
+    } catch {
+      /* 不是 JSON */
+    }
+  }
+  return undefined
+}
+
 export async function chat(opts: ChatOptions): Promise<string> {
   const target = resolveTarget(opts.role ?? 'default', opts.provider)
   const key = getApiKey(target.spec.id)
@@ -251,7 +272,9 @@ export async function chat(opts: ChatOptions): Promise<string> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const content = await requestOnce(target, opts, key)
-      if (opts.cacheKey) {
+      // P-01：要求 JSON 的调用只要这一轮不是 JSON 就不缓存——否则 chatJson 的
+      // 「再要一次 JSON」会命中这条坏缓存，永远修不好
+      if (opts.cacheKey && (!opts.expectJson || parseJsonLoose(content) !== undefined)) {
         setAiCache(target.spec.id, opts.kind, opts.cacheKey, target.model, content)
       }
       return content
@@ -276,6 +299,7 @@ export async function chatJson<T>(opts: ChatOptions): Promise<T> {
     const text = await chat({
       ...opts,
       json: true,
+      expectJson: true,
       messages:
         attempt === 0
           ? opts.messages
@@ -288,20 +312,8 @@ export async function chatJson<T>(opts: ChatOptions): Promise<T> {
             ]
     })
     lastText = text
-    try {
-      return JSON.parse(text) as T
-    } catch {
-      // 尝试从文本中截取 JSON
-      const start = text.indexOf('{')
-      const end = text.lastIndexOf('}')
-      if (start >= 0 && end > start) {
-        try {
-          return JSON.parse(text.slice(start, end + 1)) as T
-        } catch {
-          /* fallthrough */
-        }
-      }
-    }
+    const parsed = parseJsonLoose(text)
+    if (parsed !== undefined) return parsed as T
   }
   throw new AiError('AI 返回的内容不是合法 JSON')
 }

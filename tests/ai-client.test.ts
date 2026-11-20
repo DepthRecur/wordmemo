@@ -4,7 +4,7 @@ import { app } from 'electron'
 import type { AiSettings } from '../src/shared/types'
 import { closeDb, getDb, openDb } from '../src/main/db/connection'
 import { initSettings, setApiKey, updateSettings } from '../src/main/settings'
-import { chat, testApiKey } from '../src/main/ai/client'
+import { chat, chatJson, testApiKey } from '../src/main/ai/client'
 import { aiSettingsInfo } from '../src/main/ai/info'
 
 /**
@@ -313,5 +313,38 @@ describe('「模型始终思考」的降级（GLM 新模型）', () => {
     await expect(testApiKey('deepseek')).resolves.toMatchObject({ ok: true, provider: 'deepseek' })
     expect(calls).toHaveLength(2)
     expect(JSON.parse(calls[1].init.body).thinking).toBeUndefined()
+  })
+})
+
+describe('P-01 / P-03 缓存与重试的边界', () => {
+  it('P-01 第一轮不是 JSON 时不写缓存，第二轮真的发了请求，缓存里是合法 JSON', async () => {
+    let n = 0
+    const calls = stubFetch(() => {
+      n++
+      const content = n === 1 ? '好的，结果如下：' : '{"ok":1}'
+      return { body: JSON.stringify({ choices: [{ message: { content } }] }) }
+    })
+
+    await expect(chatJson({ messages, kind: 'p01', cacheKey: 'p01-key' })).resolves.toEqual({ ok: 1 })
+    expect(calls).toHaveLength(2)
+
+    const row = getDb()
+      .prepare("SELECT response_json FROM ai_cache WHERE kind = 'p01' AND cache_key = 'p01-key'")
+      .get() as { response_json: string }
+    expect(JSON.parse(row.response_json)).toEqual({ ok: 1 })
+  })
+
+  it('P-01 两轮都不是 JSON 时一条都不缓存，下次仍会重新请求', async () => {
+    const calls = stubFetch(() => ({
+      body: JSON.stringify({ choices: [{ message: { content: '不知道' } }] })
+    }))
+
+    await expect(chatJson({ messages, kind: 'p01', cacheKey: 'p01-bad' })).rejects.toThrow(/合法 JSON/)
+    expect(calls).toHaveLength(2)
+
+    const row = getDb()
+      .prepare("SELECT 1 FROM ai_cache WHERE kind = 'p01' AND cache_key = 'p01-bad'")
+      .get()
+    expect(row).toBeUndefined()
   })
 })
