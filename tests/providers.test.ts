@@ -48,6 +48,31 @@ describe('请求体装配', () => {
     ).toEqual({ type: 'enabled' })
   })
 
+  it('P-06 图片消息：Gemini/GLM 第一轮就不带 image_url.detail，DeepSeek 保留', () => {
+    const vision = [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: '读出这张图' },
+          { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA', detail: 'original' } }
+        ]
+      }
+    ]
+    type ImagePart = { image_url: { url?: string; detail?: string } }
+    type VisionBody = { messages: { content: ImagePart[] }[] }
+
+    const gemini = buildChatBody(gm, { model: 'gemini-x' }, { messages: vision }) as unknown as VisionBody
+    expect(gemini.messages[0].content[1].image_url).toEqual({ url: 'data:image/png;base64,AAA' })
+
+    const glmBody = buildChatBody(glm, { model: 'glm-x' }, { messages: vision }) as unknown as VisionBody
+    expect(glmBody.messages[0].content[1].image_url.detail).toBeUndefined()
+
+    const dsBody = buildChatBody(ds, { model: 'm' }, { messages: vision }) as unknown as VisionBody
+    expect(dsBody.messages[0].content[1].image_url.detail).toBe('original')
+    // 清洗不能改到调用方传进来的数组
+    expect(vision[0].content[1].image_url.detail).toBe('original')
+  })
+
   it('OpenAI：用 max_completion_tokens，不发 thinking；thinking 才发 reasoning_effort', () => {
     const plain = buildChatBody(oa, { model: 'gpt-x' }, { messages, maxTokens: 500 })
     expect(plain.max_completion_tokens).toBe(500)

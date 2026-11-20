@@ -53,6 +53,27 @@ export interface ProviderConfig {
   apiKey: string
 }
 
+/**
+ * P-06：`image_url.detail` 是 OpenAI 专有字段。不支持它的家（Gemini/GLM）第一轮就别带，
+ * 省掉「先吃一次 400、再降级重发」；DeepSeek/OpenAI 原样保留。
+ */
+export function sanitizeMessages(spec: ProviderSpec, messages: unknown[]): unknown[] {
+  if (spec.compat.imageDetail) return messages
+  return messages.map((message) => {
+    const content = (message as { content?: unknown } | null)?.content
+    if (!Array.isArray(content)) return message
+    return {
+      ...(message as Record<string, unknown>),
+      content: content.map((part) => {
+        const image = (part as { image_url?: { detail?: string } } | null)?.image_url
+        if (!image || !('detail' in image)) return part
+        const { detail: _drop, ...rest } = image
+        return { ...(part as Record<string, unknown>), image_url: rest }
+      })
+    }
+  })
+}
+
 /** 只做"装配请求体"，不发网络请求——方便单测 */
 export function buildChatBody(
   spec: ProviderSpec,
@@ -61,7 +82,7 @@ export function buildChatBody(
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: cfg.model,
-    messages: req.messages,
+    messages: sanitizeMessages(spec, req.messages),
     stream: false,
     [spec.compat.maxTokensField]: req.maxTokens ?? 2000
   }

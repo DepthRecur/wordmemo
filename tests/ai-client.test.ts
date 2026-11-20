@@ -366,3 +366,34 @@ describe('P-01 / P-03 缓存与重试的边界', () => {
     expect(calls).toHaveLength(1)
   })
 })
+
+describe('P-06 视觉首轮就清洗 detail', () => {
+  it('Gemini 的 OCR 第一次请求就不带 detail，不会先吃一次 400', async () => {
+    configureAi({ vision: { provider: 'gemini' }, providers: { gemini: { model: 'gemini-x' } } })
+    setApiKey('gemini', 'sk-gemini')
+    const calls = stubFetch(() => ({ body: OK_BODY }))
+
+    await chat({
+      kind: 'ocr',
+      role: 'vision',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: '读出这张图' },
+            {
+              type: 'image_url',
+              image_url: { url: 'data:image/png;base64,AAA', detail: 'original' }
+            }
+          ]
+        }
+      ]
+    })
+
+    expect(calls).toHaveLength(1)
+    const body = JSON.parse(calls[0].init.body) as {
+      messages: { content: { image_url: { detail?: string } }[] }[]
+    }
+    expect(body.messages[0].content[1].image_url.detail).toBeUndefined()
+  })
+})

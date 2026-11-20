@@ -8,7 +8,7 @@ import {
   type ProviderId,
   type ProviderSpec
 } from './providers'
-import { AiError, requestChat, type ChatRequest } from './transport'
+import { AiError, requestChat, sanitizeMessages, type ChatRequest } from './transport'
 
 export { AiError }
 
@@ -115,23 +115,6 @@ function resolveTarget(role: AiRole, override?: AiProviderId): Target {
   return targetFor(id, cfg)
 }
 
-/** 去掉 messages 里 image_url 的 detail（OpenAI 专有字段，别家兼容层可能 400） */
-function stripImageDetail(messages: unknown[]): unknown[] {
-  return messages.map((message) => {
-    const content = (message as { content?: unknown })?.content
-    if (!Array.isArray(content)) return message
-    return {
-      ...(message as Record<string, unknown>),
-      content: content.map((part) => {
-        const p = part as { type?: string; image_url?: { url?: string; detail?: string } }
-        if (p?.type !== 'image_url' || !p.image_url) return part
-        const { detail: _drop, ...rest } = p.image_url
-        return { ...p, image_url: rest }
-      })
-    }
-  })
-}
-
 /**
  * 400「未知参数」→ 去掉被点名的那个参数再试一次（PLAN-PROVIDERS §3.3）。
  * thinking 改的是 compat（请求体里只有它自己发这个字段），所以返回新的 target；
@@ -157,7 +140,10 @@ function degradeParam(target: Target, req: ChatRequest, err: AiError): Target | 
     return target
   }
   if (/image_url|detail/i.test(msg)) {
-    req.messages = stripImageDetail(req.messages)
+    req.messages = sanitizeMessages(
+      { ...target.spec, compat: { ...target.spec.compat, imageDetail: false } },
+      req.messages
+    )
     return {
       ...target,
       spec: { ...target.spec, compat: { ...target.spec.compat, imageDetail: false } }
