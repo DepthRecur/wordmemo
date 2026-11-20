@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowRight, Check, Eye, EyeOff, RotateCcw, Volume2, X } from 'lucide-react'
-import type { DailyPlan, Deck, Item, JudgeResult, QueueCard, Settings } from '@shared/types'
+import type { DailyPlan, Deck, Item, JudgeResult, QueueCard, ReviewSession, Settings } from '@shared/types'
 import { DIRECTION_LABEL } from '@shared/types'
 import { displayPhonetic } from '@shared/normalize'
 import { AudioButton, playWord } from '../components/AudioButton'
@@ -38,10 +38,15 @@ export default function Review({
   onFinished
 }: Props) {
   const mode = examId ? 'exam' : 'longterm'
+  /** 复习现场的归属：换库/换考试就不恢复 */
+  const scope = examId ? `exam:${examId}` : `deck:${deckId ?? 0}`
   const [stage, setStage] = useState<Stage>('loading')
   const [plan, setPlan] = useState<DailyPlan | null>(null)
   const [queue, setQueue] = useState<QueueCard[]>([])
   const [index, setIndex] = useState(0)
+  /** 显示用进度：这一轮第几张 / 一共几张（恢复现场后不从头算） */
+  const [position, setPosition] = useState(1)
+  const [total, setTotal] = useState(0)
   const [answer, setAnswer] = useState('')
   const [result, setResult] = useState<JudgeResult | null>(null)
   const [revealed, setRevealed] = useState(false)
@@ -62,27 +67,82 @@ export default function Review({
   const inputRef = useRef<HTMLInputElement>(null)
   const composing = useRef(false)
   const phoneticRequests = useRef(new Map<number, Promise<string | null>>())
+  /** 刚从保存的现场恢复的卡片 id：这一张不要清空答案与判分结果 */
+  const restoredCardRef = useRef<number | null>(null)
+  /** 最新的现场：离开页面时兜底写一次 */
+  const sessionRef = useRef<ReviewSession | null>(null)
+  const flushSession = useCallback(() => {
+    const pending = sessionRef.current
+    if (pending) void window.api.review.sessionSave(pending)
+  }, [])
   const card = queue[index]
+
+  /**
+   * 把一张卡上的临时状态清干净（重新排队、从头开始时用；
+   * 不能指望「index 变了」来触发：重新排队后可能还是同一张卡、同一个 index）。
+   */
+  const resetCardState = useCallback(() => {
+    restoredCardRef.current = null
+    setAnswer('')
+    setResult(null)
+    setRevealed(false)
+    setAnsweredMs(null)
+    setHint(false)
+    setPhoneticHint(false)
+  }, [])
+
+  /**
+   * 恢复上次离开时的现场（docs/HANDOFF §5.8）：
+   * 「已经判分、还没点下一张」也要回到同一张卡，不能要求重新写一遍。
+   *
+   * 今日任务的队列每次都会重新抽方向，所以恢复时不靠「去新队列里找这张卡」，
+   * 而是把存下来的这张卡放在最前面，其余按新队列接着来（跳过同一个词的其它方向）。
+   */
+  const restoreSession = useCallback(async (cards: QueueCard[], currentScope: string) => {
+    const saved = await window.api.review.sessionGet().catch(() => null)
+    if (!saved || saved.scope !== currentScope) return false
+    const rest = cards.filter((item) => item.itemId !== saved.card.itemId && item.id !== saved.card.id)
+    restoredCardRef.current = saved.card.id
+    setQueue([saved.card, ...rest])
+    setIndex(0)
+    setPosition(saved.position)
+    setTotal(Math.max(saved.total, saved.position))
+    setStats(saved.stats)
+    setAnswer(saved.answer)
+    setResult(saved.result)
+    setAnsweredMs(saved.answeredMs)
+    setRevealed(Boolean(saved.result))
+    setStartTs(Date.now())
+    setNow(Date.now())
+    setStage('review')
+    return true
+  }, [])
 
   const init = useCallback(async () => {
     setStage('loading')
     try {
       if (examId) {
         const q = await window.api.review.queue('exam', examId)
+        if (await restoreSession(q, scope)) return
+        resetCardState()
         setQueue(q)
         setIndex(0)
+        setPosition(1)
+        setTotal(q.length)
         setStats({ total: 0, correct: 0 })
         setStage(q.length ? 'review' : 'done')
         return
       }
       const p = await window.api.review.daily(deckId)
       setPlan(p)
+      // 今天已经开始过一轮：回来接着那张卡，不回到「今日任务」概览
+      if (await restoreSession(p.reviewCards, scope)) return
       setStage('overview')
     } catch (err) {
       notify(`加载今日任务失败：${err instanceof Error ? err.message : String(err)}`, 'err')
       setStage('overview')
     }
-  }, [examId, notify, deckId])
+  }, [examId, notify, deckId, scope, restoreSession, resetCardState])
 
   useEffect(() => {
     void init()
@@ -90,14 +150,19 @@ export default function Review({
 
   useEffect(() => {
     if (!card) return
+    // 刚从现场恢复的那张卡：答案、判分结果、冻结的用时都要留着，只重置计时与提示
+    const justRestored = restoredCardRef.current === card.id
+    if (justRestored) restoredCardRef.current = null
     setStartTs(Date.now())
     setNow(Date.now())
-    setAnsweredMs(null)
-    setAnswer('')
-    setResult(null)
-    setRevealed(false)
-    setHint(false)
-    setPhoneticHint(false)
+    if (!justRestored) {
+      setAnsweredMs(null)
+      setAnswer('')
+      setResult(null)
+      setRevealed(false)
+      setHint(false)
+      setPhoneticHint(false)
+    }
     const timer = setTimeout(() => inputRef.current?.focus(), 60)
     if (card.direction === 'listen2en' || settings.autoPlayAudio) {
       setTimeout(() => {
@@ -106,6 +171,44 @@ export default function Review({
     }
     return () => clearTimeout(timer)
   }, [index, card?.id, settings.autoPlayAudio, settings.accent])
+
+  /**
+   * 现场保存：复习到一半（含「已判分、还没点下一张」）离开时写盘，
+   * 下次进来自动回到这张卡。已提交的卡不用管——它已经被 FSRS 排到期了。
+   */
+  useEffect(() => {
+    if (stage !== 'review' || !card) return
+    const next: ReviewSession = {
+      scope,
+      card,
+      answer,
+      result,
+      answeredMs,
+      stats,
+      position,
+      total,
+      savedAt: new Date().toISOString()
+    }
+    sessionRef.current = next
+    const timer = window.setTimeout(() => {
+      void window.api.review.sessionSave(next)
+    }, 250)
+    return () => window.clearTimeout(timer)
+  }, [stage, card, answer, result, answeredMs, stats, position, total, scope])
+
+  // 一轮复习结束：现场作废，下次进来重新从「今日任务」开始
+  useEffect(() => {
+    if (stage !== 'done') return
+    sessionRef.current = null
+    void window.api.review.sessionClear()
+  }, [stage])
+
+  /** 离开页面（切到别的页/关窗口）兜底写一次，别丢掉最后几百毫秒内的输入 */
+  useEffect(() => {
+    return () => {
+      flushSession()
+    }
+  }, [])
 
   // 答题过程中每秒刷新一次计时；揭晓答案后停表
   useEffect(() => {
@@ -189,7 +292,8 @@ export default function Review({
     }
   }, [stage, learnItem?.id, settings.autoPlayAudio, settings.accent])
 
-  const progress = queue.length ? index / queue.length : 0
+  // 进度：恢复现场后接着上次的「第几张」算，不会看起来像刚从头开始
+  const progress = total > 0 ? Math.min(1, (position - 1) / total) : 0
   const learnProgress = plan?.learnItems.length ? learnIndex / plan.learnItems.length : 0
   const currentDeck = decks.find((deck) => deck.id === deckId) ?? null
 
@@ -263,17 +367,41 @@ export default function Review({
     try {
       const p = await window.api.review.daily(deckId)
       setPlan(p)
+      // 上次留了现场（含「已判分、没点下一张」）：先接着那张卡
+      if (await restoreSession(p.reviewCards, scope)) return
       if (!p.reviewCards.length) {
         setStage('done')
         return
       }
+      resetCardState()
       setQueue(p.reviewCards)
       setIndex(0)
+      setPosition(1)
+      setTotal(p.reviewCards.length)
       setStats({ total: 0, correct: 0 })
       setStage('review')
     } catch (err) {
       notify(`加载复习队列失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     }
+  }
+
+  /** 重新排队 = 主动放弃现场，从今天的第一张重新开始 */
+  const requeue = async () => {
+    await window.api.review.sessionClear().catch(() => undefined)
+    sessionRef.current = null
+    if (examId) await init()
+    else await startReview()
+  }
+
+  /** 先离开复习、回到「今日任务」概览：现场留着，再点「开始复习」还能接着来 */
+  const pauseReview = async () => {
+    flushSession()
+    try {
+      setPlan(await window.api.review.daily(deckId))
+    } catch {
+      /* 概览读不到就保持现状 */
+    }
+    setStage('overview')
   }
 
   const submitAnswer = async () => {
@@ -282,12 +410,25 @@ export default function Review({
       notify('先写下答案，再按回车', 'info')
       return
     }
-    setAnsweredMs(Date.now() - startTs)
+    const elapsed = Date.now() - startTs
+    setAnsweredMs(elapsed)
     setBusy(true)
     try {
       const r = await window.api.review.judge(card.id, answer)
       setResult(r)
       setRevealed(true)
+      // 判分这一刻立刻落盘：此时退出应用/切页面，回来也要看到判分结果，不能重做
+      void window.api.review.sessionSave({
+        scope,
+        card,
+        answer,
+        result: r,
+        answeredMs: elapsed,
+        stats,
+        position,
+        total,
+        savedAt: new Date().toISOString()
+      })
     } catch (err) {
       // 判分失败等同于没有交卷，计时继续走
       setAnsweredMs(null)
@@ -312,6 +453,11 @@ export default function Review({
         judgeBy
       })
       setStats((s) => ({ total: s.total + 1, correct: s.correct + (correct ? 1 : 0) }))
+      setPosition((p) => p + 1)
+      // 这张已经交给 FSRS 了：现场立刻作废，免得「点完下一张马上退出」被恢复成这张已交的卡。
+      // 下一张的现场会在渲染后由保存 effect 重新写回。
+      sessionRef.current = null
+      void window.api.review.sessionClear().catch(() => undefined)
 
       // Anki 的 learn ahead：只把 20 分钟内到期的学习卡提前放回本轮队列。
       // 14 小时后才到期的 Hard 卡不会生成“第二批”。
@@ -325,6 +471,7 @@ export default function Review({
       ) {
         nextQueue = [...queue, card]
         setQueue(nextQueue)
+        setTotal((t) => t + 1)
       }
 
       if (index + 1 >= nextQueue.length) {
@@ -605,14 +752,19 @@ export default function Review({
           <Badge tone={mode === 'exam' ? 'yellow' : 'accent'}>{mode === 'exam' ? '听写冲刺' : '复习旧词'}</Badge>
           {mode !== 'exam' && currentDeck && <Badge>{currentDeck.name}</Badge>}
           <span className="muted tiny">
-            {index + 1} / {queue.length}
+            {position} / {Math.max(total, position)}
           </span>
         </div>
         <div className="row tiny muted">
           <span>
             正确 {stats.correct} / {stats.total}
           </span>
-          <Button variant="ghost" size="sm" onClick={() => void (examId ? init() : startReview())}>
+          {mode !== 'exam' && (
+            <Button variant="ghost" size="sm" onClick={() => void pauseReview()}>
+              稍后继续
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => void requeue()}>
             重新排队
           </Button>
         </div>

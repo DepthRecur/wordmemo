@@ -11,6 +11,7 @@ import type {
   NoteInput,
   NoteQuery,
   ReviewMode,
+  ReviewSession,
   SettingsPatch,
   SubmitReview
 } from '@shared/types'
@@ -46,6 +47,7 @@ import { refreshCatalog } from './ai/catalog'
 import { refreshPricing } from './ai/pricing'
 import { isProviderId, type ProviderId } from './ai/providers'
 import { getDiagnostics } from './diagnostics'
+import { clearReviewSession, readReviewSession, saveReviewSession } from './reviewSession'
 import {
   commitAllDrafts,
   commitDraft,
@@ -303,6 +305,12 @@ export function registerIpc(): void {
     requestTrayRefresh()
     return result
   })
+  // 复习现场：离开页面/退出后回来接着上一张卡（docs/HANDOFF §5.8）
+  ipcMain.handle('review:sessionGet', () => readReviewSession())
+  ipcMain.handle('review:sessionSave', (_e, session: ReviewSession) => {
+    if (session && typeof session === 'object') saveReviewSession(session)
+  })
+  ipcMain.handle('review:sessionClear', () => clearReviewSession())
 
   ipcMain.handle('exams:list', () => listExams())
   ipcMain.handle('exams:create', (_e, input: ExamInput) => createExam(input))

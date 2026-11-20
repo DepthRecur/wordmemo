@@ -9,6 +9,7 @@ import type {
   NoteInput,
   NoteQuery,
   ReviewMode,
+  ReviewSession,
   SettingsPatch,
   SubmitReview,
   WordmemoApi
@@ -84,7 +85,10 @@ const api: WordmemoApi = {
     queue: (mode?: ReviewMode, examId?: number, deckId?: number | null) =>
       ipcRenderer.invoke('review:queue', mode, examId, deckId),
     judge: (cardId: number, answer: string) => ipcRenderer.invoke('review:judge', cardId, answer),
-    submit: (input: SubmitReview) => ipcRenderer.invoke('review:submit', input)
+    submit: (input: SubmitReview) => ipcRenderer.invoke('review:submit', input),
+    sessionGet: () => ipcRenderer.invoke('review:sessionGet'),
+    sessionSave: (session: ReviewSession) => ipcRenderer.invoke('review:sessionSave', session),
+    sessionClear: () => ipcRenderer.invoke('review:sessionClear')
   },
   exams: {
     list: () => ipcRenderer.invoke('exams:list'),

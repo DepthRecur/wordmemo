@@ -101,6 +101,7 @@ src/main/db/
   importDrafts.ts  ← 草稿的 deck_id 与 commitDraft 的目标库
 src/main/index.ts  ← 启动、托盘（只统计当前库）、提醒、备份；迁移前备份；30 秒后后台刷新目录/价格
 src/main/tray-bridge.ts ← ipc.ts → index.ts 的托盘刷新回调（避免循环 import）
+src/main/reviewSession.ts ← 复习现场（离开后回来接着上一张卡）→ userData/review-session.json
 src/renderer/src/components/DeckPicker.tsx ← 库标签栏（DeckTabs）与下拉（DeckSelect）
 src/renderer/src/components/Select.tsx ← 自定义下拉（原生 select 弹出层是系统方角，统一用它）
 src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
@@ -122,7 +123,8 @@ tests/
   decks.test.ts         ← 12 项：库作用域/额度/批量/合并分裂/删库/老库迁移+迁移前备份
   settings-secrets.test.ts ← 5 项：secrets.bin → v2 迁移 + 多 Key 并存
   settings-ai.test.ts   ← 4 项：ai 深合并 + apiKeySet 跟随默认角色
-  core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 10 / 3 项）
+  review-session.test.ts ← 5 项：复习现场存取/过期/坏文件/清理（见 §5.8）
+  core.test.ts / drafts.test.ts / phonetic.test.ts ← 既有（25 / 11 / 3 项）
 docs/               ← 四份计划 + 调研 + 本文件
 ```
 
@@ -202,7 +204,21 @@ docs/               ← 四份计划 + 调研 + 本文件
 - **库管理去掉「保存」按钮**：设置 → 笔记库的库行改成改动 500ms 后自动落库（和本页「改动会自动保存」一致）；空名字不写（避免边打字边报「库名不能为空」），写失败保留草稿并报错，删库时丢掉该行草稿。`SettingsPage.tsx` 的 `saveDeckRow` 已换成 `flushDeckDrafts` + 防抖 effect。
 - **允许一个库都没有**：`removeDeck(id, null)` 删最后一个库时把笔记 `deck_id` 置 0（未归类，不删笔记），并更新 `import_drafts` 与 `settings.currentDeckId`；`migrateDecks` 只在**老库迁移**时补默认库，之后启动不会自己长出来；`settings.currentDeckId` 允许 0。UI：删库对话框对最后一个库给"笔记变未归类"的说明，笔记库/导入页/今日任务都有"还没有库"的空状态。
 - **笔记库列表瘦身**：删掉「到期」列和标题后的黄色「N 待核对」标签（`Notes.tsx`）；到期数仍在库标签栏、今日任务、统计页出现。
-- `npm test` 现在是 **14 文件 137 项**（本文其它地方写的 12/118 是旧数字）。
+- `npm test` 现在是 **15 文件 142 项**（本文其它地方写的 12/118 是旧数字）。
+
+### 5.8 复习现场恢复（2026-11-20）
+
+**问题**：判分完成后（还没点「下一张」）切页面/退出，回来这个词要重新写一遍——因为判分只是渲染层状态，`review.submit` 还没写库。
+
+**做法**：`src/main/reviewSession.ts` 把「现在这张卡 + 答案 + 判分结果 + 冻结用时 + 已交张数/总张数 + 范围」写到 `userData/review-session.json`；`Review.tsx` 挂载时先读它，有就**直接回到那张卡**（判分界面原样回来，点「下一张」继续）；一轮结束、点「重新排队」时清掉。超过 12 小时的现场作废。
+
+- `scope` = `deck:<id>` / `exam:<id>`：换库/换考试不恢复。
+- **整张卡一起存**，不要改成「存 cardId、回来去队列里找」：`dailyPlan` 的 `oneCardPerItem` 每次都会**重新随机抽方向**，同一个词下次可能换成另一张卡，按 id 找必然找不到，于是又重出一遍。
+- 恢复时把存下的这张卡放最前面，其余用新队列接着来（跳过同一个词的其它方向）。
+- 「还没提交只是打了字」也算现场：回来输入框里的内容还在。
+- 复习页头部新增两个按钮：「稍后继续」（回到今日任务概览，现场保留）、「重新排队」（放弃现场，从头开始）。
+- 已知没做：**学习阶段的进度不在现场里**（`rateLearn` 本来就即时写库，回来会从下一个没学的词继续，只是要先点一次「开始学习」）。
+- 单元测试：`tests/review-session.test.ts`（存取往返、未提交状态、过期作废、坏文件、清理）。
 
 多供应商与多个库的待修问题分别在 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 与 [BUGS-DECKS.md](BUGS-DECKS.md)；**U1–U3 按用户 2026-11-20 指示暂缓**，不要主动开工。
 
@@ -261,6 +277,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 6. **`--no-sandbox` 是这台机器的硬需求**：启动器现在无条件传；U1 才改成按 `sandbox-state.json` 探测（代码开关 + 启动器 + 崩溃探针）。
 7. **electron-builder 25 打不出能跑的包**：依赖树漏 hoisted 包（`call-bind-apply-helpers`），exceljs 启动即崩；必须 26.18+，别退回。
 8. **打包版的 `%APPDATA%\WordMemo` 与源码模式的 `.data` 不互通**：切换/迁移要手动复制（含 `Local State`）；删程序目录不影响 `%APPDATA%`。
+9. **今日任务的队列每次都会重新抽方向**：`dailyPlan` 里 `oneCardPerItem` 用 `Math.random` 从同一个词的多个方向里挑一张，所以两次 `daily()` 的「第 3 张」可能不是同一张卡。任何「按 cardId 回队列里找回来」的写法都会失效（复习现场恢复就是这么踩的，见 §5.8）；要恢复某张具体卡就把它连同词条一起存下来。
 
 ---
 

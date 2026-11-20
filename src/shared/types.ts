@@ -270,6 +270,33 @@ export interface PhoneticRefreshResult {
   missing: number
 }
 
+/**
+ * 复习现场（2026-11-20）：在一张卡上「已经作答/已经判分、还没点下一张」时离开页面，
+ * 回来要回到同一个位置，不能要求重新写一遍。
+ *
+ * 为什么整张卡一起存：今日任务的队列每次都会重新抽方向（`oneCardPerItem` 随机），
+ * 回来说「按 id 去队列里找」经常找不到，那张卡就会重新出题。存下这张卡本身最稳。
+ *
+ * `scope` 用来区分范围（`deck:<id>` / `exam:<id>`）：换库/换考试就不恢复。
+ */
+export interface ReviewSession {
+  scope: string
+  /** 离开时的那张卡（含词条），回来直接照着它画 */
+  card: QueueCard
+  /** 已经输入、还没提交的内容（提交后也留着，判分界面要显示「你的答案」） */
+  answer: string
+  /** null = 还没提交 */
+  result: JudgeResult | null
+  /** 点提交那一刻冻结的用时；null = 还没提交 */
+  answeredMs: number | null
+  /** 这一轮已经交过的张数（恢复后「正确 N / M」仍然对） */
+  stats: { total: number; correct: number }
+  /** 显示用：这一轮的第几张 / 一共几张 */
+  position: number
+  total: number
+  savedAt: string
+}
+
 export interface SubmitReview {
   cardId: number
   rating: 1 | 2 | 3 | 4
@@ -620,6 +647,10 @@ export interface WordmemoApi {
     queue(mode?: ReviewMode, examId?: number, deckId?: number | null): Promise<QueueCard[]>
     judge(cardId: number, answer: string): Promise<JudgeResult>
     submit(input: SubmitReview): Promise<{ dueAt: string; state: number }>
+    /** 上次离开时的那张卡（没有就 null）；换了范围/过期都不恢复 */
+    sessionGet(): Promise<ReviewSession | null>
+    sessionSave(session: ReviewSession): Promise<void>
+    sessionClear(): Promise<void>
   }
   exams: {
     list(): Promise<Exam[]>
