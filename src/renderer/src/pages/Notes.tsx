@@ -652,7 +652,6 @@ export default function Notes({
                   <th>标题</th>
                   <th style={{ width: 110 }}>日期</th>
                   <th style={{ width: 76 }}>词条</th>
-                  <th style={{ width: 76 }}>到期</th>
                   <th style={{ width: 130 }}>库</th>
                 </tr>
               </thead>
@@ -674,11 +673,6 @@ export default function Notes({
                         <button className="word-link" onClick={() => void openDetail(n.id)}>
                           {n.title}
                         </button>
-                        {n.issueCount > 0 && (
-                          <Badge tone="yellow" title="有未处理的核对项">
-                            {n.issueCount} 待核对
-                          </Badge>
-                        )}
                         {n.tags.length > 0 && (
                           <span className="tiny muted">{n.tags.slice(0, 3).join(' · ')}</span>
                         )}
@@ -686,9 +680,6 @@ export default function Notes({
                     </td>
                     <td className="tiny muted">{formatDate(n.noteDate ?? n.createdAt)}</td>
                     <td className="tiny muted">{n.itemCount}</td>
-                    <td className="tiny" style={{ color: n.dueCount > 0 ? 'var(--accent)' : 'var(--muted)' }}>
-                      {n.dueCount || '—'}
-                    </td>
                     <td>
                       <Badge>{n.deckName}</Badge>
                     </td>

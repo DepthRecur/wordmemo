@@ -1,6 +1,6 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-19　当前分支：`feat/portable`（从 master 开，未合并）　仓库：`DepthRecur/wordmemo`
+> 最后更新：2026-11-20　当前分支：`fix/providers-bugs`（便携版 U0 在 `feat/portable`，未合并）　仓库：`DepthRecur/wordmemo`
 > **推送状态**：`master` 与 `feat/decks` 已 push；`feat/portable` 只在本地（2026-11-19 完成 U0）。远端仓库 `https://github.com/DepthRecur/wordmemo` 目前是 **private**（2026-11-19 为首次 push 创建），公开前按 §10 清理。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
@@ -52,6 +52,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 | 同步 | 只同步结构化数据；**图片/文件永久不同步**；`.wmsync` 快照导出/导入做 |
 | 同步密钥 | **用户口令**（age passphrase）+ `kdfVerifier` 防错 + 强度条；**没有恢复密钥** |
 | 托盘 | 只统计**当前库** |
+| 消息分级 | **错误 = 某项功能结果出错/不可用；警告 = 异常但不影响功能**。判后果，不判"有没有抛异常"；细节见 [MESSAGES.md](MESSAGES.md) |
 | 其他 | DCO（不要 CLA）；数据目录 `%APPDATA%\WordMemo`；`--no-sandbox` 探测式降级 |
 
 ---
@@ -61,6 +62,7 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 | 文档 | 什么时候读 |
 |---|---|
 | **本文 HANDOFF.md** | 每次新会话第一份 |
+| [MESSAGES.md](MESSAGES.md) | **写/改任何用户可见消息之前**（错误 vs 警告 vs 提示的定义、判定顺序、通道对照） |
 | [PLAN-NEXT.md](PLAN-NEXT.md) | 排序、共同约束、**已定/待定清单**、**坑点清单（§7）**、验证条件（§9） |
 | [PLAN-PROVIDERS.md](PLAN-PROVIDERS.md) | 做多供应商时；**§13 是当前实现记录与下一步** |
 | [PLAN-DECKS.md](PLAN-DECKS.md) | 做多个库时 |
@@ -191,6 +193,13 @@ docs/               ← 四份计划 + 调研 + 本文件
 - 无 Key 导入时，提示从 `issues` 挪到「解析提示」`warnings`，不再计入「草稿待处理」；文案跟随默认模型那家，不再写死 DeepSeek（`extract.ts`）；
 - 无 Key 启动时不再请求 models.dev 价格目录（`index.ts`）；模型目录本来就按家跳过。
 
+### 5.7 消息分级 + 界面收敛（2026-11-20）
+
+- **新增 [MESSAGES.md](MESSAGES.md)**：用户可见消息的三级定义（错误 = 功能结果出错/不可用；警告 = 异常但不影响功能；提示 = 成功/进度/少做一个动作）、五问判定顺序、五条硬规则、通道对照表，以及 **2026-11-20 的现状审计**（12 条待改归类，含位置、起因、后果、现级别、建议级别）。**改任何用户可见消息前先读它。**
+- **库管理去掉「保存」按钮**：设置 → 笔记库的库行改成改动 500ms 后自动落库（和本页「改动会自动保存」一致）；空名字不写（避免边打字边报「库名不能为空」），写失败保留草稿并报错，删库时丢掉该行草稿。`SettingsPage.tsx` 的 `saveDeckRow` 已换成 `flushDeckDrafts` + 防抖 effect。
+- **笔记库列表瘦身**：删掉「到期」列和标题后的黄色「N 待核对」标签（`Notes.tsx`）；到期数仍在库标签栏、今日任务、统计页出现。
+- `npm test` 现在是 **14 文件 135 项**（本文其它地方写的 12/118 是旧数字）。
+
 多供应商与多个库的待修问题分别在 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 与 [BUGS-DECKS.md](BUGS-DECKS.md)；**U1–U3 按用户 2026-11-20 指示暂缓**，不要主动开工。
 
 ---
@@ -293,4 +302,5 @@ electron-builder 已升 26.18（25 的依赖树 bug 会让包打不开）。
 - 贡献者用 DCO（`git commit -s`），不引入 CLA。
 - **便携版产物不进 git**：`release/` 与 `WordMemo-Portable/` 都已 gitignore；发版时只上传 `WordMemo-x.y.z-portable.zip` + `.sha256`。
 - **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
+- **用户可见消息的级别**（2026-11-20 定）：错误 = 功能结果出错/不可用（红色、常驻铃铛）；警告 = 异常但不影响功能（黄色/内嵌提示、不常驻）；提示 = 成功、进度、少做一个前置动作。细节与判定顺序见 [MESSAGES.md](MESSAGES.md)，**改文案前先按它定级**，不要为了让提示显眼就升成 `err`。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。

@@ -130,8 +130,9 @@ export default function SettingsPage({
   const [refreshing, setRefreshing] = useState<Record<string, boolean>>({})
   const [pricingBusy, setPricingBusy] = useState(false)
 
-  // 库管理：每行一个本地草稿（改名 / 单独额度），点保存才写回
+  // 库管理：每行一个本地草稿（改名 / 单独额度），改动 500ms 后自动写库（不再有「保存」按钮）
   const [deckDrafts, setDeckDrafts] = useState<Record<number, { name: string; quota: string }>>({})
+  const [deckSaving, setDeckSaving] = useState(false)
   const [newDeckName, setNewDeckName] = useState('')
   const [deckBusy, setDeckBusy] = useState(false)
   const [deleteDeck, setDeleteDeck] = useState<Deck | null>(null)
@@ -141,6 +142,10 @@ export default function SettingsPage({
   const lastSaved = useRef(JSON.stringify(ownedPatch(settings)))
   const draftRef = useRef(draft)
   draftRef.current = draft
+  const deckDraftsRef = useRef(deckDrafts)
+  deckDraftsRef.current = deckDrafts
+  const decksRef = useRef(decks)
+  decksRef.current = decks
 
   const loadInfo = async () => {
     try {
@@ -353,7 +358,7 @@ export default function SettingsPage({
     set('ttsSources', next)
   }
 
-  /** 库行编辑：不点保存就不写库 */
+  /** 库行编辑：改动停顿 500ms 后自动写库（与「改动会自动保存」一致，没有保存按钮） */
   const deckDraftOf = (deck: Deck) =>
     deckDrafts[deck.id] ?? {
       name: deck.name,
@@ -363,26 +368,52 @@ export default function SettingsPage({
   const patchDeckDraft = (deck: Deck, patch: Partial<{ name: string; quota: string }>) =>
     setDeckDrafts((prev) => ({ ...prev, [deck.id]: { ...deckDraftOf(deck), ...patch } }))
 
-  const saveDeckRow = async (deck: Deck) => {
-    const local = deckDraftOf(deck)
-    const quota = local.quota.trim()
-    const newPerDay = quota === '' ? null : Math.max(0, Math.trunc(Number(quota)) || 0)
-    setDeckBusy(true)
+  const flushDeckDrafts = async () => {
+    const entries = Object.entries(deckDraftsRef.current)
+    if (!entries.length) return
+    const handled: number[] = []
+    setDeckSaving(true)
     try {
-      await window.api.decks.update(deck.id, { name: local.name.trim(), newPerDay })
+      for (const [key, local] of entries) {
+        const id = Number(key)
+        const deck = decksRef.current.find((d) => d.id === id)
+        if (!deck) {
+          // 库已经删掉了，草稿跟着丢
+          handled.push(id)
+          continue
+        }
+        const name = local.name.trim()
+        // 名字被清空时先不写：用户可能正在重打，写空名只会报「库名不能为空」
+        if (!name) continue
+        const quota = local.quota.trim()
+        const newPerDay = quota === '' ? null : Math.max(0, Math.trunc(Number(quota)) || 0)
+        if (name !== deck.name || newPerDay !== deck.newPerDay) {
+          await window.api.decks.update(id, { name, newPerDay })
+        }
+        handled.push(id)
+      }
+      if (!handled.length) return
+      // 先刷新拿到新值，再清草稿：否则输入框会闪一下旧值
       await refreshDecks()
       setDeckDrafts((prev) => {
         const next = { ...prev }
-        delete next[deck.id]
+        for (const id of handled) delete next[id]
         return next
       })
-      notify('库已更新', 'ok')
     } catch (err) {
       notify(`更新库失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     } finally {
-      setDeckBusy(false)
+      setDeckSaving(false)
     }
   }
+
+  // 改动停 500ms 后自动写库；草稿为空时什么都不做
+  useEffect(() => {
+    if (!Object.keys(deckDrafts).length) return
+    const timer = window.setTimeout(() => void flushDeckDrafts(), AUTO_SAVE_MS)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deckDrafts])
 
   const createDeckRow = async () => {
     const name = newDeckName.trim()
@@ -441,6 +472,12 @@ export default function SettingsPage({
         if (active) await setDeck(active)
       }
       const targetName = next.find((d) => d.id === target)?.name ?? ''
+      // 这一行的本地草稿也跟着删掉，别让自动保存再往已删的库里写
+      setDeckDrafts((prev) => {
+        const rest = { ...prev }
+        delete rest[deleteDeck.id]
+        return rest
+      })
       notify(`已删除「${deleteDeck.name}」，${res.moved} 份笔记移到了「${targetName}」`, 'ok')
       setDeleteDeck(null)
     } catch (err) {
@@ -846,10 +883,6 @@ export default function SettingsPage({
                       onChange={(e) => patchDeckDraft(deck, { quota: e.target.value })}
                     />
                     <span className="hint">个（留空 = 用全局 {settings.newPerDay}）</span>
-                    <span style={{ flex: 1 }} />
-                    <Button size="sm" variant="primary" onClick={() => void saveDeckRow(deck)} disabled={deckBusy}>
-                      保存
-                    </Button>
                   </div>
                   <div className="row-between" style={{ marginTop: 8 }}>
                     <span className="tiny muted">
@@ -914,6 +947,7 @@ export default function SettingsPage({
             <Button onClick={() => void createDeckRow()} disabled={deckBusy}>
               新建库
             </Button>
+            <span className="hint">{deckSaving ? '正在保存…' : '改名和每日新词改动后自动保存'}</span>
           </div>
           <div className="hint" style={{ marginTop: 8 }}>
             删除库时，库里的笔记会先移到你选的目标库，不会连笔记一起删。合并 = 全选移到目标库再删空库。
