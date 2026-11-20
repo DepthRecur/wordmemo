@@ -388,7 +388,12 @@ export interface AiSettings {
 }
 
 export interface Settings {
+  /** 派生：默认角色那家是否已有 Key（不落盘） */
   apiKeySet: boolean
+  /** 派生：默认角色是否解析出模型名（不落盘） */
+  modelSet: boolean
+  /** 派生：Key 和模型都齐了，AI 功能才可用（不落盘） */
+  aiReady: boolean
   model: string
   baseUrl: string
   ai: AiSettings
@@ -412,7 +417,7 @@ export interface Settings {
   currentDeckId: number
 }
 
-export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet'>> {}
+export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet' | 'modelSet' | 'aiReady'>> {}
 
 export interface TtsResult {
   dataUrl: string | null
@@ -638,6 +643,8 @@ export interface WordmemoApi {
 
 export const DEFAULT_SETTINGS: Settings = {
   apiKeySet: false,
+  modelSet: false,
+  aiReady: false,
   model: 'deepseek-flash',
   baseUrl: 'https://api.deepseek.com',
   ai: {

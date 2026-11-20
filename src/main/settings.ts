@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { AiProviderId, AiSettings, Settings, SettingsPatch } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
+import { resolveProviderModel } from '@shared/aiModel'
 
 let cache: Settings | null = null
 /** provider → Key；明文只存在内存里，落盘是整份加密的 secrets.v2.json */
@@ -138,7 +139,16 @@ function merge(raw: Partial<Settings> | null): Settings {
   merged.currentDeckId = Number.isInteger(deckId) && deckId > 0 ? deckId : DEFAULT_SETTINGS.currentDeckId
   // 界面上「是否已配置 Key」跟随默认角色用的那家
   merged.apiKeySet = hasApiKey(merged.ai.default.provider)
-  return merged
+  return refreshDerived(merged)
+}
+
+/** 派生字段（不落盘）：改了 Key/模型/角色之后要跟着重算 */
+function refreshDerived(s: Settings): Settings {
+  const provider = s.ai.default.provider
+  s.apiKeySet = hasApiKey(provider)
+  s.modelSet = !!resolveProviderModel(s.ai, provider, s.ai.default, s.model)
+  s.aiReady = s.apiKeySet && s.modelSet
+  return s
 }
 
 export function initSettings(): Settings {
@@ -153,13 +163,13 @@ export function initSettings(): Settings {
 
 export function getSettings(): Settings {
   if (!cache) cache = initSettings()
-  cache.apiKeySet = hasApiKey(cache.ai.default.provider)
-  return cache
+  return refreshDerived(cache)
 }
 
 export function updateSettings(patch: SettingsPatch): Settings {
   const next = merge({ ...getSettings(), ...patch })
-  const { apiKeySet: _ignored, ...persisted } = next
+  // 派生字段只给界面看，不写进 settings.json
+  const { apiKeySet: _apiKeySet, modelSet: _modelSet, aiReady: _aiReady, ...persisted } = next
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true })
   fs.writeFileSync(settingsPath(), JSON.stringify(persisted, null, 2), 'utf8')
   cache = next
@@ -181,7 +191,7 @@ export function setApiKey(provider: AiProviderId, key: string): boolean {
     return false
   }
   keyCache = keys
-  if (cache) cache.apiKeySet = hasApiKey(cache.ai.default.provider)
+  if (cache) refreshDerived(cache)
   return true
 }
 
@@ -198,7 +208,7 @@ export function clearApiKey(provider: AiProviderId = 'deepseek'): void {
     /* ignore */
   }
   keyCache = keys
-  if (cache) cache.apiKeySet = hasApiKey(cache.ai.default.provider)
+  if (cache) refreshDerived(cache)
 }
 
 /** 「清除全部」：secrets.v2.json 与旧的 secrets.bin 一起删 */
@@ -211,5 +221,5 @@ export function clearAllApiKeys(): void {
       /* ignore */
     }
   }
-  if (cache) cache.apiKeySet = false
+  if (cache) refreshDerived(cache)
 }

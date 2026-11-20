@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowDown, ArrowUp, Database, FolderOpen, Volume2 } from 'lucide-react'
 import type {
   AiPriceInfo,
@@ -16,6 +16,7 @@ import { ModelPicker } from '../components/ModelPicker'
 import { Select } from '../components/Select'
 import type { Navigate, Notify } from '../App'
 import { cls, formatBytes } from '../lib/utils'
+import { ownedPatch } from '../lib/settingsPatch'
 
 type SettingsSection = 'providers' | 'ai' | 'review' | 'decks' | 'reminder' | 'tts' | 'advanced'
 
@@ -100,6 +101,9 @@ function priceText(price: AiPriceInfo): string {
   return `≈$${price.input}/M 入 · $${price.output}/M 出${suffix}`
 }
 
+/** 打字停顿这么久才落盘，避免每个按键都写一次 settings.json */
+const AUTO_SAVE_MS = 500
+
 export default function SettingsPage({
   notify,
   settings,
@@ -134,9 +138,9 @@ export default function SettingsPage({
   const [deleteMoveTo, setDeleteMoveTo] = useState<number | null>(null)
 
   const providers = info?.providers ?? []
-
-  // 切换分区不会丢草稿（draft 是整页共享的）；有未保存的修改时在左侧项上点一个点
-  const dirty = JSON.stringify(draft) !== JSON.stringify(settings)
+  const lastSaved = useRef(JSON.stringify(ownedPatch(settings)))
+  const draftRef = useRef(draft)
+  draftRef.current = draft
 
   const loadInfo = async () => {
     try {
@@ -146,9 +150,35 @@ export default function SettingsPage({
     }
   }
 
+  // 外面改了设置（保存/清除 Key 后 refreshSettings 会带回新值）：本地没有未保存
+  // 的输入时才跟随，避免把正在打字的内容冲掉
   useEffect(() => {
+    if (JSON.stringify(ownedPatch(draftRef.current)) !== lastSaved.current) return
     setDraft(settings)
   }, [settings])
+
+  // 自动保存（P-05）：改动 500ms 后写盘，不再需要「保存设置」按钮
+  useEffect(() => {
+    const payload = ownedPatch(draft)
+    const json = JSON.stringify(payload)
+    if (json === lastSaved.current) return
+    const timer = window.setTimeout(() => {
+      setSaving(true)
+      void (async () => {
+        try {
+          await window.api.settings.update(payload)
+          lastSaved.current = json
+          await refreshSettings()
+          await loadInfo()
+        } catch (err) {
+          notify(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+        } finally {
+          setSaving(false)
+        }
+      })()
+    }, AUTO_SAVE_MS)
+    return () => window.clearTimeout(timer)
+  }, [draft, notify, refreshSettings])
 
   useEffect(() => {
     if (initialSection && SECTIONS.some((s) => s.key === initialSection)) {
@@ -168,6 +198,17 @@ export default function SettingsPage({
   }
 
   const providerCfg = (id: AiProviderId): AiProviderConfig => draft.ai.providers[id] ?? {}
+
+  /** 把当前草稿立刻写盘（测试连接前先存，保证测的就是屏幕上的配置） */
+  const persistNow = async () => {
+    const payload = ownedPatch(draftRef.current)
+    const json = JSON.stringify(payload)
+    if (json === lastSaved.current) return
+    await window.api.settings.update(payload)
+    lastSaved.current = json
+    await refreshSettings()
+    await loadInfo()
+  }
 
   /** 卡片上显示公开名（拿不到目录名就退回 id） */
   const modelLabel = (p: AiProviderInfo): string => {
@@ -203,57 +244,24 @@ export default function SettingsPage({
     }))
   }
 
-  const save = async () => {
-    setSaving(true)
-    try {
-      const s = await window.api.settings.update({
-        model: draft.model,
-        baseUrl: draft.baseUrl,
-        ai: draft.ai,
-        longTermRetention: draft.longTermRetention,
-        examRetention: draft.examRetention,
-        newPerDay: draft.newPerDay,
-        dailyMinutes: draft.dailyMinutes,
-        learnAheadMinutes: draft.learnAheadMinutes,
-        listenCardEnabled: draft.listenCardEnabled,
-        autoPlayAudio: draft.autoPlayAudio,
-        accent: draft.accent,
-        aiJudge: draft.aiJudge,
-        aiValidate: draft.aiValidate,
-        monthlyBudgetUsd: draft.monthlyBudgetUsd,
-        reminders: draft.reminders,
-        remindEnabled: draft.remindEnabled,
-        autoLaunch: draft.autoLaunch,
-        quietHours: draft.quietHours,
-        ttsSources: draft.ttsSources
-      })
-      await refreshSettings()
-      setDraft(s)
-      notify('设置已保存（保留率修改后下次启动生效）', 'ok')
-    } catch (err) {
-      notify(`保存失败：${err instanceof Error ? err.message : String(err)}`, 'err')
-    } finally {
-      setSaving(false)
-    }
-  }
-
   const saveProviderKey = async (p: AiProviderInfo) => {
     const key = (keyDrafts[p.id] ?? '').trim()
-    if (!key) {
-      notify('请先粘贴 API Key', 'err')
-      return
-    }
+    if (!key && !p.keySet) return
     setBusy((b) => ({ ...b, [p.id]: true }))
     try {
-      const saved = await window.api.settings.setApiKey(p.id, key)
-      if (!saved) {
-        notify('Key 保存失败：数据目录不可写', 'err')
-        return
+      // 先落盘模型/Base URL，再测——测的就是输入框里的配置（P-05）
+      await persistNow()
+      if (key) {
+        const saved = await window.api.settings.setApiKey(p.id, key)
+        if (!saved) {
+          notify('Key 保存失败：数据目录不可写', 'err')
+          return
+        }
       }
       const res = await window.api.settings.testApiKey(p.id)
       setResults((r) => ({ ...r, [p.id]: res }))
       if (res.ok) {
-        notify(`${p.label} 的 Key 已保存并验证通过`, 'ok')
+        notify(key ? `${p.label} 的 Key 已保存并验证通过` : `${p.label} 连接正常`, 'ok')
         setKeyDrafts((k) => ({ ...k, [p.id]: '' }))
         await refreshSettings()
         await loadInfo()
@@ -475,9 +483,7 @@ export default function SettingsPage({
           <h1 className="page-title">设置</h1>
           <div className="page-sub">API、复习节奏、发音与数据备份。所有数据只保存在本机。</div>
         </div>
-        <Button variant="primary" onClick={() => void save()} disabled={saving}>
-          {saving ? '保存中…' : '保存设置'}
-        </Button>
+        <span className="hint">{saving ? '保存中…' : '改动会自动保存'}</span>
       </div>
 
       <div className="page-scroll">
@@ -490,9 +496,6 @@ export default function SettingsPage({
               onClick={() => setSection(s.key)}
             >
               {s.label}
-              {dirty && section === s.key && (
-                <span className="unsaved-dot" title="有未保存的修改" />
-              )}
             </button>
           ))}
         </nav>
@@ -529,6 +532,10 @@ export default function SettingsPage({
               const cfg = providerCfg(p.id)
               const isOpen = expanded === p.id
               const result = results[p.id]
+              // 「保存并测试」：Key 和模型缺一个就点不了，悬浮说明缺什么（P-09）
+              const missing: string[] = []
+              if (!p.keySet && !(keyDrafts[p.id] ?? '').trim()) missing.push('API Key')
+              if (!cfg.model?.trim() && p.id !== 'deepseek') missing.push('模型名')
               return (
                 <div
                   key={p.id}
@@ -579,7 +586,8 @@ export default function SettingsPage({
                         <Button
                           variant="primary"
                           size="sm"
-                          disabled={busy[p.id]}
+                          disabled={busy[p.id] || missing.length > 0}
+                          title={missing.length ? `还需要填${missing.join('和')}` : undefined}
                           onClick={() => void saveProviderKey(p)}
                         >
                           {busy[p.id] ? '验证中…' : '保存并测试'}

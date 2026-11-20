@@ -713,8 +713,7 @@ export default function Notes({
             <span className="spacer" />
             <Button
               onClick={() => void enrich()}
-              disabled={enriching || !settings.apiKeySet}
-              title={settings.apiKeySet ? '让 AI 为这份笔记补充常用搭配和例句' : '需要先在设置里填写 API Key'}
+              disabled={enriching || !settings.aiReady}
             >
               {enriching ? <Spinner /> : 'AI 补充搭配'}
             </Button>

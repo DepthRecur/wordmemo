@@ -33,7 +33,8 @@ export function hashKey(parts: (string | undefined | null)[]): string {
 }
 
 export async function ocrImage(base64: string, mime: string): Promise<OcrLayout> {
-  if (!aiAvailable('vision')) throw new Error('识别图片需要先在设置里配置 API Key')
+  if (!aiAvailable('vision'))
+    throw new Error('识别图片需要先在设置里配置 API Key 和图片识别用的模型')
   const content = await chat({
     kind: 'ocr',
     role: 'vision',

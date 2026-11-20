@@ -1,4 +1,5 @@
 import type { AiProviderId, AiRoleConfig, AiTestResult } from '@shared/types'
+import { DEEPSEEK_DEFAULT_MODEL, resolveProviderModel } from '@shared/aiModel'
 import { getApiKey, getSettings } from '../settings'
 import { getAiCache, logAiUsage, monthAiCost, setAiCache } from '../db/ai'
 import { estimateCostUsd, priceFor } from './pricing'
@@ -37,9 +38,6 @@ interface Target {
   baseUrl: string
   model: string
 }
-
-/** DeepSeek 没有配模型时的兜底名（价格与目录都在 pricing.ts，这里只有名字） */
-const DEEPSEEK_DEFAULT_MODEL = 'deepseek-flash'
 
 /** 预算降级成 token 上限时的粗估：$1 ≈ 200 万 token（有未定价调用时才用） */
 const TOKENS_PER_USD = 2_000_000
@@ -84,15 +82,8 @@ export function providerBaseUrl(id: ProviderId): string {
 
 /** 某一家实际会用的模型名（角色覆盖 > 卡片配置 > 旧字段/默认） */
 export function providerModel(id: ProviderId, role?: AiRoleConfig): string {
-  const fromRole = role && role.provider === id ? role.model?.trim() : ''
-  if (fromRole) return fromRole
-  const own = providerConfig(id).model?.trim()
-  if (own) return own
-  if (id === 'deepseek') {
-    // 老配置：顶层 model 就是 DeepSeek 的模型
-    return getSettings().model?.trim() || DEEPSEEK_DEFAULT_MODEL
-  }
-  return ''
+  const s = getSettings()
+  return resolveProviderModel(s.ai, id, role, s.model)
 }
 
 function roleConfig(role: AiRole): AiRoleConfig {
@@ -204,7 +195,9 @@ async function requestOnce(target: Target, opts: ChatOptions, key: string): Prom
 }
 
 export function aiAvailable(role: AiRole = 'default'): boolean {
-  return !!getApiKey(resolveTarget(role).spec.id)
+  const target = resolveTarget(role)
+  // P-09：只有 Key 没有模型也发不出请求，这里必须一起判断
+  return !!getApiKey(target.spec.id) && !!target.model
 }
 
 /**

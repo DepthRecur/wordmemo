@@ -868,8 +868,7 @@ export default function ImportPage({
                 <button
                   className="btn btn-ghost btn-sm"
                   onClick={() => setConfirm('revalidate')}
-                  disabled={busy || !settings.apiKeySet}
-                  title={settings.apiKeySet ? '用改过的词条重新校验一次（会消耗 token）' : '需要先配置 API Key'}
+                  disabled={busy || !settings.aiReady}
                 >
                   <RefreshCw size={13} /> 重新校验
                 </button>

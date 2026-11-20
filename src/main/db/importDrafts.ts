@@ -13,10 +13,11 @@ import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { createNote, createSource } from './notes'
 import { currentDeckId, defaultDeckId, deckExists } from './decks'
 import { findExistingItemId, upsertItem } from './items'
-import { getSettings } from '../settings'
+import { getSettings, hasApiKey } from '../settings'
 import { deleteStoredFileIfUnused, storedFileBytes, storedFileExists } from '../storage'
 import { validateItems } from '../ai/import'
 import { aiAvailable } from '../ai/client'
+import { PROVIDERS } from '../ai/providers'
 
 interface DraftRow {
   id: number
@@ -350,7 +351,16 @@ export function discardDraft(id: number): void {
 export async function revalidateDraft(id: number): Promise<ImportDraft> {
   const draft = getDraft(id)
   if (!draft) throw new Error('草稿不存在（可能已经被入库或丢弃）')
-  if (!aiAvailable()) throw new Error('需要先在设置里配置 API Key（默认模型那家）')
+  const settings = getSettings()
+  if (!aiAvailable()) {
+    const id = settings.ai.default.provider
+    const label = PROVIDERS[id]?.label ?? '默认模型'
+    throw new Error(
+      hasApiKey(id)
+        ? `还没有给 ${label} 选模型，先到设置页选一个再校验`
+        : `需要先在设置里配置 ${label} 的 API Key`
+    )
+  }
   if (!draft.items.length) throw new Error('没有可校验的词条')
 
   const raw = await validateItems(
