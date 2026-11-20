@@ -482,6 +482,7 @@ WordMemo-Portable/
 - CDP：`window.api.system.appVersion() = 0.3.0`，UI 正常（截图 `.data/shots/portable-0.3.0.png`）。
 - 导入 `samples/demo.txt` → 1 笔记 / 14 词；退出 → 启动器重开 → 数据仍在（1 笔记 / 14 词）。
 - `npm run typecheck` 0 错误；`npm test` 12 文件 118 项全绿。
+- **2026-11-20：一台全新 Win10 虚拟机复测通过**（解压即用；全程无弹窗、无报错、无 SmartScreen）。
 
 **下一步**
 
