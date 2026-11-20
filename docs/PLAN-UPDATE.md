@@ -483,9 +483,11 @@ WordMemo-Portable/
 - 导入 `samples/demo.txt` → 1 笔记 / 14 词；退出 → 启动器重开 → 数据仍在（1 笔记 / 14 词）。
 - `npm run typecheck` 0 错误；`npm test` 12 文件 118 项全绿。
 - **2026-11-20：一台全新 Win10 虚拟机复测通过**（解压即用；全程无弹窗、无报错、无 SmartScreen）。
+- **2026-11-20：无 Key 回归**（zip 在修复后重建）：启动后正文不再出现「尚未配置 API Key」红条；导入 `samples/demo.txt` 后 `importer.draftIssues().unresolved = 0`，提示只在「解析提示」里且跟随默认模型那家（`DeepSeek`）；无 Key 时启动不再请求 models.dev 价格目录。
 
 **下一步**
 
+- **2026-11-20 用户指示：U1–U3 暂缓**，先保证无 Key 可用、再修两份 bug 清单（[BUGS-PROVIDERS](BUGS-PROVIDERS.md)、[BUGS-DECKS](BUGS-DECKS.md)）。恢复后再从这里继续。
 - **U1 兼容模式**：`sandbox-state.json` 探针 + `failStreak` 自愈 + 设置页开关；现在启动器无条件带 `--no-sandbox`。
 - **U2 自更新**：应用侧检查 `latest.json` → 下载 → 流式 sha256 → 解压 `update/app-new` → 写 `state.json`；启动器按 §3.11 七步换目录 + 回滚 + `error.log`。`update/` 目录已预留、`app/version.json` 已写。
 - **U3 CI 发版 + README 两条更新路径**：构建脚本已具备出 zip + sha256 的能力，`latest.json` 留给 U2/U3。

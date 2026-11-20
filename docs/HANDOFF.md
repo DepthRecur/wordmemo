@@ -11,9 +11,12 @@
 背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成，第三个完成 U0：
 - **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。
 - **多个库**（2026-11-19，已合并 master）：`decks` 表 + `notes.deck_id` + 默认库迁移（迁移前备份）、全部查询按库作用域、笔记库批量 UI、今日任务/导入/考试/统计/托盘全部接库；后续打磨：删批量撤销、切库性能（10~30ms）、今日任务标题右侧库下拉、原生 select 全换自定义圆角下拉。`npm test` 12 文件 118 项全绿。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
-- **便携版 U0**（2026-11-19，`feat/portable`）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器 v0 可启动；数据固定在 `%APPDATA%\WordMemo`。**U1 兼容模式 / U2 自更新 / U3 CI 未做**。实现记录与四个坑见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。
+- **便携版 U0**（2026-11-19，`feat/portable`）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器 v0 可启动；数据固定在 `%APPDATA%\WordMemo`。**U1 兼容模式 / U2 自更新 / U3 CI 未做**（2026-11-20 用户指示暂缓）。实现记录与四个坑见 [PLAN-UPDATE §10](PLAN-UPDATE.md)。
+- **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；图片/语义判分等 AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用。已去掉常驻红条、把导入提示降级为「解析提示」、无 Key 不请求价格目录（见 §5.6）。
 
-下一个要做的：**U1 兼容模式 → U2 自更新 → U3 CI**（[PLAN-UPDATE](PLAN-UPDATE.md) §3.11 是定稿方案、§10 是已完成部分）。
+**待修清单**：多供应商与多个库的 bug 已分别整理成 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 和 [BUGS-DECKS.md](BUGS-DECKS.md)，交给对应会话修；本会话只做无 Key 打磨。
+
+下一个要做的：按用户指示修两份 bug 清单；**U1 → U2 → U3 暂缓**，等用户明确恢复。
 
 ---
 
@@ -62,6 +65,8 @@ npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 | [PLAN-PROVIDERS.md](PLAN-PROVIDERS.md) | 做多供应商时；**§13 是当前实现记录与下一步** |
 | [PLAN-DECKS.md](PLAN-DECKS.md) | 做多个库时 |
 | [PLAN-UPDATE.md](PLAN-UPDATE.md) | 做便携版/自更新时（§3.11 是定稿方案、**§10 是 U0 实现记录**） |
+| [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) | 修多供应商 bug 时（清单，交给对应会话） |
+| [BUGS-DECKS.md](BUGS-DECKS.md) | 修多个库 bug 时（清单，交给对应会话） |
 | [PLAN-SYNC.md](PLAN-SYNC.md) | 做同步时（§3.5 口令加密、S0 重放验证） |
 | [RESEARCH-REUSE.md](RESEARCH-REUSE.md) | 想知道「为什么这么选」时；**不需要重新调研** |
 
@@ -177,6 +182,17 @@ docs/               ← 四份计划 + 调研 + 本文件
 4. **启动器无条件带 `--no-sandbox`**（U1 才做探测降级）；改 `Launcher.cs` 后跑 `npm run launcher` 或 `npm run dist` 重新编译，用系统 `csc.exe`，不需要 SDK。
 5. `update/` 与 `app/version.json` 是给 U2 预留的：**不要手工改 version.json**（构建时写入）；启动器 v0 不读它。
 
+### 5.6 无 Key 模式（2026-11-20，受支持状态）
+
+**没有 API Key 不是错误，是用户可以选择的状态。** 能用的：启动/托盘/提醒、导入 txt/md/docx/xlsx、学习/复习/FSRS、听写冲刺、统计、笔记库、多库、备份、联网时的发音；**只有图片导入、AI 校验/搭配/例句、AI 音标补充、语义判分、中文语义搜索会不可用**（按钮禁用或明确报错，不阻塞其它功能）。
+
+2026-11-20 修掉的三处噪音：
+- 去掉了每次启动的红色「未配置 API Key」常驻通知（`App.tsx`）；
+- 无 Key 导入时，提示从 `issues` 挪到「解析提示」`warnings`，不再计入「草稿待处理」；文案跟随默认模型那家，不再写死 DeepSeek（`extract.ts`）；
+- 无 Key 启动时不再请求 models.dev 价格目录（`index.ts`）；模型目录本来就按家跳过。
+
+多供应商与多个库的待修问题分别在 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md) 与 [BUGS-DECKS.md](BUGS-DECKS.md)；**U1–U3 按用户 2026-11-20 指示暂缓**，不要主动开工。
+
 ---
 
 ## 6. 后面两个功能各自的"第一步"
@@ -259,12 +275,12 @@ docs/               ← 四份计划 + 调研 + 本文件
 原生 select 已换成自定义圆角下拉（Select.tsx）。
 便携版 U0：npm run dist 出 WordMemo-0.3.0-portable.zip + 启动器 v0 + app/version.json；
 electron-builder 已升 26.18（25 的依赖树 bug 会让包打不开）。
+无 Key 模式：2026-11-20 已修掉常驻红条/导入待处理项/价格目录请求；没有 Key 也能正常用。
 
-下一步：做便携版的 U1 → U2 → U3（PLAN-UPDATE §3.11 + §10）——
-1) U1 兼容模式：sandbox-state.json 探针 + failStreak 自愈 + 设置页开关；
-2) U2 自更新：应用下载 latest.json/zip + sha256 + 解压 update/app-new，启动器七步换目录与回滚；
-3) U3 CI 发版 + README 的两条更新路径。
-从 feat/portable 继续；做完在 PLAN-UPDATE 里记一笔并 commit（git commit -s）。
+待修清单（交给各自的会话）：docs/BUGS-PROVIDERS.md、docs/BUGS-DECKS.md。
+
+下一步：按用户指示先修上面两份 bug 清单；便携版的 U1 → U2 → U3 暂缓，除非用户明确恢复。
+从 feat/portable 继续；做完在对应文档里记一笔并 commit（git commit -s）。
 ```
 
 ---
