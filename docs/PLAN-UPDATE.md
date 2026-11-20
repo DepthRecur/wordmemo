@@ -1,4 +1,4 @@
-# 计划 C：自动更新（走 GitHub Releases）
+﻿# 计划 C：自动更新（走 GitHub Releases）
 
 > 目标版本：v0.4　预计 **4~5** 个工作日　风险：中
 > 前置：仓库已开源 + 打包链路已跑通 + 迁移前备份的坑已修（见总览 §3）
@@ -518,7 +518,7 @@ WordMemo-Portable/
 |---|---|
 | `src/main/sandbox.ts`（新） | 读写 `userData/sandbox-state.json`：`{ compatMode, failStreak, probe: { pid, startedAt, ok } }`；`shouldDisableSandbox()`、`beginProbe()`、`markReady()`、`setCompatMode()`。用 tmp+rename 写，坏文件按默认值处理 |
 | `src/main/index.ts` | **模块顶层、`app.whenReady()` 之前**：`shouldDisableSandbox()` 为真时 `app.commandLine.appendSwitch('no-sandbox')` + `appendSwitch('disable-gpu-sandbox')`；`beginProbe()` 写 pid/startedAt/ok=false；窗口 `ready-to-show` 后 `markReady()`（ok=true、failStreak=0、清 probe） |
-| `scripts/Launcher.cs` | 读 `app/sandbox-state.json`（路径相对程序目录；userData 在 `%APPDATA%`，启动器没有 Electron 的 `app.getPath`，所以**判据文件要么放程序目录、要么由启动器按 `%APPDATA%\\WordMemo\\sandbox-state.json` 拼路径**——推荐后者，和数据同处）。只有 `compatMode === true` 才加 `--no-sandbox`；否则不加 |
+| `scripts/Launcher.cs` | 读 `%APPDATA%\\WordMemo\\sandbox-state.json`（与数据同处；启动器没有 Electron 的 `app.getPath`，用 `Environment.GetFolderPath(SpecialFolder.ApplicationData)` 拼）。只有 `compatMode === true` 才加 `--no-sandbox`；否则不加 |
 | 设置页「高级与诊断」 | 「兼容模式」开关 + 一句解释 + 「重新检测」（关掉后下次启动按正常模式试）；IPC：`sandbox:get` / `sandbox:setCompat` |
 | 首启提示 | 首次自动降级时给一条 `warn`（常驻铃铛）："检测到系统不支持沙箱，已切到兼容模式（功能不变，安全性略降）" |
 
@@ -601,3 +601,4 @@ WordMemo-Portable/
 - 不要动 `userData` 位置（`%APPDATA%\WordMemo`）；不要让数据落进程序目录。
 - 不要把 `app/` 的替换放进 Electron 进程里做。
 - 不要在 U1 里顺手改其它功能（本版只做兼容模式）。
+
