@@ -7,15 +7,18 @@
 
 ## 速览
 
-| ID | 严重度 | 标题 | 主要文件 |
-|---|---|---|---|
-| D-01 | **P1** | 删库/合并后，考试范围仍指向已删库，听写计划静默变空 | `db/decks.ts`、`db/exams.ts`、`planner.ts` |
-| D-02 | **P1** | 待入库草稿的目标库被删后，入库进了「当前库」而不是删库时选的目标库 | `db/decks.ts`、`db/importDrafts.ts` |
-| D-03 | P2 | 笔记列表「到期」把新卡和全部方向都算进去，和库标签/今日任务对不上 | `db/notes.ts`、`db/cards.ts` |
-| D-04 | P2 | 统计页按库过滤时「今天已复习/总复习数」仍是全局，和页面提示不一致 | `db/stats.ts`、`pages/StatsPage.tsx` |
-| D-05 | P2 | 删当前库只靠 UI 补 `currentDeckId`，其它调用方会留下悬空 id | `db/decks.ts`、`pages/SettingsPage.tsx` |
-| D-06 | P3 | `cardsInScope` 把「空 noteIds/tags 数组」当成不过滤，考试范围可能被放大 | `db/cards.ts` |
-| D-07 | P3 | 设置页删库后不刷新统计（非当前库时），侧边栏/统计页最多旧 60 秒 | `pages/SettingsPage.tsx` |
+| ID | 严重度 | 标题 | 主要文件 | 状态 |
+|---|---|---|---|---|
+| D-01 | **P1** | 删库/合并后，考试范围仍指向已删库，听写计划静默变空 | `db/decks.ts`、`db/exams.ts`、`planner.ts` | ✅ 已修 |
+| D-02 | **P1** | 待入库草稿的目标库被删后，入库进了「当前库」而不是删库时选的目标库 | `db/decks.ts`、`db/importDrafts.ts` | ✅ 已修 + 补测试 |
+| D-03 | P2 | 笔记列表「到期」把新卡和全部方向都算进去，和库标签/今日任务对不上 | `db/notes.ts`、`db/cards.ts` | ✅ 界面已删列，死字段已清理 |
+| D-04 | P2 | 统计页按库过滤时「今天已复习/总复习数」仍是全局，和页面提示不一致 | `db/stats.ts`、`pages/StatsPage.tsx` | ✅ 已修 |
+| D-05 | P2 | 删当前库只靠 UI 补 `currentDeckId`，其它调用方会留下悬空 id | `db/decks.ts`、`pages/SettingsPage.tsx` | ✅ 已修 + 补测试 |
+| D-06 | P3 | `cardsInScope` 把「空 noteIds/tags 数组」当成不过滤，考试范围可能被放大 | `db/cards.ts` | ✅ 已修 |
+| D-07 | P3 | 设置页删库后不刷新统计（非当前库时），侧边栏/统计页最多旧 60 秒 | `pages/SettingsPage.tsx` | ✅ 已修 |
+
+> **2026-11-20 修复**：以上全部处理完（`fix/decks-ui`，基于 `fix/providers-bugs`），改动与验收见文末「修复记录」。
+> 另外修了两个文档收稿后才暴露的 UI 问题：弹窗里的下拉向上弹且被裁剪（U-1）、导入页「导入到」不作用于已识别草稿（U-2）。
 
 **2026-11-20 已顺手修掉（改 `removeDeck` 时一起做的，别再重复开工）**
 
@@ -255,3 +258,20 @@ npm run typecheck
 npm test
 # 多个库相关用例集中在 tests/decks.test.ts；新增用例请沿用该文件的 createDeck/addNote/headers 辅助函数。
 ```
+
+## 修复记录（2026-11-20，`fix/decks-ui`）
+
+复核时确认：D-02 / D-05 / D-07 与 D-03 的界面症状在此前提交里已经修过，本次只补测试和清死代码；D-01 / D-04 / D-06 本次才真正修。
+
+| 项 | 改法 | 验证 |
+|---|---|---|
+| **U-1** 弹窗下拉上弹被裁 | `Select` 列表 portal 到 `body` + `fixed`，按视口算空间；下方放不下且上方更宽裕才上翻，`maxHeight` 限制并内部滚动；靠右触发器右对齐，宽度仍 ≤360 | CDP 逐页：笔记移动/复制、导入、今日任务、统计、考试新建、设置；向下弹出、完整可见、键盘/点外部正常 |
+| **U-2** 导入「导入到」不改草稿 | `ImportDraftPatch.deckId` + `saveDraft` 单独写 `import_drafts.deck_id`（校验库存在）；下拉显示草稿库、改时同写草稿与当前库，草稿条徽标同步；新文件用下拉显示值 | CDP：改下拉后 header/徽标/`draft_id` 三者一致；`tests/decks.test.ts` 两条 |
+| **D-01** 考试范围悬空 | `removeDeck` 事务内用 JS 改写 `exams.scope.deckId` → `moveTo`；删最后一个库时删掉该字段（= 全部库，不写 0） | 单测：范围 A 的计划删库后变 B 且 `totalCards > 0`；全部库范围不受影响 |
+| **D-02** 草稿目标库 | 已有修复，补回归测试 | 单测：删库后草稿入库进 `moveTo` |
+| **D-03** 笔记「到期」口径 | 界面已无此列，删掉 `NoteSummary.dueCount`、SQL 子查询和多余参数 | typecheck / 全量测试 |
+| **D-04** 统计口径 | `reviewedToday`/`totalReviews` join `cards` 后走 `deckScope`；热力图/连续/正确率不动 | 单测：两库各复习一次，按库各 1、全部 2；三项跨库指标相等 |
+| **D-05** 当前库悬空 | 主进程写 `currentDeckId` 挪到事务外；`updateSettings` 改 tmp+rename；设置页删当前库后 `refreshSettings()` + `refreshStats(target)`，不再覆盖成列表第一个 | 单测两条 + CDP：删当前库（非第一个）→ 当前库 = 所选目标库 |
+| **D-06** 空数组范围 | `cardsInScope` 区分 `undefined` / `[]`，空集合加 `1 = 0` | 单测：`{noteIds: []}`/`{tags: []}`/`{itemIds: []}` 为空，`{}` 不过滤 |
+
+**未做（仍按原文决定）**：库颜色、按库汇总表、撤销、热力图/连续/正确率跨库、笔记列表 3500 条虚拟化、考试页 tag 过滤、>10 库合并提示。`cards.ts` 对悬空 `deckId` 仍会静默返回 0 行（D-01 修好后不会再产生这种数据；如需 IPC 级校验另开）。

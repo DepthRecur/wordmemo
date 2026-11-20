@@ -443,4 +443,18 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 - **删除批量撤销**：见 §15.2，`undoLastBatch` 及相关 IPC/类型/按钮/测试全部移除。
 - **切库性能**：去掉「每次加载都等 400ms」的防抖，只保留搜索输入防抖 300ms；按「库 + 排序 + 搜索词」缓存一份结果，切回先画缓存再后台刷新。实测两库来回切 10~30ms（原 ~500ms），`notes.list` IPC 1~2ms。
 - **今日任务库选择器**：两个并排标签换成标题右侧的库下拉，选项带「待学 N · 到期 M」两行信息。
-- **圆角统一**：原生 `<select>` 的弹出层是系统方角、CSS 改不到，全部换成自定义 `Select`（按钮与弹出列表都是圆角，键盘 ↑↓/Enter/Esc、点外面关闭、空间不够时向上弹）。复选框仍是方角（允许的例外）。热力图格子/柱状图本身有 1~3px 圆角，保留。
+- **圆角统一**：原生 `<select>` 的弹出层是系统方角、CSS 改不到，全部换成自定义 `Select`（按钮与弹出列表都是圆角，键盘 ↑↓/Enter/Esc、点外面关闭）。复选框仍是方角（允许的例外）。热力图格子/柱状图本身有 1~3px 圆角，保留。
+
+### 15.6 缺陷修复（2026-11-20，`fix/decks-ui`）
+
+按 `docs/BUGS-DECKS.md` 复核后修的一批；文档里 D-02/D-05/D-07 与 D-03 的界面部分当时已经修过，这次只补了测试/清理死代码。
+
+- **下拉被弹窗裁剪（U-1）**：`Select` 的列表改为 `createPortal(document.body)` + `position: fixed`，按**视口**算上下空间；只有下方放不下且上方更宽裕才向上翻，`maxHeight` 取可用空间（列表内部滚动），靠右触发器自动右对齐、宽度仍不超过 360。`styles.css` 的 `.select-list.drop-up` 换成 `.combo-list.select-portal`（`z-index:150`，在弹窗 100 与 toast 200 之间）。移动/复制笔记弹窗里 4 个库时不再只显示最后一项。
+- **导入目标库（U-2）**：`ImportDraftPatch` 增加 `deckId`，`saveDraft` 把它写到 `import_drafts.deck_id`（校验库存在，不混进 payload）；导入页下拉显示「打开的草稿的库，否则当前库」，改下拉同时改草稿与 `settings.currentDeckId`，草稿条的「入库到」跟着刷新；解析新文件用下拉当前显示的目标库。老草稿/库已删仍按当前库兜底。
+- **删库引用（D-01）**：`removeDeck` 在同一事务里把 `exams.scope.deckId` 改写成 `moveTo`；删最后一个库时删掉该字段（= 全部库，不写 0）。考试范围不再悬空，听写计划不会静默变 0 张卡。
+- **统计口径（D-04）**：`reviewedToday` / `totalReviews` 改为 join `cards` 后走 `deckScope`，和「数量类指标按库统计」的页面文案一致；热力图/连续天数/30 天正确率仍跨库。
+- **空数组范围（D-06）**：`cardsInScope` 区分 `undefined`（不过滤）与 `[]`（空集合 → `1 = 0`），考试范围不会被空选择放大成整库。
+- **删当前库（D-05）**：主进程写 `currentDeckId` 挪到事务外，`updateSettings` 改为 tmp + rename 原子写；设置页删当前库后改为 `refreshSettings()` + `refreshStats(target)`，不再用「列表第一个库」覆盖主进程选的目标库。
+- **清理（D-03）**：删掉 `NoteSummary.dueCount` 与 `SUMMARY_SELECT` 里口径不一致的 `due_count` 子查询（界面早已不显示），`listNotes`/`getNote` 少传一个参数。
+- **测试**：`tests/decks.test.ts` 从 12 条增到 21 条，覆盖 D-01（范围跟着搬/全部库不受影响）、D-02、D-04、D-05、D-06 和导入目标库改写；`npm test` 15 个文件 150 条全绿。
+- **验证**：CDP 逐页打开 6 处下拉（笔记移动/复制、导入、今日任务、统计、考试新建、设置）确认向下弹出、完整可见、键盘与点外部正常；设置页删当前库后当前库变成所选目标库（不是列表第一个）；导入页改「导入到」后草稿徽标/`import_drafts.deck_id`/当前库三者一致。
