@@ -23,6 +23,24 @@
 
 ---
 
+## 修复记录（2026-11-20，分支 `fix/providers-bugs`）
+
+| ID | 状态 | commit | 实际做法（与原始建议的差异） |
+|---|---|---|---|
+| P-01 | 已修 | `523e86a` | `chat` 加 `expectJson`：要求 JSON 的调用，本轮不是 JSON 就不写缓存；`chatJson` 第二轮真的会发请求 |
+| P-02 | 已修 | `8cf35c1` | **不硬停**（产品决定：强制暂停要重来一遍，浪费时间和已花的钱）。`overBudget()` 只触发一次提醒，右下角通知条 + 铃铛，带「本月不再提示」（静音到月底，换月自动恢复）；判分/音标原有的硬停一并去掉 |
+| P-03 | 已修 | `1db248d` | 重试只看 `AiError.retryable`，400 仍单次；403/404/200 业务错误各只打 1 次 |
+| P-04 | 已修 | `9b7dcd2` | 50 条/批、并发 5，issue index 换算回整份笔记；**任一批失败直接抛错**（产品决定：没校验过的词条不能看起来像校验过了），不再降级成 warning |
+| P-05 | 已修 | `d0abec6` | 采用「保存后测试」+ **删掉「保存设置」按钮**：改动 500ms 后自动落盘，测试前先 flush 草稿。只写本页字段，不覆盖当前库与派生标记 |
+| P-06 | 已修 | `fdae8fb` | 组包前统一 `sanitizeMessages`，Gemini/GLM 首轮就不带 `detail`；400 降级路径复用同一函数 |
+| P-07 | **不修** | — | 产品决定不是 bug：缓存键带 provider/kind/内容哈希，换模型复用同输入的回答可以接受；不做缓存失效 |
+| P-08 | 已修 | `8cf35c1` | 选「固定官方」：`catalogUrl()` 明确只影响目录，Base URL 只影响聊天；`AiProviderInfo.fixedCatalogUrl` 让设置页在 Base URL 下写清楚 |
+| P-09 | 已修 | `d0abec6` | 新增派生字段 `modelSet` / `aiReady`（不落盘，规则与请求路径共用 `shared/aiModel.ts`）；`aiAvailable()` 也要求模型；「保存并测试」缺 Key/模型时置灰并说明缺什么，其它 AI 按钮只置灰；OCR/导入/重新校验的报错分清缺 Key 还是缺模型 |
+
+验证：`npx tsc --noEmit` 0 错误；`npx vitest run` 14 文件 / 135 通过（新增 P-01/P-02/P-03/P-04/P-06/P-08/P-09 的离线 stub 测试）；`npm run build` 通过；`npm run ai-smoke` 真机 8 次调用全过（DeepSeek + GLM，OpenAI/Gemini 无 Key 跳过）。
+
+---
+
 ## P-01（P1）非法 JSON 被缓存，`chatJson` 的修复重试永远打不中网络
 
 **位置**
@@ -179,6 +197,8 @@ expect(calls).toHaveLength(2) // 现在实际是 1 次 + 抛错
 ---
 
 ## P-07（P3）AI 缓存键不含 model，换模型仍命中旧模型的缓存
+
+> **结论：不是 bug，决定不修（2026-11-20）**。缓存键带 provider/kind/内容哈希，换模型复用同输入的回答可以接受；不做缓存失效。
 
 **位置**
 - `src/main/db/ai.ts:10-35`：唯一键 `(provider, kind, cache_key)`；`model` 只存不查
