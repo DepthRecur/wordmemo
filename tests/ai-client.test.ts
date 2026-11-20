@@ -347,4 +347,22 @@ describe('P-01 / P-03 缓存与重试的边界', () => {
       .get()
     expect(row).toBeUndefined()
   })
+
+  it('P-03 403 / 404 各只请求一次，不白等也不重复计费', async () => {
+    const calls403 = stubFetch(() => ({ status: 403, body: '{}' }))
+    await expect(chat({ messages, kind: 'p03-403' })).rejects.toThrow(/没有权限/)
+    expect(calls403).toHaveLength(1)
+
+    const calls404 = stubFetch(() => ({ status: 404, body: '{}' }))
+    await expect(chat({ messages, kind: 'p03-404' })).rejects.toThrow(/404/)
+    expect(calls404).toHaveLength(1)
+  })
+
+  it('P-03 HTTP 200 里的业务错误只请求一次', async () => {
+    const calls = stubFetch(() => ({
+      body: JSON.stringify({ error: { message: 'invalid request' } })
+    }))
+    await expect(chat({ messages, kind: 'p03-200' })).rejects.toThrow(/invalid request/)
+    expect(calls).toHaveLength(1)
+  })
 })

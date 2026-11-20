@@ -280,9 +280,11 @@ export async function chat(opts: ChatOptions): Promise<string> {
       return content
     } catch (err) {
       lastErr = err
-      const status = err instanceof AiError ? err.status : undefined
-      // 401/402 是 Key 或余额问题，400 是请求本身不对（降级重试已在 requestOnce 做过）——重试没用
-      if (status === 401 || status === 402 || status === 400) throw err
+      // 400 是请求本身不对（降级重试已在 requestOnce 做过）
+      if (err instanceof AiError && err.status === 400) throw err
+      // P-03：其余按 transport 的判定走——403/404/200 里的业务错误重试只会白等
+      const retryable = !(err instanceof AiError) || err.retryable
+      if (!retryable) throw err
       if (attempt < 2) {
         await sleep(attempt === 0 ? 1200 : 4000)
         continue
