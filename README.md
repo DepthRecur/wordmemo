@@ -124,6 +124,16 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 - **应用绝不替换自己、也不静默重启**：退出程序后再双击 `WordMemo.exe`，启动器才会把 `app` 换成新版；旧版保留在 `app-old` 直到下一次启动，换目录失败会自动回滚并写 `update\error.log`。
 - **手动更新（GitHub 连不上时的兜底，和自动更新是同一份 zip）**：退出程序 → 下载新版 zip → 把 zip 里的 `app` 解压覆盖到程序目录的 `app` → 重新打开。数据不会丢。
 - 更新源只有 GitHub Releases（`releases/latest/download/latest.json`），不做镜像、不接受远程下发的配置或脚本。
+- **首次运行（以及每个新版本的第一次运行）** Windows 可能提示「未知发布者」：点「更多信息 → 仍要运行」。不做代码签名是明确选择，不是漏打包。
+- 想先核对文件：`certutil -hashfile WordMemo-0.4.0-portable.zip SHA256`，与 Release 里的 `.sha256` 对比；发布说明里也会给 sha256。
+
+## 发布（维护者）
+
+1. 改 `package.json` 的 `version`（`package-lock.json` 顶部的两处也一起改），在 `release-notes/v<version>.md` 写三行：**是否迁移数据 / 是否不可逆 / 修了什么**（应用设置页会显示这三行的摘要）。
+2. 本地跑 `npm run typecheck`、`npm test`、`npm run dist`，解压 `release/WordMemo-<version>-portable.zip` 冒烟一次。
+3. 提交后打 tag 并推送：`git tag v<version>` → `git push origin v<version>`。
+4. `.github/workflows/release.yml` 只在 tag `v*` 时发布：windows-latest → 版本与 tag 一致性检查 → `npm ci` → typecheck → test → build → dist → 校验三件套 → `gh release create`。**typecheck/test/dist 失败就不会发布**；手动触发（workflow_dispatch）是 dry run，只构建并上传 artifact。
+5. 发布后核对 Release 里的三个资产：`WordMemo-<version>-portable.zip`、`.sha256`、`latest.json`；版本号、zip 名、sha256 三者必须一致（CI 里已有断言）。
 
 ## 开发
 

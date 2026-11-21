@@ -389,6 +389,8 @@ WordMemo-Portable/
 
 ### U3 CI 发版 + 手动路径 B（1 天）
 
+> **2026-11-21 已完成**（`feat/portable-u3`，不改代码 → 版本仍是 0.4.0）。实现记录、本地能验/不能验的边界见 §10 的 U3 小节；下面保留原计划作背景。
+
 - workflow（tag 触发）：build → 打包 `--dir` → zip → 生成 `latest.json` 与 `.sha256` → 发 Release。
 - README 写清两条路：自动（正常情况）、手动（下载 zip 覆盖 `app/`）。
 - **验收**：Release 里有 `WordMemo-x.y.z-portable.zip` + `latest.json` + `.sha256`；从零解压能用；按 README 手动覆盖也能用。
@@ -608,7 +610,56 @@ WordMemo-Portable/
 
 - 验收时的 0.4.1 测试包、本地 http 脚本、`%APPDATA%\WordMemo` 测试数据都不进仓库（`release/`、`.data/` 已 gitignore；测试数据在验收后已清理）。
 - 更新是**全量**下载（约 142 MB），没有差分；这是 §3.11 已接受的代价。
-- 遗留：U3 还要把 README 两条路径、Release Notes 三行、CI 的 `latest.json` 上传串起来（脚本已能生成）。
+- 遗留：U3 已补上 README 两条路径、Release Notes 三行、CI 的 `latest.json` 上传（见下方 U3 小节）。
+
+### U3 CI 发版 + 路线 B（2026-11-21，`feat/portable-u3`，完成）
+
+**状态：完成（本地能验的部分全验了；真实 GitHub Actions 首次运行待推送后观察）。** U3 不改代码，版本仍是 `0.4.0`；`npm run typecheck` 0 错误、`npm test` 17 文件 185 项、`npm run build` 通过。
+
+**落地内容**
+
+| 文件 | 作用 |
+|---|---|
+| `.github/workflows/release.yml`（新） | tag `v*` 触发；windows-latest / Node 24；tag 与 `package.json` 版本一致性检查 → `npm ci` → typecheck → test → build → dist → 三件套断言 → upload-artifact →（仅 tag）`gh release create/upload`。`workflow_dispatch` = dry run |
+| `release-notes/v0.4.0.md`（新） | Release Notes 三行：是否迁移数据 / 是否不可逆 / 修了什么；CI 把前 3 行（≤300 字）注入 `latest.json` 的 `notes` |
+| `README.md` | 更新章节补 SmartScreen 与 sha256 校验；新增「发布（维护者）」五步 |
+
+**工作流规则**
+
+- 发布只发生在 `ref_type == tag`；`workflow_dispatch` 只构建 + 上传 artifact，不建 Release。
+- tag 必须是 `v<package.json version>`，否则第一步就失败（防止 tag 0.4.1 发了 0.4.0 的包）。
+- typecheck / test / build / dist 是同一个 job 的顺序步骤：任何一步失败都走不到发布。
+- 三件套断言：`latest.json` 的 `version` / `zip` / `sha256` 与 `release/*.zip`、`.sha256`、`Get-FileHash` 全部一致才继续。
+- 发布用 runner 自带的 `gh` + `GITHUB_TOKEN`（`permissions: contents: write`），不引第三方 action；Release 已存在时走 `gh release upload --clobber`，可以重复跑。
+- `latest.json` 仍由 `npm run dist` 生成，`WORDMEMO_RELEASE_NOTES` 由 notes 文件前 3 行拼成。
+
+**本地验证（能自动的部分）**
+
+- YAML 用仓库里现成的 `js-yaml`（electron-builder 的依赖）解析通过；8 个 `run` 块全部通过 PowerShell AST 语法检查。
+- 三件套校验脚本用真实 `release/` 跑通（`95d4ed5d…`）；在临时目录把 `latest.json` 的 sha256 改坏 → 正确 `throw`。
+- tag 校验脚本：`v0.4.0` + package 0.4.0 → 通过；`v0.4.1` → 报错；branch → dry-run 分支。
+- 发布步骤用 `gh` 桩函数跑了两条分支：Release 不存在 → `create … --notes-file … --verify-tag`；已存在 → `upload … --clobber`；三个资产的参数都正确。
+- release-notes 摘要生成正确（3 行、去掉 `- `、171 字）。
+
+**路线 B 真机验收（2026-11-21）**
+
+- 0.4.0 解压到 `D:\WordMemo-U3-Manual` → 启动 → 造数据（2 库 / 2 笔记 / 14 词条）。
+- 用 `electron-builder --dir --config.extraMetadata.version=0.4.1` 生成「新版 app」，写 `version.json=0.4.1`，按 README 把它**覆盖**到 `app/`。
+- 重新双击启动器 → 正常启动、无 `error.log`、不产生 `app-old`（手动路径不经过更新逻辑）；重启后 `system.appVersion()=0.4.1`，2 库 / 2 笔记 / 14 词条 / currentDeckId=2 全在。
+- 路线 B 是「用户自己解压覆盖」，启动器只负责启动，所以不写 state、不换目录；数据在 `%APPDATA%` 不受影响。
+
+**没有验到的（如实写）**
+
+- 远端仓库还是 private 且本地未 push（2026-11-20 起 GitHub 连不上），**GitHub Actions 的首次真实运行没跑过**；本机也没有 `gh`，`gh release create` 的真实调用没执行。
+- 所以「CI 在 test 失败时不发布」目前是**按步骤顺序保证**（test 在 dist 和发布之前），不是实测；推送后第一次发版要盯 Actions 日志。
+- CI 首次 `npm ci` 会下载 Electron（~100 MB），runner 上通常 1~3 分钟；`electronDist` 复用已安装的 electron，不会额外下载。
+
+**以后发版（维护者）**
+
+1. 改 `package.json` 与 `package-lock.json` 顶部的两处版本，在 `release-notes/` 加 `v<version>.md`；tag 必须与版本一致。
+2. `latest.json` 是应用自更新的入口，**不要手工上传覆盖**；只通过 `npm run dist` / CI 生成。
+3. 不要加 `electron-updater` / `latest.yml` / NSIS / 签名；`workflow_dispatch` 永远不发布。
+4. runner 用 Node **24**：`node:sqlite` 在 Node 22 早期版本需要 `--experimental-sqlite`，24 不需要（本机也是 24.20）。
 
 ## 11. 交接：U1–U3 起点（2026-11-20）
 
@@ -616,7 +667,7 @@ WordMemo-Portable/
 
 ### 11.1 当前基线
 
-> **2026-11-21 更新（U2 完成后）**：`master` 已包含 U2（`feat/portable-u2` 已快进合并），`npm test` 17 文件 / 185 项；`package.json = 0.4.0`，交接产物是 `release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d0ca3eeabc8e756018e2fc99017a5bb19632daf76e94d35bb27b1b1e4`）+ `.sha256` + `latest.json`。U3 从 master 开 `feat/portable-u3`。下面这段是 U2 开工前的基线，保留作历史。
+> **2026-11-21 更新（U3 完成后）**：便携版的 U0/U1/U2/U3 全部完成（U3 = CI 发版 + 路线 B，见 §10 U3）。`master` 包含全部改动，`npm test` 17 文件 / 185 项；`package.json = 0.4.0`，交接产物是 `release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d0ca3eeabc8e756018e2fc99017a5bb19632daf76e94d35bb27b1b1e4`）+ `.sha256` + `latest.json`。**便携版到此收尾，下一个功能是同步**（[PLAN-SYNC.md](PLAN-SYNC.md) 的 S0）。下面这段是 U2 开工前的基线，保留作历史。
 
 - 分支：`master` 已包含 U0 + U1 + 多供应商修复 + 多库修复；工作区应干净；`npm run typecheck` 0 错误、`npm test` 16 文件 / 163 项全绿、`npm run build` 通过。
 - U1 的历史分支是 `feat/portable-u1`（已快进合并到 master），不要从它继续；U2 从 master 开 `feat/portable-u2`（U3 `feat/portable-u3`）。
@@ -701,6 +752,8 @@ WordMemo-Portable/
 - `app-old` 必须保留到**下一次启动成功后**再删，否则换完第一次启动崩溃就没有回滚副本。
 
 ### 11.4 U3 CI 发版 + 路线 B（1 天）
+
+> **2026-11-21 已完成**（`feat/portable-u3`，不改代码）。实现记录、本地验证与「没验到的部分」见 §10 的 U3 小节；下面是原计划，保留作背景。
 
 - `.github/workflows/release.yml`：只 `tag v*` 触发（+ 手动 dry-run）；`npm ci` → `typecheck` → `test` → `build` → `npm run dist` → 生成 `latest.json`（版本、zip 名、sha256、notes）→ 上传 `WordMemo-x.y.z-portable.zip`、`.sha256`、`latest.json` 到 Release。
 - `permissions: contents: write`；**不要** PR 触发；dry-run 不发布。

@@ -1,0 +1,140 @@
+name: release
+
+# U3 发版（PLAN-UPDATE §11.4）：
+# - 只由 tag `v*` 触发（workflow_dispatch 只做构建 + 上传 artifact，不发布 = dry run）
+# - 顺序：typecheck → test → build → dist → 校验三件套 → 发布 Release
+# - 资产只有三个：WordMemo-<ver>-portable.zip、.sha256、latest.json
+# - 不引入 electron-updater / latest.yml / NSIS / 签名 / 自建服务器
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: 校验 tag 与 package.json 版本一致
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Write-Host "package.json version = $version"
+          if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $expected = "v$version"
+            if ($env:GITHUB_REF_NAME -ne $expected) {
+              throw "tag '$($env:GITHUB_REF_NAME)' 与 package.json '$expected' 不一致；先改 package.json 再打 tag。"
+            }
+            Write-Host "tag 校验通过：$($env:GITHUB_REF_NAME)"
+          } else {
+            Write-Host "workflow_dispatch：只构建，不发布（dry run）"
+          }
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm test
+
+      - name: 构建
+        run: npm run build
+
+      - name: 打包便携版（zip + sha256 + latest.json）
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $notesFile = "release-notes/v$version.md"
+          if (Test-Path $notesFile) {
+            # latest.json 里的 notes 只放三行摘要；完整内容写进 Release 正文
+            $lines = @(Get-Content $notesFile | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } | Select-Object -First 3 | ForEach-Object { ($_ -replace '^\s*[-*]\s*', '').Trim() })
+            $summary = ($lines -join '；') -replace '\s+', ' '
+            if ($summary.Length -gt 300) { $summary = $summary.Substring(0, 300) }
+            $env:WORDMEMO_RELEASE_NOTES = $summary
+            Write-Host "latest.json notes：$summary"
+          } else {
+            Write-Host "没有 $notesFile：latest.json 的 notes 留空"
+          }
+          npm run dist
+          if ($LASTEXITCODE -ne 0) { throw "npm run dist 失败（exit $LASTEXITCODE）" }
+
+      - name: 校验三件套（版本 / zip 名 / sha256 三方一致）
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $zip = "release/WordMemo-$version-portable.zip"
+          $sha = "$zip.sha256"
+          $latest = "release/latest.json"
+          foreach ($file in @($zip, $sha, $latest)) {
+            if (-not (Test-Path $file)) { throw "缺少产物：$file" }
+          }
+          $meta = Get-Content $latest -Raw | ConvertFrom-Json
+          if ($meta.version -ne $version) { throw "latest.json 的 version 不是 $version" }
+          if ($meta.zip -ne (Split-Path $zip -Leaf)) { throw "latest.json 的 zip 名不对：$($meta.zip)" }
+          $shaText = (Get-Content $sha -Raw).Trim()
+          if ($shaText -notmatch '^([0-9a-fA-F]{64})\s+') { throw ".sha256 格式不对：$shaText" }
+          $declared = $Matches[1].ToLowerInvariant()
+          if ($meta.sha256 -ne $declared) { throw "latest.json 的 sha256 与 .sha256 不一致" }
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $declared) { throw "zip 的实际 sha256 与 .sha256 不一致" }
+          Write-Host "校验通过：$($meta.zip) $declared"
+
+      - name: 上传构建产物（dry run 也能下载检查）
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordmemo-portable-${{ github.run_number }}
+          path: |
+            release/WordMemo-*-portable.zip
+            release/WordMemo-*-portable.zip.sha256
+            release/latest.json
+          if-no-files-found: error
+
+      - name: 发布 GitHub Release（只 tag）
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          $zip = "release/WordMemo-$version-portable.zip"
+          $sha = "$zip.sha256"
+          $latest = "release/latest.json"
+          $notesFile = "release-notes/$tag.md"
+          $defaultNotes = "便携版更新。数据格式未变；升级后词库、进度、设置都在 %APPDATA%\WordMemo。"
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag 已存在：覆盖三个资产"
+            gh release upload $tag $zip $sha $latest --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload 失败（exit $LASTEXITCODE）" }
+            if (Test-Path $notesFile) { gh release edit $tag --title $tag --notes-file $notesFile }
+          } elseif (Test-Path $notesFile) {
+            Write-Host "创建 Release $tag（正文来自 $notesFile）"
+            gh release create $tag $zip $sha $latest --title $tag --notes-file $notesFile --verify-tag
+          } else {
+            Write-Host "创建 Release $tag（没有 $notesFile，用默认说明）"
+            gh release create $tag $zip $sha $latest --title $tag --notes $defaultNotes --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release 失败（exit $LASTEXITCODE）" }

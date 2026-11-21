@@ -1,24 +1,25 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-21（U2 自更新已并入 master，准备 U3）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 已在本地包含 U0 + U1 + U2 + 全部修复 + 本文档（共 23 个提交），但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可（`feat/portable-u1` / `feat/portable-u2` 是历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
+> 最后更新：2026-11-21（便携版 U0–U3 全部完成，准备同步）　当前分支：`feat/portable-u3`　仓库：`DepthRecur/wordmemo`
+> **推送状态**：`master` 已在本地包含 U0 + U1 + U2 + 全部修复 + 本文档，但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push；`feat/portable-u3`（U3 CI）也是本地分支。网络恢复后 `git push origin master feat/portable-u3` 即可（`feat/portable-u1` / `feat/portable-u2` 是历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
 
 ## 0. 一句话现状
 
-背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前两个已完成并冻结，第三个完成 U0 + U1 + **U2（0.4.0）**，**下一步是 U3（CI 发版 + README 两条更新路径）**：
+背单词桌面应用（Electron 38 + React 19 + `node:sqlite` + `ts-fsrs`）已可用。四个功能的顺序是：**多供应商 → 多个库 → 便携版自更新 → 云端同步**。前三个已完成并冻结（便携版 U0–U3 全部完成，0.4.0），**下一步是同步**：
 - **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。bug 清单已处理完（P-07 决定不修，见 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)）。
 - **多个库**（2026-11-19 完成；2026-11-20 第二轮修 bug）：`decks` 表 + 全部查询按库作用域、每库新词额度、批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库。第二轮修完 [BUGS-DECKS.md](BUGS-DECKS.md) 全部条目（考试范围悬空、统计口径、空范围、删当前库、导入目标库、下拉被弹窗裁剪），`tests/decks.test.ts` 扩到 21 项。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
 - **便携版 U0**（2026-11-19，已并入主线）：`npm run dist` 出 `release/WordMemo-0.4.0-portable.zip`（141.5 MB）+ sha256 + `latest.json`；启动器按 sandbox-state.json 决定是否降级；数据固定在 `%APPDATA%\WordMemo`。
 - **便携版 U1**（2026-11-21，已并入主线）：`sandbox-state.json` 探针 + 连续 3 次启动失败自愈 + 设置页开关 + 启动器按 compatMode 传参；无沙箱机器连续失败 3 次后会自动切兼容模式，不会永久打不开。
-- **便携版 U2**（2026-11-21，`feat/portable-u2`）：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，有新版本自动下载 + 流式 sha256 + 解压到 `update/app-new`，只提示「下次启动生效」；启动器在下一次启动时按七步换目录（`app→app-old` / `app-new→app`），失败回滚 + `update/error.log`。**应用绝不替换自己、不静默重启**。实现记录与验收见 [PLAN-UPDATE §10 U2](PLAN-UPDATE.md)，**U3 交接见 §11.4**。
+- **便携版 U2**（2026-11-21，已并入 master）：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，有新版本自动下载 + 流式 sha256 + 解压到 `update/app-new`，只提示「下次启动生效」；启动器在下一次启动时按七步换目录（`app→app-old` / `app-new→app`），失败回滚 + `update/error.log`。**应用绝不替换自己、不静默重启**。实现记录与验收见 [PLAN-UPDATE §10 U2](PLAN-UPDATE.md)。
+- **便携版 U3**（2026-11-21，`feat/portable-u3`）：`.github/workflows/release.yml`（tag `v*` → typecheck/test/build/dist → 三件套校验 → GitHub Release）+ `release-notes/v<version>.md` 约定 + README 两条更新路径与发版流程。**不改代码，版本仍是 0.4.0**。实现记录见 [PLAN-UPDATE §10 U3](PLAN-UPDATE.md)。
 - **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用（见 §5.6）。
 
 **3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
 
-下一个要做的：**U3 CI 发版 + 路线 B**（[PLAN-UPDATE §11.4](PLAN-UPDATE.md)），然后做同步。
+下一个要做的：**同步 S0**（[PLAN-SYNC.md](PLAN-SYNC.md)）：`uid` + `replayCards()` + golden test。**S0 不通过就别往下做**，退路是「以卡为准 + 冲突副本」。
 
 ---
 
@@ -119,6 +120,8 @@ scripts/make-portable.mjs  ← npm run dist：build → electron-builder --dir �
 scripts/portable-README.txt ← zip 里的使用/数据/手动更新说明（{{VERSION}} 构建时替换）
 scripts/gen-pricing.mjs ← 重新生成价格快照（调价时跑一次）
 scripts/ai-smoke.mjs    ← npm run ai-smoke（启动 Electron + --ai-smoke）
+.github/workflows/release.yml ← U3 CI 发版：tag v* → 版本校验 → typecheck/test/build/dist → 三件套断言 → gh release（workflow_dispatch = dry run）
+release-notes/v<version>.md ← 每个版本的 Release Notes 三行（是否迁移数据 / 是否不可逆 / 修了什么）；CI 把前 3 行写进 latest.json 的 notes
 tests/
   providers.test.ts     ← 17 项：传输层/供应商表/错误归一化/中文 400/GLM 不发 thinking
   ai-client.test.ts     ← 16 项：client 接线 + 角色路由 + 400 降级 + 强制思考模型（stub fetch，不联网）
@@ -139,7 +142,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ---
 
-## 5. 已完成：多供应商（冻结）+ 多个库 + 便携版 U0/U1/U2；下一步：U3
+## 5. 已完成：多供应商（冻结）+ 多个库 + 便携版 U0–U3；下一步：同步
 
 ### 5.1 多供应商（2026-11-18 ~ 19，master，冻结）
 
@@ -272,9 +275,20 @@ docs/               ← 四份计划 + 调研 + 本文件
 - **硬约束都守住了**：应用只下载、启动器只换目录；数据始终在 `%APPDATA%\WordMemo`；没有静默重启；更新源只有 GitHub。
 - **验收**：0.4.0 → 0.4.1 真机走通（版本变、2 库/2 笔记/14 词条全在）；坏 sha → 警告且不产生 app-new；半截 app-new → 启动器拒绝并写 error.log、照常启动旧版；新 exe 损坏 → 换目录后启动失败自动回滚；断网 → 黄色警告、不崩；`lastCheckAt=null` 启动 **60 秒整**自动检查；设置页看到「检查更新 / 跳过版本 / 上次检查」。
 - **最容易踩的坑（务必先看 PLAN-UPDATE §10 U2 的「坑」）**：Electron 主进程的 `fs` 对 `.asar` 打补丁——`statSync(asar).size` 返回 0，`rmSync` 含 asar 的目录会 EBUSY 并留下句柄（之后 rename 也被拒）。所以应用**不 stat/read asar**（只用 readdir 判断存在），清理一律「先改名让路，再尽力删」，asar 大小检查放在启动器里。
-- **细节**：见 [PLAN-UPDATE §10 U2 小节](PLAN-UPDATE.md)；下一步 U3 见 §11.4。
+- **细节**：见 [PLAN-UPDATE §10 U2 小节](PLAN-UPDATE.md)。
 
-多供应商与多个库的 bug 清单都已关闭（[BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)、[BUGS-DECKS.md](BUGS-DECKS.md)）；**U2 自更新已完成**，下一步是 U3（CI 发版 + 路线 B），见 [PLAN-UPDATE §11.4](PLAN-UPDATE.md)。
+### 5.13 便携版 U3 CI 发版 + 路线 B（2026-11-21，`feat/portable-u3`，完成）
+
+- **不改代码**，版本仍是 `0.4.0`；typecheck / 17 文件 185 项 / build 全绿。
+- **CI**：`.github/workflows/release.yml`。tag `v*` 触发 → tag 必须等于 `v<package.json version>` → `npm ci` → typecheck → test → build → `npm run dist` → 三件套（zip / `.sha256` / `latest.json`）版本·文件名·sha256 三方一致 → upload-artifact → `gh release create`（已存在则 `upload --clobber`）。`workflow_dispatch` 只构建 + 上传 artifact，**不发布**。
+- **Release Notes 约定**：每个版本一个 `release-notes/v<version>.md`，三行（是否迁移数据 / 是否不可逆 / 修了什么）；CI 把前 3 行写进 `latest.json` 的 `notes`，完整内容作为 Release 正文。
+- **README**：自动 / 手动两条更新路径、SmartScreen「更多信息 → 仍要运行」、sha256 校验、「发布（维护者）」五步。
+- **路线 B 真机验收**：0.4.0 解压 → 造数据（2 库 / 2 笔记 / 14 词条）→ 用 `electron-builder --config.extraMetadata.version=0.4.1` 生成新版 app 并覆盖 `app/` → 重新双击启动器 → `system.appVersion()=0.4.1`，数据全在（详见 PLAN-UPDATE §10 U3）。
+- **没验到的**：远端 private + 本地未 push，**GitHub Actions 首次真实运行没跑过**，`gh release` 真实调用也没执行（本机没有 `gh`）。「test 失败不发布」目前由步骤顺序保证（test 在 dist / release 之前）；推送后第一次发版要盯 Actions 日志。
+- **发版纪律**：改 `package.json` + `package-lock.json` 两处版本 → 加 `release-notes/v<version>.md` → 提交 → `git tag v<version>` → `git push origin v<version>`。`latest.json` 只能由 `npm run dist` / CI 生成，不要手工覆盖。
+- **细节**：见 [PLAN-UPDATE §10 U3 小节](PLAN-UPDATE.md)。
+
+多供应商与多个库的 bug 清单都已关闭（[BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)、[BUGS-DECKS.md](BUGS-DECKS.md)）；**便携版 U0–U3 全部完成**，下一步是**同步 S0**（[PLAN-SYNC.md](PLAN-SYNC.md)）。
 
 ---
 
@@ -282,7 +296,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 | 功能 | 第一步 | 注意 |
 |---|---|---|
-| 便携版 | **U0 + U1 + U2 已完成**；下一步 **U3 CI 发版 + 路线 B**（[PLAN-UPDATE §11.4](PLAN-UPDATE.md)） | 数据必须留在 `%APPDATA%\WordMemo`；打包前先确认程序目录没有数据；发版用 `npm run dist`（已出 zip + sha256 + latest.json） |
+| 便携版 | **U0–U3 全部完成**（0.4.0） | 发版：改版本 + `release-notes/v<version>.md` → tag `v<version>` → CI 出三件套；数据必须留在 `%APPDATA%\WordMemo` |
 | 同步 | S0：`uid` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
 
 ---
@@ -321,7 +335,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ## 8. 已知坑（做之前先看一眼）
 
-完整清单在 [PLAN-NEXT §7](PLAN-NEXT.md)。最容易踩的十个：
+完整清单在 [PLAN-NEXT §7](PLAN-NEXT.md)。最容易踩的十一个：
 
 1. ~~**迁移跑在备份之前**~~：**已修**。`index.ts` 在 `openDb()` 之前调 `backupBeforeMigrate()`，写 `backups/wordmemo-pre-migrate-v<N>.db`；改 schema 记得升 `SCHEMA_VERSION`（`schema.ts`），否则不会触发备份。
 2. **同步的时间戳没有时区**：`localIso()` 是本地时间，跨设备比较会错 → 同步 op 要另加 `ts_utc`。
@@ -333,6 +347,7 @@ docs/               ← 四份计划 + 调研 + 本文件
 8. **打包版的 `%APPDATA%\WordMemo` 与源码模式的 `.data` 不互通**：切换/迁移要手动复制（含 `Local State`）；删程序目录不影响 `%APPDATA%`。
 9. **今日任务的队列每次都会重新抽方向**：`dailyPlan` 里 `oneCardPerItem` 用 `Math.random` 从同一个词的多个方向里挑一张，所以两次 `daily()` 的「第 3 张」可能不是同一张卡。任何「按 cardId 回队列里找回来」的写法都会失效（复习现场恢复就是这么踩的，见 §5.8）；要恢复某张具体卡就把它连同词条一起存下来。
 10. **Electron 主进程不能 stat/read/rm `.asar`**：`fs.statSync('...app.asar').size` 返回 **0**（被当成虚拟目录）；`fs.rmSync` 一个含 `resources/app.asar` 的目录会 **EBUSY**，并在本进程留下句柄，之后连 `fs.renameSync` 父目录都被拒。U2「下载 → 解压 → 备好 app-new」这条链就是被它咬了三次。规则：应用里只 `readdirSync(resources)` 判断 `app.asar` 存在；清理一律「先改名让路（`app-new-stale-*` / `staging-stale-*`），再尽力删」，删不掉留给启动器；asar 大小检查放启动器（C# 没有这层补丁）。见 [PLAN-UPDATE §10 U2 坑 1](PLAN-UPDATE.md)。
+11. **发版三件套必须互相一致**：tag 必须等于 `v<package.json version>`；`latest.json` 只能由 `npm run dist` 生成（`version` / `zip` / `sha256` 与 zip、`.sha256` 一致）。CI 里已经断言，本地手工发版也别绕过。`workflow_dispatch` 只构建不发布；runner 用 Node 24（`node:sqlite` 在 Node 22 早期版本要 `--experimental-sqlite`）。
 
 ---
 
@@ -340,35 +355,32 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
-再读 docs/PLAN-UPDATE.md：§3.11 是定稿方案，§10 是 U0/U1/U2 实现记录，§11.4 是 U3 的交接清单；
+再读 docs/PLAN-SYNC.md：§3 是方案（§3.2 uid、§3.3 replay、§3.5 口令加密、§3.9 冲突矩阵），§5 是 S0–S4；
 需要背景时读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）。
 改任何用户可见文案前先读 docs/MESSAGES.md。
 
-当前状态（2026-11-21）：多供应商（冻结）、多个库 + 第二轮 bug 修复、便携版 U0 + U1 + U2 都已完成
-（U2 = 自更新：应用下载/校验/解压 + 启动器七步换目录，见 PLAN-UPDATE §10 的 U2 小节）。
+当前状态（2026-11-21）：多供应商（冻结）、多个库、便携版 U0–U3 全部完成（0.4.0）。
 typecheck 0 错误、npm test 17 文件 185 项全绿、npm run build 通过。
-下一步：从 master 开 feat/portable-u3，做 U3：GitHub Actions tag 触发发版 + README 两条更新路径。
-package.json 现在是 0.4.0（U2 的版本）；如果 U3 不改代码，就发 0.4.0；改代码再升 0.5.0。version.json 由构建脚本写，别手改。
+下一步：从 master 开 feat/sync，做同步 S0：加 uid（先备份）、写入口统一 withSync、抽 replayCards()、golden test。
+S0 不通过就别往下做：3 天内做不到「真实库重放 0 差异」就退回「以 cards 为准 + 冲突副本」。
+（U3 的 CI/发版流程已完成，发版见 README「发布（维护者）」；远端仍未 push。）
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
 - 只做 DeepSeek/OpenAI/Gemini/GLM；不装 pi-ai；不做自定义端点
 - 便携版 zip + 启动器换目录；不做安装包、不做签名、不用 electron-updater / latest.yml
 - 数据永远在 %APPDATA%\WordMemo；应用只下载，启动器换目录；不做静默重启
-- 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令
+- 同步只做结构化数据，图片/文件永久不同步；同步密钥用用户口令（age passphrase + kdfVerifier），没有恢复密钥
 - 多个库用方案 A（进度跟单词走，每库一份新词额度；复制笔记不复制进度）
 
-U3 的关键点（详见 PLAN-UPDATE §11.4）：
-- `.github/workflows/release.yml`：只 tag v* 触发（+ workflow_dispatch dry-run），不要 PR 触发；
-  permissions: contents: write；npm ci → typecheck → test → build → dist → 上传三件套；
-  test 失败就不发布。
-- `npm run dist` 已生成 `release/WordMemo-<ver>-portable.zip`、`.sha256`、`latest.json`（字段见 §3.11）；
-  latest.json 的 sha256/文件名必须与实际上传的 zip 完全一致（notes 可用 WORDMEMO_RELEASE_NOTES 传）。
-- README 写清两条路：自动（正常）/ 手动（退出 → 解压覆盖 app/ → 重开）；数据在 %APPDATA%\WordMemo；
-  Release Notes 三行：是否迁移数据、是否不可逆、修了什么。
-- 不要引入 electron-updater / latest.yml / NSIS / 签名 / 自建服务器；CI 不装额外运行时依赖。
+S0 的关键点（详见 PLAN-SYNC §3.2/§3.3/§5）：
+- 加 uid 是 schema 变更：先 backupBeforeMigrate、升 SCHEMA_VERSION；迁移只加不删。
+- 变更捕获不靠触发器，靠写入口统一走 withSync；replayCards() 必须能复现现有 cards。
+- 同步 op 用 ts_utc（epoch ms），due_at 保持本地时间；本地 localIso() 不能跨设备比较。
+- 先只在本机验证（两个 WORDMEMO_DATA_DIR 造两台设备），不连网、不写远端。
+- 考试模式、buried、learn_mark 是重放最难对齐的位置，先列出来逐个处理。
 
-每做完一阶段：npm run typecheck + npm test + npm run build，在 PLAN-UPDATE §10 记一笔，git commit -s。
+每做完一阶段：npm run typecheck + npm test + npm run build，在 PLAN-SYNC 的实现记录里记一笔，git commit -s。
 ```
 
 ---
@@ -380,6 +392,7 @@ U3 的关键点（详见 PLAN-UPDATE §11.4）：
 - 提交信息用 `feat|fix|refactor|docs(scope): ...`。
 - 贡献者用 DCO（`git commit -s`），不引入 CLA。
 - **便携版产物不进 git**：`release/` 与 `WordMemo-Portable/` 都已 gitignore；发版时只上传 `WordMemo-x.y.z-portable.zip` + `.sha256` + `latest.json`（`npm run dist` 已生成三件套）。
+- **发版流程**（U3 起）：改 `package.json` 与 `package-lock.json` 顶部的两处版本 → 在 `release-notes/` 加 `v<version>.md`（三行）→ 提交 → `git tag v<version>` → `git push origin v<version>`；CI 会 typecheck/test/build/dist + 三件套断言 + 建 Release。`latest.json` 只能由脚本/CI 生成，不要手工上传覆盖。
 - **界面灰字规则**（2026-11-18 定）：UI 上的小字只回答「我现在要做什么、会发生什么」。实现原因、发布流程、给维护者看的说明（例如「对应 Anki 的 learn ahead」「改完代码要重启」「不用等发版」）一律不进 UI——放这里、README 或设置页「高级与诊断 → 诊断信息」里。加灰字前先问：用户看完会多做/少做一个动作吗？不会就别加。
 - **用户可见消息的级别**（2026-11-20 定）：错误 = 功能结果出错/不可用（红色、常驻铃铛）；警告 = 异常但不影响功能（黄色/内嵌提示、不常驻）；提示 = 成功、进度、少做一个前置动作。细节与判定顺序见 [MESSAGES.md](MESSAGES.md)，**改文案前先按它定级**，不要为了让提示显眼就升成 `err`。
 - **不要做的**：改许可证、把 AGPL 代码抄进来、装 pi-ai（除非供应商超过 4 家）、加安装包/签名、同步附件、把 `scripts/ocr-lab/runs/` 或 `gt/` 加回仓库。
