@@ -109,6 +109,11 @@ const api: WordmemoApi = {
     cacheSize: () => ipcRenderer.invoke('tts:cacheSize'),
     clear: () => ipcRenderer.invoke('tts:clear')
   },
+  sandbox: {
+    get: () => ipcRenderer.invoke('sandbox:get'),
+    setCompat: (enabled: boolean) => ipcRenderer.invoke('sandbox:setCompat', enabled),
+    ackNotice: () => ipcRenderer.invoke('sandbox:ackNotice')
+  },
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),
     backup: () => ipcRenderer.invoke('system:backup'),

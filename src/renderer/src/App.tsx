@@ -375,6 +375,29 @@ export default function App() {
     syncSystemNotice('drafts', present, message, { label: '去处理', route: 'import' }, 'warn')
   }, [ready, draftIssues, syncSystemNotice])
 
+  // U1：自动切到兼容模式后只提示一次（文件里 noticeSeen 记着；手动开启不提示）
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    void window.api.sandbox
+      .get()
+      .then((info) => {
+        if (cancelled || !info.noticePending) return
+        syncSystemNotice(
+          'sandbox-compat',
+          true,
+          '检测到系统不支持 Chromium 沙箱，已自动切到兼容模式（功能不变，安全性略降）。',
+          { label: '查看设置', route: 'settings' },
+          'warn'
+        )
+        void window.api.sandbox.ackNotice().catch(() => undefined)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [ready, syncSystemNotice])
+
   // 本月 AI 预算用完：只提醒，不拦调用（P-02）。点「本月不再提示」静音到月底。
   useEffect(() => {
     return window.api.events.onBudgetExhausted((info) => {

@@ -78,7 +78,9 @@ const args = [
   '/out:' + out,
   source,
   assemblyInfo,
-  '/r:System.Windows.Forms.dll'
+  '/r:System.Windows.Forms.dll',
+  // 只用到 JavaScriptSerializer 读写 sandbox-state.json（.NET Framework 自带，无新增依赖）
+  '/r:System.Web.Extensions.dll'
 ]
 if (fs.existsSync(icon)) args.push('/win32icon:' + icon)
 

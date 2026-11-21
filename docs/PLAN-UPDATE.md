@@ -1,4 +1,4 @@
-﻿# 计划 C：自动更新（走 GitHub Releases）
+# 计划 C：自动更新（走 GitHub Releases）
 
 > 目标版本：v0.4　预计 **4~5** 个工作日　风险：中
 > 前置：仓库已开源 + 打包链路已跑通 + 迁移前备份的坑已修（见总览 §3）
@@ -454,7 +454,7 @@ WordMemo-Portable/
 
 ### U0 便携版打包 + 启动器 v0（2026-11-19，`feat/portable`，已并入主线）
 
-**状态：完成。** `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB；解压后约 408 MB）。U1 / U2 / U3 未做，起点见 §11。
+**状态：完成。** `npm run dist` → `release/WordMemo-0.3.0-portable.zip`（141.5 MB；解压后约 408 MB）。U1 已完成（见下方 U1 小节）；U2 / U3 未做，起点见 §11。
 
 > **2026-11-20 复核**：U0 之后主线又进了多供应商修复、多个库第二轮修复（`BUGS-DECKS` 全部关闭）和自定义下拉的 portal 改造，`release/` 里的 zip 是这些修复**之前**打的。做 U1 验收前先重新 `npm run dist`，不要拿旧 zip 当基线。
 
@@ -490,11 +490,62 @@ WordMemo-Portable/
 **下一步**
 
 - **2026-11-20 用户指示**：U0 已完成，U1 → U2 → U3 现在恢复，交接清单见 §11。
-- **U1 兼容模式**（先做）：`sandbox-state.json` 探针 + `failStreak` 自愈 + 设置页开关；现在启动器无条件带 `--no-sandbox`，U1 要改成「只在 compatMode 时带」，否则"按需降级"没有意义。
+- **U1 兼容模式**：**已完成**（2026-11-21），实现记录见下方 U1 小节；U2 是下一步。
 - **U2 自更新**：应用侧检查 `latest.json` → 下载 → 流式 sha256 → 解压 `update/app-new` → 写 `state.json`；启动器按 §3.11 七步换目录 + 回滚 + `error.log`。`update/` 目录已预留、`app/version.json` 已写。
 - **U3 CI 发版 + README 两条更新路径**：构建脚本已具备出 zip + sha256 的能力，`latest.json` 留给 U2/U3。
 
 ---
+
+### U1 兼容模式（2026-11-21，`feat/portable-u1`，完成）
+
+**状态：完成。** `npm run typecheck` 0 错误、`npm test` 16 文件 163 项全绿、`npm run build` / `npm run dist` 通过。版本仍是 `0.3.0`（按 §11.1，U1 不升版本）。
+
+**落地内容**
+
+| 文件 | 作用 |
+|---|---|
+| `src/main/sandbox.ts`（新） | 读写 `userData/sandbox-state.json`；`decideSandboxState` 纯判定、`evaluateSandboxOnStart` / `beginProbe` / `markReady` / `setCompatMode` / `sandboxInfo` / `ackSandboxNotice`；tmp+rename；坏文件按默认值 |
+| `src/main/index.ts` | 模块顶层（`app.whenReady()` 之前）`evaluateSandboxOnStart`；`compatMode` 为真时 `appendSwitch('no-sandbox')` + `appendSwitch('disable-gpu-sandbox')`；单实例锁之后 `beginProbe`；窗口 `ready-to-show` → `markReady`；`--ai-smoke` 也 `markReady`；`diagnostics.log` 写 `sandbox-start` |
+| `scripts/Launcher.cs` | 按 `%APPDATA%\WordMemo\sandbox-state.json` 的 `compatMode` decide 参数；**同时维护 probe/失败计数**（见下）；probe 写 `source=launcher`（主进程看到会忽略，由启动器自己结算）；保留 `ELECTRON_RUN_AS_NODE` 清理和缺失 app 的提示 |
+| `src/shared/types.ts` / `src/preload/index.ts` / `src/main/ipc.ts` | 新增 `SandboxInfo` 与 `sandbox:get` / `sandbox:setCompat` / `sandbox:ackNotice` |
+| `src/renderer/src/pages/SettingsPage.tsx` | 「高级与诊断」加兼容模式开关、自动开启提示、失败计数、「重新检测」 |
+| `src/renderer/src/App.tsx` | 首次自动降级时推一条 `warn`（黄色常驻）：检测到系统不支持沙箱，已切兼容模式；展示后 ack，之后不再提示 |
+| `scripts/portable-README.txt` | 写清「双击没反应就再试，连续 3 次失败后第 4 次自动切兼容模式」 |
+
+**判定规则（实现）**
+
+- `probe.ok === false` + `probe.pid > 0` + 进程不存在 + `startedAt` 距今 `>= 0 && < 30s` → `failStreak++`。
+- 另外要求 `probe.startedAt > lastReadyAt`：如果应用已经 `ready-to-show`，启动器随后才写的 probe 不算失败（竞态保护）。
+- `failStreak >= 3` → `compatMode = true`、`autoEnabled = true`、`noticeSeen = false`（下次成功启动后提示一次）。
+- 成功 `ready-to-show` → `probe = null`、`failStreak = 0`、记 `lastReadyAt`。
+- `setCompatMode`（开关/重新检测）清零计数、清 probe、`autoEnabled=false`、`noticeSeen=true`；改完下次启动生效。
+
+**与原计划的差异（重要）**
+
+计划里启动器「只读 compatMode」，失败计数在主进程。但 **有些机器 Electron 在加载主进程 JS 之前就退出**，主进程根本没法写 probe；这样启动器永远看不到失败，也就永远不会降级。所以实现里让启动器也参与：
+
+- 启动器启动前先 `Evaluate()` 上一次 probe（同样 30s/pid/lastReady 规则），必要时把 `compatMode` 置 true；然后用**自己的 pid** 写一条 `source=launcher` 的 `ok=false` probe，再启动 app；app 能跑到 JS 就用 `source=app` 的 probe 覆盖它，ready 后清掉。这样 app 连 JS 都没起来时 probe 仍在，下一次启动由启动器结算；
+- 主进程 `evaluateSandboxOnStart` **忽略 `source=launcher` 的 probe**，避免把「启动器还没退出、app 已经在跑」的同一次启动重复算失败；
+- 为了不重复计数：启动器先判断已有实例（有就不碰状态）；主进程在单实例锁之后才 `beginProbe`；两边都忽略 `startedAt <= lastReadyAt` 的旧 probe。
+
+这是 §3.3「崩溃探针」在「JS 根本没起来」场景下的唯一可行实现；计划正文的「启动器只读」需要在 U2/U3 文档里同步更新。
+
+**验收（2026-11-21，本机）**
+
+- **正常模式**：解压新 zip → 双击启动器 → 主进程命令行**没有** `--no-sandbox`；renderer 命令行是 `--enable-sandbox`、没有 `--no-sandbox`；`sandbox-state.json` 为 `compatMode=false / failStreak=0 / probe=null / lastReadyAt=<时间>`；`wordmemo.db` 创建。
+- **兼容模式**：把 state 置 `compatMode=true` 后双击启动器 → 主进程命令行带 `--no-sandbox --disable-gpu-sandbox`；直接双击 `app\WordMemo.exe`（不经启动器）→ renderer 命令行出现 `--no-sandbox`（主进程 `appendSwitch` 生效）。
+- **自动降级（启动器路径）**：用「启动即退出」的 dummy exe 替换 `app\WordMemo.exe`，连续 4 次双击启动器：`failStreak` 0→1→2→3，第 4 次 `compatMode=true`、`autoEnabled=true`、`noticeSeen=false`。
+- **自动降级（主进程路径）**：把 state 置 `failStreak=2` + 一个已死 pid 的 probe，直接启动 `app\WordMemo.exe`：`sandbox-start` 日志 `justEnabled=true`，状态在窗口 ready 后清成 `failStreak=0 / probe=null / autoEnabled=true`，renderer 带 `--no-sandbox`。
+- **首次自动提示**：自动降级后启动，UI 正文出现「检测到系统不支持 Chromium 沙箱，已自动切到兼容模式…」，`sandbox.get().noticePending=false`、`noticeSeen=true`（ack 生效）。
+- **设置页**：CDP 打开「设置 → 高级与诊断」，能看到「兼容模式（关闭 Chromium 沙箱）」和「重新检测」；`sandbox.setCompat(false)` 后 state 变 false，下次启动 renderer 无 `--no-sandbox`。
+- **三种入口**：启动器、直接 `app\WordMemo.exe`、以及从 `.lnk` 快捷方式启动都实际验证过（快捷方式指向启动器）。
+
+**注意**
+
+- 本机当前环境（Electron 38）**实际能带沙箱启动**（renderer 有 `--enable-sandbox`），所以「机器沙箱不可用」是用 dummy exe 和状态文件模拟的；真实失败场景请在有问题的 Windows 上复测。启动器的失败计数逻辑不依赖 app 是否能跑 JS，模拟覆盖了这一路径。
+- 前 3 次启动失败时启动器会立即退出，没有 UI 提示；README 已写「再双击，连续 3 次失败后第 4 次自动兼容」。如果以后觉得体验太差，可在 U2/U3 的 README 或启动器里补提示，但不改判定阈值。
+- `sandbox-state.json` 在 `%APPDATA%\WordMemo`，与数据库同处；不随 `app/` 更新丢失。
+- 不改 schema、不动数据格式。
 
 ## 11. 交接：U1–U3 起点（2026-11-20）
 
@@ -503,12 +554,15 @@ WordMemo-Portable/
 ### 11.1 当前基线
 
 - 分支：`master`（= 之前的 `fix/decks-ui`，已包含 U0 + 多供应商修复 + 多库修复）。工作区应干净；`npm run typecheck` 0 错误、`npm test` 15 文件 / 150 项全绿、`npm run build` 通过。
+- **U1 完成后**：分支 `feat/portable-u1`，`npm test` 16 文件 / 163 项；实现记录见 §10 的 U1 小节。
 - 开始新分支：`git checkout -b feat/portable-u1`（U2 再 `feat/portable-u2`，U3 `feat/portable-u3`）。
 - 版本纪律：`package.json` 现在是 `0.3.0`。U1 可以不升版本（用户不可见的行为修复）；**U2 发版前升到 `0.4.0`**，并让 `app/version.json` 由构建脚本写入（`scripts/make-portable.mjs` 已这么做，别手改）。
 - 构建：`npm run dist`（约 1~2 分钟，产出 `release/WordMemo-<ver>-portable.zip` + `.sha256`）。`npm run dist:app` 只出 `win-unpacked`；`npm run launcher` 只重编启动器。
 - 测试数据：源码模式在 `.data/`，便携版在 `%APPDATA%\WordMemo`，两者不互通。做 U1/U2 验收前先确认 `%APPDATA%\WordMemo` 有可识别的数据（或先备份/改名），程序目录里不应该有 `*.db` / `settings.json` / `secrets*`。
 
 ### 11.2 U1 兼容模式（先做，0.5~1 天）
+
+> **2026-11-21 已完成**，实现记录、与原计划的差异（启动器也维护 probe）、验收均见 §10 的 U1 小节。下面是原计划，保留作背景。
 
 **目标**：这台必须 `--no-sandbox` 的机器解压即用；正常机器保持沙箱；启动器不再无条件降级。
 

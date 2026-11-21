@@ -555,6 +555,27 @@ export interface BuildInfo {
   session: string | null
 }
 
+/** 兼容模式（U1）：sandbox-state.json 的用户可见视图 */
+export interface SandboxProbeInfo {
+  pid: number
+  /** ISO 时间；写入方是启动器或主进程 */
+  startedAt: string
+  ok: boolean
+  source: 'app' | 'launcher'
+}
+
+export interface SandboxInfo {
+  compatMode: boolean
+  /** 连续「启动后没等到 ready」的次数；成功启动后归零 */
+  failStreak: number
+  maxFailStreak: number
+  /** 自动切换到兼容模式，而不是用户在设置里手动打开 */
+  autoEnabled: boolean
+  probe: SandboxProbeInfo | null
+  /** 自动降级后还没提示过用户 */
+  noticePending: boolean
+}
+
 export interface WordmemoApi {
   settings: {
     get(): Promise<Settings>
@@ -672,6 +693,14 @@ export interface WordmemoApi {
     get(word: string, accent?: 'us' | 'uk'): Promise<TtsResult>
     cacheSize(): Promise<{ files: number; bytes: number }>
     clear(): Promise<void>
+  }
+  sandbox: {
+    /** 读 userData/sandbox-state.json 的用户视图（不含 lastReadyAt 等内部字段） */
+    get(): Promise<SandboxInfo>
+    /** 设置兼容模式；下次启动生效（本进程已经 append 的 switch 无法撤销） */
+    setCompat(enabled: boolean): Promise<SandboxInfo>
+    /** 「首次自动降级」提示已展示，之后不再提示 */
+    ackNotice(): Promise<SandboxInfo>
   }
   system: {
     openDataDir(): Promise<void>

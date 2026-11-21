@@ -48,6 +48,7 @@ import { refreshPricing } from './ai/pricing'
 import { isProviderId, type ProviderId } from './ai/providers'
 import { getDiagnostics } from './diagnostics'
 import { clearReviewSession, readReviewSession, saveReviewSession } from './reviewSession'
+import { ackSandboxNotice, sandboxInfo, setCompatMode } from './sandbox'
 import {
   commitAllDrafts,
   commitDraft,
@@ -128,6 +129,13 @@ export function registerIpc(): void {
     const result = await refreshPricing(force !== false)
     return { ok: result.ok, message: result.message, info: aiSettingsInfo() }
   })
+
+  // U1 兼容模式：文件是 userData/sandbox-state.json，启动器也读同一个文件
+  ipcMain.handle('sandbox:get', () => sandboxInfo(dataDir()))
+  ipcMain.handle('sandbox:setCompat', (_e, enabled?: boolean) =>
+    setCompatMode(dataDir(), enabled === true)
+  )
+  ipcMain.handle('sandbox:ackNotice', () => ackSandboxNotice(dataDir()))
 
   ipcMain.handle('notes:list', (_e, query?: NoteQuery) => listNotes(query ?? {}))
   ipcMain.handle('notes:get', (_e, id: number) => getNote(id))

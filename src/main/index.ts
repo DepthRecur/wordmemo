@@ -17,6 +17,7 @@ import { scheduleCatalogRefresh } from './ai/catalog'
 import { onBudgetExhausted } from './ai/budget'
 import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
+import { beginProbe, evaluateSandboxOnStart, markReady } from './sandbox'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -24,21 +25,28 @@ let quitting = false
 let lastFired = ''
 let trayHintShown = false
 
-// 开发时把数据放在项目内，避免污染真实用户目录，也方便沙箱运行
-if (!app.isPackaged) {
-  const devData = process.env.WORDMEMO_DATA_DIR || path.join(app.getAppPath(), '.data')
-  fs.mkdirSync(devData, { recursive: true })
-  app.setPath('userData', devData)
-} else {
-  // 便携版：数据固定放 %APPDATA%\WordMemo，绝不跟着程序目录走（PLAN-UPDATE §3.11）。
-  // 显式指定而不依赖 app.getName()，避免以后改 productName 时把用户数据搬家。
-  app.setPath('userData', path.join(app.getPath('appData'), 'WordMemo'))
+// 数据目录必须在读 sandbox-state.json 之前定下来：
+// 源码模式用项目内 .data，便携版固定 %APPDATA%\WordMemo（PLAN-UPDATE §3.11）。
+const dataRoot = (() => {
+  if (!app.isPackaged) {
+    const devData = process.env.WORDMEMO_DATA_DIR || path.join(app.getAppPath(), '.data')
+    fs.mkdirSync(devData, { recursive: true })
+    return devData
+  }
+  return path.join(app.getPath('appData'), 'WordMemo')
+})()
+app.setPath('userData', dataRoot)
+
+// U1：必须在 app.whenReady() 之前 appendSwitch；直接双击 app\WordMemo.exe 时没有启动器帮忙。
+const sandboxBoot = evaluateSandboxOnStart(dataRoot)
+if (sandboxBoot.state.compatMode) {
+  app.commandLine.appendSwitch('no-sandbox')
+  app.commandLine.appendSwitch('disable-gpu-sandbox')
 }
 
 function userDataDir(): string {
-  const dir = app.getPath('userData')
-  fs.mkdirSync(dir, { recursive: true })
-  return dir
+  fs.mkdirSync(dataRoot, { recursive: true })
+  return dataRoot
 }
 
 function createWindow(): void {
@@ -60,7 +68,15 @@ function createWindow(): void {
     }
   })
 
-  mainWindow.once('ready-to-show', () => mainWindow?.show())
+  mainWindow.once('ready-to-show', () => {
+    // U1：窗口真正能显示 = 这次启动成功；清掉 probe 和失败计数
+    try {
+      markReady(dataRoot)
+    } catch {
+      /* 状态文件失败不影响显示 */
+    }
+    mainWindow?.show()
+  })
 
   mainWindow.on('close', (event) => {
     if (!quitting) {
@@ -325,10 +341,18 @@ async function bootstrap(): Promise<void> {
   openDb(dbFile)
   initSettings()
   log('app-start', { ...getDiagnostics() })
+  log('sandbox-start', {
+    compatMode: sandboxBoot.state.compatMode,
+    failStreak: sandboxBoot.state.failStreak,
+    justEnabled: sandboxBoot.justEnabled,
+    autoEnabled: sandboxBoot.state.autoEnabled
+  })
   const settings = getSettings()
 
   // 真机冒烟入口（scripts/ai-smoke.mjs）：跑完直接退出，不建窗口、不起托盘
   if (process.argv.includes('--ai-smoke')) {
+    // 冒烟模式下主进程能跑到这里，说明启动本身是成功的
+    markReady(dataRoot)
     const summary = await runAiSmoke()
     printSmokeTable(summary)
     app.exit(summary.failed ? 1 : 0)
@@ -365,6 +389,8 @@ const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
+  // U1：单实例检查之后再写 probe，避免第二个实例把正在运行的实例的 probe 覆盖成 false
+  beginProbe(dataRoot)
   app.on('second-instance', () => showWindow())
   app.whenReady().then(bootstrap).catch((err) => {
     dialog.showErrorBox('WordMemo 启动失败', err instanceof Error ? err.message : String(err))

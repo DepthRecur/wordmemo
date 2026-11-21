@@ -9,6 +9,7 @@ import type {
   AiTestResult,
   BuildInfo,
   Deck,
+  SandboxInfo,
   Settings
 } from '@shared/types'
 import { Badge, Button, Field, Modal, Toggle } from '../components/UI'
@@ -121,6 +122,8 @@ export default function SettingsPage({
   const [cache, setCache] = useState({ files: 0, bytes: 0 })
   const [version, setVersion] = useState('')
   const [build, setBuild] = useState<BuildInfo | null>(null)
+  const [sandbox, setSandbox] = useState<SandboxInfo | null>(null)
+  const [sandboxBusy, setSandboxBusy] = useState(false)
 
   // 四张供应商卡片：卡片数据只读，Key 只回显"已配置"
   const [info, setInfo] = useState<AiSettingsInfo | null>(null)
@@ -196,6 +199,7 @@ export default function SettingsPage({
     void window.api.tts.cacheSize().then(setCache)
     void window.api.system.appVersion().then(setVersion)
     void window.api.system.buildInfo().then(setBuild)
+    void window.api.sandbox.get().then(setSandbox).catch(() => undefined)
     void loadInfo()
   }, [])
 
@@ -519,6 +523,37 @@ export default function SettingsPage({
       notify(`已备份到 ${p}`, 'ok')
     } catch (err) {
       notify(`备份失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    }
+  }
+
+  const setSandboxCompat = async (enabled: boolean) => {
+    setSandboxBusy(true)
+    try {
+      const next = await window.api.sandbox.setCompat(enabled)
+      setSandbox(next)
+      notify(
+        enabled
+          ? '已开启兼容模式，下次启动生效'
+          : '已关闭兼容模式，下次启动会按正常模式重新检测',
+        'ok'
+      )
+    } catch (err) {
+      notify(`设置兼容模式失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setSandboxBusy(false)
+    }
+  }
+
+  const resetSandbox = async () => {
+    setSandboxBusy(true)
+    try {
+      const next = await window.api.sandbox.setCompat(false)
+      setSandbox(next)
+      notify('已清除失败计数，下次启动会按正常模式尝试', 'ok')
+    } catch (err) {
+      notify(`重置失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setSandboxBusy(false)
     }
   }
 
@@ -1104,6 +1139,26 @@ export default function SettingsPage({
             <div className="row-between">
               <span className="muted tiny">后台运行</span>
               <span className="tiny">关闭窗口只是收进托盘，到期提醒仍然生效</span>
+            </div>
+            <Toggle
+              checked={sandbox?.compatMode ?? false}
+              onChange={(v) => void setSandboxCompat(v)}
+              label="兼容模式（关闭 Chromium 沙箱）"
+              hint="仅在应用打不开时开启；功能不变，安全性略降。改完下次启动生效。"
+            />
+            {sandbox?.compatMode && sandbox.autoEnabled && (
+              <div className="hint">当前是自动探测开启的（连续启动失败后切换）。</div>
+            )}
+            {sandbox && sandbox.failStreak > 0 && (
+              <div className="hint">
+                已连续启动失败 {sandbox.failStreak} 次；满 {sandbox.maxFailStreak} 次会自动开启兼容模式。
+              </div>
+            )}
+            <div className="row">
+              <Button size="sm" variant="ghost" onClick={() => void resetSandbox()} disabled={sandboxBusy || !sandbox}>
+                重新检测
+              </Button>
+              <span className="muted tiny">清掉失败计数，下次启动按正常模式试</span>
             </div>
             <div className="row" style={{ marginTop: 8 }}>
               <Button size="sm" onClick={() => void window.api.system.restart()}>
