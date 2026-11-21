@@ -549,7 +549,7 @@ WordMemo-Portable/
 - `sandbox-state.json` 在 `%APPDATA%\WordMemo`，与数据库同处；不随 `app/` 更新丢失。
 - 不改 schema、不动数据格式。
 
-### U2 自更新（2026-11-21，`feat/portable-u2`，完成）
+### U2 自更新（2026-11-21，`feat/portable-u2`，已并入 master，完成）
 
 **状态：完成。** `npm run typecheck` 0 错误、`npm test` **17 文件 185 项**全绿、`npm run build` / `npm run dist` 通过。版本升到 **`0.4.0`**（`app/version.json` 由构建脚本写）。
 
@@ -616,7 +616,7 @@ WordMemo-Portable/
 
 ### 11.1 当前基线
 
-> **2026-11-21 更新（U2 完成后）**：`feat/portable-u2` 已包含 U2，`npm test` 17 文件 / 185 项；`package.json = 0.4.0`，交接产物是 `release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d0ca3eeabc8e756018e2fc99017a5bb19632daf76e94d35bb27b1b1e4`）+ `.sha256` + `latest.json`。U3 从 master 开 `feat/portable-u3`。下面这段是 U2 开工前的基线，保留作历史。
+> **2026-11-21 更新（U2 完成后）**：`master` 已包含 U2（`feat/portable-u2` 已快进合并），`npm test` 17 文件 / 185 项；`package.json = 0.4.0`，交接产物是 `release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d0ca3eeabc8e756018e2fc99017a5bb19632daf76e94d35bb27b1b1e4`）+ `.sha256` + `latest.json`。U3 从 master 开 `feat/portable-u3`。下面这段是 U2 开工前的基线，保留作历史。
 
 - 分支：`master` 已包含 U0 + U1 + 多供应商修复 + 多库修复；工作区应干净；`npm run typecheck` 0 错误、`npm test` 16 文件 / 163 项全绿、`npm run build` 通过。
 - U1 的历史分支是 `feat/portable-u1`（已快进合并到 master），不要从它继续；U2 从 master 开 `feat/portable-u2`（U3 `feat/portable-u3`）。

@@ -1,7 +1,7 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-21（U2 自更新完成，准备 U3）　当前分支：`feat/portable-u2`　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 已在本地包含 U0 + U1 + 全部修复 + 本文档，但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push；`feat/portable-u2`（U2 自更新）也是本地分支。网络恢复后 `git push origin master feat/portable-u2` 即可（`feat/portable-u1` 是 U1 的历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
+> 最后更新：2026-11-21（U2 自更新已并入 master，准备 U3）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
+> **推送状态**：`master` 已在本地包含 U0 + U1 + U2 + 全部修复 + 本文档（共 23 个提交），但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可（`feat/portable-u1` / `feat/portable-u2` 是历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
