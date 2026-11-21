@@ -349,12 +349,12 @@ WordMemo-Portable/
 
 | 变更 | 内容 |
 |---|---|
-| `settings.json` 新增 `updates` | `{ autoCheck: boolean, skippedVersions: string[], lastCheckAt, pendingVersion }`（都不含敏感信息） |
-| 新文件（程序目录） | `app/version.json`（构建写入）、`update/state.json`、`update/error.log` |
+| `settings.json` 新增 `updates` | `{ autoCheck, skippedVersions, lastCheckAt, failStreak, pendingVersion }`（都不含敏感信息；渲染层只通过 `updates:setAutoCheck` 改开关，不走整份 settings 保存） |
+| 新文件（程序目录） | `app/version.json`（构建写入）、`update/state.json`、`update/error.log`、`update/app-new/`、临时 `update/staging/` 与 `app-new-stale-*` / `staging-stale-*` |
 | 新文件（userData） | `userData/sandbox-state.json`（兼容模式与崩溃探针） |
-| 新 IPC | `updates:status`、`updates:check`、`updates:download`、`updates:skipVersion`、`updates:setCompatMode`；**没有 `updates:install`**（替换由启动器做） |
-| 新类型 | `UpdateStatus`、`UpdateCheckResult`、`UpdateProgress` |
-| 事件 | `updates:progress`、`updates:downloaded`、`updates:error` 推给渲染层 |
+| 新 IPC | `updates:status`、`updates:check`、`updates:skipVersion`、`updates:setAutoCheck`；**没有 `updates:install`**（替换由启动器做） |
+| 新类型 | `UpdateStatus`、`UpdateCheckResult`、`UpdatePhase`、`UpdateProgress`、`UpdateSettings` |
+| 事件 | 用一个 `updates:event` 推**完整状态快照**（检查/下载进度/就绪/失败都在里面），代替原计划的 `updates:progress` / `updates:downloaded` / `updates:error` 三个细粒度事件（见 §10 U2 的「与计划的差异」） |
 | 构建 | `electron-builder --dir` + zip + `latest.json`；**不需要** `publish`、`nsis`、`electron-updater`、`latest.yml` |
 
 ---
@@ -376,6 +376,8 @@ WordMemo-Portable/
 - **验收**：在你这台"必须 no-sandbox"的机器上，**解压后首次双击就能开**；正常机器 `compatMode=false`；三种入口（启动器、直接点 `app/WordMemo.exe`、快捷方式）都能开。
 
 ### U2 自更新（1.5~2 天）
+
+> **2026-11-21 已完成**（`feat/portable-u2`）。实现记录、与原计划的差异、验收见 §10 的 U2 小节；下面保留原计划作背景。
 
 - 应用侧：检查 `latest.json` → 下载 zip → 流式 sha256 → 解压 `update/app-new` → 写 `state.json` → 提示「下次启动生效」。
 - 启动器侧：按 §3.11 的 7 步换目录 + 失败回滚 + `error.log`；`app-old` 保留一次启动。
@@ -547,11 +549,74 @@ WordMemo-Portable/
 - `sandbox-state.json` 在 `%APPDATA%\WordMemo`，与数据库同处；不随 `app/` 更新丢失。
 - 不改 schema、不动数据格式。
 
+### U2 自更新（2026-11-21，`feat/portable-u2`，完成）
+
+**状态：完成。** `npm run typecheck` 0 错误、`npm test` **17 文件 185 项**全绿、`npm run build` / `npm run dist` 通过。版本升到 **`0.4.0`**（`app/version.json` 由构建脚本写）。
+
+**落地内容**
+
+| 文件 | 作用 |
+|---|---|
+| `src/main/updater.ts`（新） | 纯函数：semver 版本比较、`latest.json` 校验、24h/退避节流、跳过版本、更新决策、状态机、`update/state.json` 读写、`app-new` 校验；运行时：检查 → 下载（流式 sha256）→ 解压 → 写 state.json。**故意不 import electron**，目录/设置/网络全部注入，单测用临时目录 |
+| `src/main/index.ts` | `portableProgramDir()`（只有 `<root>/app/version.json` 存在才启用）；`startUpdater()`：启动 60 秒后检查、24h 一次、失败退避、`net.fetch`（走系统代理）、状态变化广播给所有窗口；`before-quit` 时 dispose |
+| `src/main/ipc.ts` | `updates:status` / `updates:check` / `updates:skipVersion` / `updates:setAutoCheck`；**没有 `updates:install`** |
+| `src/shared/types.ts` | `UpdateSettings` / `UpdateStatus` / `UpdatePhase` / `UpdateProgress` / `UpdateCheckResult`，`settings.updates` 与 `updates` API、`events.onUpdateStatus` |
+| `src/main/settings.ts` | `mergeUpdates()`：老配置缺字段、手改坏值都归位（autoCheck 默认 true、跳过列表最多 20 条） |
+| `src/preload/index.ts` | `updates.*` 与 `onUpdateStatus` |
+| `src/renderer/src/pages/SettingsPage.tsx` | 高级与诊断：自动检查开关、检查更新、下载进度条、跳过版本、上次检查、状态一句话 |
+| `src/renderer/src/App.tsx` | 有 `pendingVersion` 时推一条黄色常驻提示「新版本已下载；退出后重新双击 WordMemo.exe」 |
+| `scripts/Launcher.cs` | 七步换目录（读 state → 校验 → 删 app-old → app→app-old → app-new→app → 启动 → state ready=false）；失败回滚 + `update/error.log`；新版本启动失败也回滚；启动时清 `app-new-stale-*` / `staging-stale-*`；兼容模式逻辑保持 U1 不变 |
+| `scripts/make-portable.mjs` | 出包时写 `release/latest.json`（`{version, zip, sha256, notes}`，notes 可用 `WORDMEMO_RELEASE_NOTES` 传） |
+| `scripts/portable-README.txt` / `README.md` | 自动更新与手动更新两条路径、失败看 `update\error.log` / `state.json` |
+| `tests/updater.test.ts`（新） | 22 项：版本比较（含预发布号）、`latest.json` 校验（缺字段/坏 sha/路径穿越）、节流与退避、时钟回拨、跳过与手动穿透、状态机、state.json 往返、app-new 校验、更新源覆盖 |
+
+**与原计划的差异（重要）**
+
+1. **事件**：用一个 `updates:event` 推完整状态快照，代替 `updates:progress` / `downloaded` / `error` 三个细粒度事件。原因：一次更新里三者交叉出现，快照更好渲染也不会乱序；渲染层只需要按 `phase` 画。IPC 名与「没有 install」保持不变。
+2. **没有「立即重启安装」按钮**：应用不替换自己，也不 `app.relaunch`（`app.relaunch()` 重新拉起的是 `app/WordMemo.exe`，**不经过启动器**，不会换目录）。界面与 README 都写「退出后重新双击 WordMemo.exe」。托盘里的「重启应用」仍只是加载当前 `app/`（旧版）代码，不会应用更新。
+3. **跳过版本 = 让已下载的包失效**：除了写 `skippedVersions`，还把 `update/state.json` 置 `ready=false`、`pendingVersion` 清空。否则启动器按旧 state 仍会装上新版。删不掉的 app-new 留着也不会被装（启动器第 1 步按 ready=false 删它）。手动检查**穿透**跳过列表（用户主动问就必须回答）。
+4. **更新源**：默认 GitHub Releases 静态资源。手动验收用 `WORDMEMO_UPDATE_URL` 覆盖：https 任意、http 只允许 localhost（不是「远程下发配置」通道，也不进 UI）。
+5. **完整性的分工**：Electron 主进程里**不能** stat/read `.asar`（见坑 1），应用只校验「`WordMemo.exe` + `resources/app.asar` 存在 + `version.json` 版本一致」；真正的「asar 不是半截（≥1MB）」由启动器用真实文件系统检查。tar 退出码 + zip 的 sha256 已保证解压内容正确。
+6. **下载前先回落**：`state.json` 先写 `ready=false`、`pendingVersion` 清空，再开始下载。这样下载中途退出，启动器不会按旧 state 去找一个已经被换掉的 app-new。
+7. **`latest.json` 由 `npm run dist` 生成**（`release/latest.json`），U3 的 CI 直接上传即可，不需要另写脚本。
+
+**坑（必须记住，下次不要重踩）**
+
+1. **Electron 主进程的 `fs` 会给 `.asar` 打补丁**：
+   - `fs.statSync('...app.asar').size` 返回 **0**（被当成虚拟目录）；
+   - `fs.rmSync` 一个含 `resources/app.asar` 的目录会 **EBUSY**，并且会在这个进程里**留下句柄**，之后连 `fs.renameSync` 父目录都被拒绝。
+   所以：应用里只 `readdirSync(resources)` 判断 `app.asar` 存在（不 stat/read）；清理一律「**先 rename 让路**（`app-new-stale-*` / `staging-stale-*`），再尽力删」，删不掉就留给启动器（C#，真实文件系统）下次启动清。U2 验收里三次怪异失败全是这一条（表现为「更新包内容不完整」或「上一次的更新包暂时删不掉」）。
+2. **不要用同步解压**：`tar.exe` 解 400 MB 要几秒，`execFileSync` 会卡住主进程（托盘/IPC 全停）；用 `promisify(execFile)`。
+3. **下载要流式**：`net.fetch` 返回 web `Response`，用 `body.getReader()` 边读边写 + 边算 sha256；先写 `.part`，校验通过再 rename。失败/中断删除半截文件。
+4. **版本比较必须 semver**（`0.1.10 > 0.1.9`、预发布号小于正式版）；启动器 C# 里有一份等价实现 `VersionNumber.Compare`，两边要一起改。
+5. **`app.relaunch()` 不经过启动器**（见差异 2）；自动更新只能「退出 + 用户重新双击启动器」。
+6. **本机 360 安全卫士**：一开始怀疑文件锁是杀软，最终定位是 Electron 的 asar 补丁（见坑 1）；但清理逻辑仍然保留重试与「改名让路」，杀软扫描新解压文件时同样会占着文件。
+
+**验收（2026-11-21，本机 Windows 10 + Electron 38；基线 0.4.0 → 测试包 0.4.1）**
+
+- 两个包都从 `npm run dist` 出：`release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d…`）、测试用 `0.4.1`（验收后不进仓库）。本地用 `http://127.0.0.1:8787` 静态服务 `latest.json` + zip，应用以 `WORDMEMO_UPDATE_URL` 指向它。
+- **正常路径**：0.4.0 解压 → 启动器 → 版本 0.4.0；手动检查 → 下载（有进度）→ `update/app-new/version.json = 0.4.1`、`state.json ready=true`、zip 已删、程序目录没有数据；退出 → 启动器 → `app/version.json = 0.4.1`、`app-old` = 0.4.0、`state.json ready=false`；重启后 `2 个库 / 2 份笔记 / 14 个词条 / currentDeckId=2` 全在。
+- **坏 sha256**：检查 → 黄色警告「更新包校验失败（sha256 不一致…）」，不产生 `app-new`，没有 `.part` 残留。
+- **跳过版本**：`skipVersion` → app-new 改名为 `app-new-stale-*`、`state.json ready=false`、`settings.updates.skippedVersions=['0.4.1']`；再点「检查更新」（手动）仍会重新下载。
+- **半截 app-new**：删掉 `app-new/resources/app.asar` → 退出 → 启动器：拒绝换目录、`error.log` 记「app-new 不完整：resources\app.asar 缺失或过小」、删 app-new、照常启动 0.4.0。
+- **新版本启动失败**：把 `app-new/WordMemo.exe` 清成 0 字节（app.asar 仍在）→ 启动器换目录成功 → 启动失败 → 自动回滚（`app-old → app`）+ `error.log`「新版本启动失败，已回滚到旧版」→ 0.4.0 正常启动。
+- **断网**：指向已停的本地服务 → 黄色警告「网络不通，或暂时打不开 GitHub」，不崩、不影响使用；真实 GitHub（还没有 Release）→「发布页还没有更新信息」，退避 1h→2h→4h→6h 生效（`nextCheckAt` 递增）。
+- **自动检查**：`lastCheckAt=null` 启动 → **正好 60 秒后**自动请求 `latest.json`（服务器日志 01:35:13），已是新版时静默；自动失败不打扰（只写 diagnostics）。
+- **设置页**：截图确认 `v0.4.1 · 构建 11-21 09:32`、自动检查开关、检查更新、上次检查都在「高级与诊断」。
+
+**注意**
+
+- 验收时的 0.4.1 测试包、本地 http 脚本、`%APPDATA%\WordMemo` 测试数据都不进仓库（`release/`、`.data/` 已 gitignore；测试数据在验收后已清理）。
+- 更新是**全量**下载（约 142 MB），没有差分；这是 §3.11 已接受的代价。
+- 遗留：U3 还要把 README 两条路径、Release Notes 三行、CI 的 `latest.json` 上传串起来（脚本已能生成）。
+
 ## 11. 交接：U1–U3 起点（2026-11-20）
 
 > 给接手的会话：先读 [HANDOFF.md](HANDOFF.md) 的 §1（命令）、§8（坑）、§9（开场提示词），再读本节。§3.11 是定稿方案，本节只写**从哪里下手、验收什么、别碰什么**。
 
 ### 11.1 当前基线
+
+> **2026-11-21 更新（U2 完成后）**：`feat/portable-u2` 已包含 U2，`npm test` 17 文件 / 185 项；`package.json = 0.4.0`，交接产物是 `release/WordMemo-0.4.0-portable.zip`（sha256 `95d4ed5d0ca3eeabc8e756018e2fc99017a5bb19632daf76e94d35bb27b1b1e4`）+ `.sha256` + `latest.json`。U3 从 master 开 `feat/portable-u3`。下面这段是 U2 开工前的基线，保留作历史。
 
 - 分支：`master` 已包含 U0 + U1 + 多供应商修复 + 多库修复；工作区应干净；`npm run typecheck` 0 错误、`npm test` 16 文件 / 163 项全绿、`npm run build` 通过。
 - U1 的历史分支是 `feat/portable-u1`（已快进合并到 master），不要从它继续；U2 从 master 开 `feat/portable-u2`（U3 `feat/portable-u3`）。
@@ -559,8 +624,8 @@ WordMemo-Portable/
 - 本机测试数据（`%APPDATA%\WordMemo`、`D:\WordMemo-U1-*`）已清理；`release/` 和 `build/WordMemo.exe` 都被 gitignore。
 - **本次交接的目标**：另一个会话从 master 开始做 U2，U2 验收后再做 U3；不要在 U2 里顺手改 U1 的判定规则或其它功能。
 - 版本纪律：`package.json` 现在是 `0.3.0`。U1 可以不升版本（用户不可见的行为修复）；**U2 发版前升到 `0.4.0`**，并让 `app/version.json` 由构建脚本写入（`scripts/make-portable.mjs` 已这么做，别手改）。
-- 构建：`npm run dist`（约 1~2 分钟，产出 `release/WordMemo-<ver>-portable.zip` + `.sha256`）。`npm run dist:app` 只出 `win-unpacked`；`npm run launcher` 只重编启动器。
-- 测试数据：源码模式在 `.data/`，便携版在 `%APPDATA%\WordMemo`，两者不互通。做 U1/U2 验收前先确认 `%APPDATA%\WordMemo` 有可识别的数据（或先备份/改名），程序目录里不应该有 `*.db` / `settings.json` / `secrets*`。
+- 构建：`npm run dist`（约 1~2 分钟，产出 `release/WordMemo-<ver>-portable.zip` + `.sha256` + `latest.json`）。`npm run dist:app` 只出 `win-unpacked`；`npm run launcher` 只重编启动器。
+- 测试数据：源码模式在 `.data/`，便携版在 `%APPDATA%\WordMemo`，两者不互通。做验收前先确认 `%APPDATA%\WordMemo` 有可识别的数据（或先备份/改名），程序目录里不应该有 `*.db` / `settings.json` / `secrets*`。
 
 ### 11.2 U1 兼容模式（先做，0.5~1 天）
 
@@ -593,6 +658,8 @@ WordMemo-Portable/
 4. `npm test` 覆盖 `sandbox.ts` 的判定函数（见 §6 的单元测试清单）。
 
 ### 11.3 U2 自更新（1.5~2 天）
+
+> **2026-11-21 已完成**（`feat/portable-u2`）。实现记录、与原计划的差异（一处 `updates:event` 快照、Electron asar 补丁的坑、先改名让路再删）、完整验收见 §10 的 U2 小节。下面是原计划，保留作背景。
 
 **目标**：应用只下载+校验+解压；启动器换目录；失败回滚；数据不丢。
 
@@ -642,6 +709,8 @@ WordMemo-Portable/
 - 验收：Release 三件套齐全；从零解压能用；按 README 手动覆盖也能用；CI 在 test 失败时不发布。
 
 ### 11.5 单元测试清单（`tests/updater.test.ts` 新）
+
+> **2026-11-21 已完成**：`tests/updater.test.ts` 22 项（见 §10 U2 的「落地内容」）。实际覆盖比下面多了 `latest.json` 字段校验/路径穿越、状态机、`state.json` 往返、app-new 校验、更新源覆盖；兼容模式判定仍在 `tests/sandbox.test.ts`。真实下载/换目录仍走手动验收。
 
 - 版本比较（`0.1.10 > 0.1.9`、预发布号、相等）。
 - 跳过版本（`skippedVersions` 数组；手动检查穿透跳过）。

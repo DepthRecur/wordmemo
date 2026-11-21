@@ -453,6 +453,8 @@ export interface Settings {
   ttsSources: ('youdao' | 'baidu' | 'freedict')[]
   /** 当前库：今日任务、导入、托盘都跟着它（PLAN-DECKS §7）；没有库时相关视图退回「全部」 */
   currentDeckId: number
+  /** 自更新（U2）：自动检查开关、跳过版本、节流记账 */
+  updates: UpdateSettings
 }
 
 export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet' | 'modelSet' | 'aiReady'>> {}
@@ -574,6 +576,66 @@ export interface SandboxInfo {
   probe: SandboxProbeInfo | null
   /** 自动降级后还没提示过用户 */
   noticePending: boolean
+}
+
+/**
+ * 自更新（U2）的持久化设置。只在主进程里写：
+ * - autoCheck / skippedVersions 与用户有关；
+ * - lastCheckAt / failStreak / pendingVersion 是节流与「下次启动生效」的记账。
+ * 渲染层改 autoCheck 走 `updates:setAutoCheck`，不要用 settings:update 整份覆盖。
+ */
+export interface UpdateSettings {
+  /** 启动 60 秒后自动检查（24h 一次，失败退避） */
+  autoCheck: boolean
+  /** 用户点过「跳过这个版本」；自动检查无视它，手动检查穿透它 */
+  skippedVersions: string[]
+  /** 上次检查完成时间（成功或失败都算）；ISO */
+  lastCheckAt: string | null
+  /** 连续失败次数：0 → 24h，1 → 1h，2 → 2h，3 → 4h，4+ → 6h */
+  failStreak: number
+  /** 已下载、等下次启动换目录的版本；与程序目录 update/state.json 一致 */
+  pendingVersion: string | null
+}
+
+/** 更新状态机（U2）：一次只可能在一个阶段 */
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+
+export interface UpdateProgress {
+  received: number
+  /** null = 服务器没给 Content-Length */
+  total: number | null
+}
+
+/** 推给渲染层的完整状态快照（每次变化推一份，避免三个事件乱序） */
+export interface UpdateStatus {
+  /** false = 开发模式 / 不是便携版目录，更新不可用 */
+  enabled: boolean
+  phase: UpdatePhase
+  currentVersion: string
+  /** 最近一次在 latest.json 里看到的版本（可能不新，也可能被跳过） */
+  latestVersion: string | null
+  /** 已下载、下次启动生效 */
+  pendingVersion: string | null
+  skippedVersions: string[]
+  autoCheck: boolean
+  lastCheckAt: string | null
+  /** 下一次自动检查时间；null = 还没排（或已关闭自动检查） */
+  nextCheckAt: string | null
+  /** latest.json 里的发布说明（最多几行） */
+  notes: string | null
+  progress: UpdateProgress | null
+  /** 给用户看的一句话；自动检查失败时保持 null（不打扰） */
+  message: string | null
+  /** 最近一次失败的技术原因（诊断用，给用户看的是 message） */
+  error: string | null
+}
+
+export interface UpdateCheckResult {
+  /** 检查本身有没有完成（不管有没有新版） */
+  ok: boolean
+  /** 给人看的一句话 */
+  message: string
+  status: UpdateStatus
 }
 
 export interface WordmemoApi {
@@ -702,6 +764,16 @@ export interface WordmemoApi {
     /** 「首次自动降级」提示已展示，之后不再提示 */
     ackNotice(): Promise<SandboxInfo>
   }
+  updates: {
+    /** 当前状态快照；开发模式下 enabled=false */
+    status(): Promise<UpdateStatus>
+    /** 手动检查：无视 24h 节流与「跳过版本」，失败会给人话原因 */
+    check(): Promise<UpdateCheckResult>
+    /** 跳过某个版本（默认 = 已下载/最新看到的那个）：删掉 app-new，不再提示 */
+    skipVersion(version?: string): Promise<UpdateStatus>
+    /** 自动检查开关；关掉后本次运行不再自动检查 */
+    setAutoCheck(enabled: boolean): Promise<UpdateStatus>
+  }
   system: {
     openDataDir(): Promise<void>
     backup(): Promise<string>
@@ -718,6 +790,8 @@ export interface WordmemoApi {
     onRefresh(cb: () => void): () => void
     /** 本月 AI 预算用完：只提醒，调用照常继续（P-02） */
     onBudgetExhausted(cb: (info: AiBudgetNotice) => void): () => void
+    /** 更新状态每次变化推一份完整快照（检查/下载进度/就绪/失败） */
+    onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
   }
 }
 
@@ -748,7 +822,14 @@ export const DEFAULT_SETTINGS: Settings = {
   autoLaunch: false,
   quietHours: { start: '23:00', end: '07:00' },
   ttsSources: ['youdao', 'baidu', 'freedict'],
-  currentDeckId: 1
+  currentDeckId: 1,
+  updates: {
+    autoCheck: true,
+    skippedVersions: [],
+    lastCheckAt: null,
+    failStreak: 0,
+    pendingVersion: null
+  }
 }
 
 export const DIRECTION_LABEL: Record<CardDirection, string> = {

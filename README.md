@@ -117,28 +117,32 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 - 备份：设置 → 数据 → 立即备份；启动时每天自动备份一次，保留最近 7 份
 - 删除笔记会同时删除它的复习进度和不再被引用的词条，操作前会二次确认
 
+## 更新
+
+- 便携版：双击 `WordMemo.exe` 启动器 → 由它启动 `app/WordMemo.exe`。数据固定在 `%APPDATA%\WordMemo`，删掉或替换程序目录不会丢词库。
+- **自动更新（0.4.0 起）**：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，之后每天一次（失败退避 1~6 小时）。有新版本会自动下载、流式校验 sha256、解压到 `update\app-new`，然后提示「下次启动生效」。
+- **应用绝不替换自己、也不静默重启**：退出程序后再双击 `WordMemo.exe`，启动器才会把 `app` 换成新版；旧版保留在 `app-old` 直到下一次启动，换目录失败会自动回滚并写 `update\error.log`。
+- **手动更新（GitHub 连不上时的兜底，和自动更新是同一份 zip）**：退出程序 → 下载新版 zip → 把 zip 里的 `app` 解压覆盖到程序目录的 `app` → 重新打开。数据不会丢。
+- 更新源只有 GitHub Releases（`releases/latest/download/latest.json`），不做镜像、不接受远程下发的配置或脚本。
+
 ## 开发
 
 ```bash
 npm install
 npm run dev          # Electron 开发模式（已带 --noSandbox）
 npm run build        # 构建 Electron 版
-npm run dist         # 打包 Windows 安装包
+npm run dist         # 打包便携版：release/WordMemo-<ver>-portable.zip + .sha256 + latest.json
+npm run dist:app     # 只出 release/win-unpacked
+npm run launcher     # 只重编便携版启动器（Windows 自带 csc.exe，不需要 SDK）
 npm run typecheck
-npm test             # Vitest：SQLite / FSRS / 判分 / 计划器
-```
-
-重新生成启动器：
-
-```bat
-scripts\build-launcher.cmd
+npm test             # Vitest：SQLite / FSRS / 判分 / 计划器 / 更新逻辑
 ```
 
 技术栈：Electron 38.8.6（Chromium 140 / Node 22）、React 19、TypeScript、`ts-fsrs` 6（FSRS-7）、`node:sqlite`（零原生编译）、Vite。
 
 > Electron 从 45 降级到 38.8.6：两个版本在本机的沙箱环境下都会在 `ready` 前崩溃，38 更保守；`ts-fsrs` 在 Node 22.22 下实测可用。
 >
-> 打包后的 exe 同样需要 `--no-sandbox`：如果做安装包，请给启动快捷方式或外层启动器补上 `--no-sandbox`。
+> 打包版的沙箱问题由 `sandbox-state.json` + 启动器自动处理（连续 3 次启动失败会切兼容模式），不需要用户手动加 `--no-sandbox`。
 
 ## 目录结构
 

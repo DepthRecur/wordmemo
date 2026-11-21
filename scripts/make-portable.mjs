@@ -107,8 +107,28 @@ const hash = await new Promise((resolve, reject) => {
 })
 fs.writeFileSync(shaPath, `${hash}  ${zipName}\n`, 'utf8')
 
+// U2：GitHub Release 的更新清单（静态资源，路径是 releases/latest/download/latest.json）。
+// 字段与 src/main/updater.ts 的 parseLatestInfo 一一对应；notes 用环境变量传，没传就留空。
+step('写 latest.json')
+const latestPath = path.join(releaseDir, 'latest.json')
+fs.writeFileSync(
+  latestPath,
+  JSON.stringify(
+    {
+      version,
+      zip: zipName,
+      sha256: hash,
+      notes: (process.env.WORDMEMO_RELEASE_NOTES || '').trim()
+    },
+    null,
+    2
+  ) + '\n',
+  'utf8'
+)
+
 const zipSize = fs.statSync(zipPath).size
 console.log('\n完成：')
 console.log('  目录  ' + path.relative(root, stageDir))
 console.log('  zip   ' + path.relative(root, zipPath) + `  (${(zipSize / 1024 / 1024).toFixed(1)} MB)`)
 console.log('  sha   ' + hash)
+console.log('  清单  ' + path.relative(root, latestPath))

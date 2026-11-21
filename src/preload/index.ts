@@ -12,6 +12,7 @@ import type {
   ReviewSession,
   SettingsPatch,
   SubmitReview,
+  UpdateStatus,
   WordmemoApi
 } from '@shared/types'
 
@@ -114,6 +115,12 @@ const api: WordmemoApi = {
     setCompat: (enabled: boolean) => ipcRenderer.invoke('sandbox:setCompat', enabled),
     ackNotice: () => ipcRenderer.invoke('sandbox:ackNotice')
   },
+  updates: {
+    status: () => ipcRenderer.invoke('updates:status'),
+    check: () => ipcRenderer.invoke('updates:check'),
+    skipVersion: (version?: string) => ipcRenderer.invoke('updates:skipVersion', version),
+    setAutoCheck: (enabled: boolean) => ipcRenderer.invoke('updates:setAutoCheck', enabled)
+  },
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),
     backup: () => ipcRenderer.invoke('system:backup'),
@@ -138,6 +145,11 @@ const api: WordmemoApi = {
       const listener = (_e: unknown, info: AiBudgetNotice) => cb(info)
       ipcRenderer.on('ai:budget', listener)
       return () => ipcRenderer.removeListener('ai:budget', listener)
+    },
+    onUpdateStatus: (cb: (status: UpdateStatus) => void) => {
+      const listener = (_e: unknown, status: UpdateStatus) => cb(status)
+      ipcRenderer.on('updates:event', listener)
+      return () => ipcRenderer.removeListener('updates:event', listener)
     }
   }
 }

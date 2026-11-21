@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { AiProviderId, AiSettings, Settings, SettingsPatch } from '@shared/types'
+import type { AiProviderId, AiSettings, Settings, SettingsPatch, UpdateSettings } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { resolveProviderModel } from '@shared/aiModel'
 
@@ -132,6 +132,29 @@ function mergeAi(raw: Partial<AiSettings> | null | undefined): AiSettings {
   return merged
 }
 
+function mergeUpdates(raw: Partial<UpdateSettings> | null | undefined): UpdateSettings {
+  const base = DEFAULT_SETTINGS.updates
+  if (!raw || typeof raw !== 'object') {
+    return { ...base, skippedVersions: [...base.skippedVersions] }
+  }
+  const skipped = Array.isArray(raw.skippedVersions)
+    ? raw.skippedVersions
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+        .slice(-20)
+    : []
+  const lastCheckAt = typeof raw.lastCheckAt === 'string' && raw.lastCheckAt.trim() ? raw.lastCheckAt : null
+  const pendingVersion =
+    typeof raw.pendingVersion === 'string' && raw.pendingVersion.trim() ? raw.pendingVersion.trim() : null
+  return {
+    autoCheck: raw.autoCheck !== false,
+    skippedVersions: skipped,
+    lastCheckAt,
+    failStreak: Math.max(0, Math.trunc(Number(raw.failStreak) || 0)),
+    pendingVersion
+  }
+}
+
 function merge(raw: Partial<Settings> | null): Settings {
   const merged: Settings = { ...DEFAULT_SETTINGS, ...(raw ?? {}) }
   merged.quietHours = { ...DEFAULT_SETTINGS.quietHours, ...(raw?.quietHours ?? {}) }
@@ -141,6 +164,8 @@ function merge(raw: Partial<Settings> | null): Settings {
     : [...DEFAULT_SETTINGS.ttsSources]
   // `ai` 是浅合并的例外：必须深合并，否则老配置一升级就丢字段（PLAN-PROVIDERS §5）
   merged.ai = mergeAi(raw?.ai)
+  // U2 更新记账：老配置没有这一段；坏字段（手改过）一律归位，别让节流/跳过状态失控
+  merged.updates = mergeUpdates(raw?.updates)
   // 当前库：文件被手改/删库后可能留下不存在的 id，先归一化成合法数字。
   // 0 = 一个库都没有（2026-11-20 起允许删光所有库），不能把它改回 1（1 可能不存在）
   const deckId = Number((raw as { currentDeckId?: unknown } | null)?.currentDeckId)

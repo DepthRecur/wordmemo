@@ -10,9 +10,10 @@ import type {
   BuildInfo,
   Deck,
   SandboxInfo,
-  Settings
+  Settings,
+  UpdateStatus
 } from '@shared/types'
-import { Badge, Button, Field, Modal, Toggle } from '../components/UI'
+import { Badge, Button, Field, Modal, Progress, Toggle } from '../components/UI'
 import { ModelPicker } from '../components/ModelPicker'
 import { Select } from '../components/Select'
 import type { Navigate, Notify } from '../App'
@@ -102,6 +103,26 @@ function priceText(price: AiPriceInfo): string {
   return `≈$${price.input}/M 入 · $${price.output}/M 出${suffix}`
 }
 
+/** 更新状态的一句话（设置页「版本」下面那行） */
+function updateStateText(status: UpdateStatus | null): string {
+  if (!status) return '读取中…'
+  switch (status.phase) {
+    case 'checking':
+      return '正在检查…'
+    case 'downloading': {
+      const total = status.progress?.total
+      const pct = total ? Math.min(100, Math.floor((status.progress!.received / total) * 100)) : null
+      return `正在下载 v${status.latestVersion ?? ''}${pct === null ? '' : ` · ${pct}%`}`
+    }
+    case 'ready':
+      return `v${status.pendingVersion ?? status.latestVersion ?? ''} 已下载，退出后重新打开生效`
+    case 'error':
+      return '上次检查没成功（不影响使用）'
+    default:
+      return status.lastCheckAt ? '已经是最新版本' : '还没检查过'
+  }
+}
+
 /** 打字停顿这么久才落盘，避免每个按键都写一次 settings.json */
 const AUTO_SAVE_MS = 500
 
@@ -124,6 +145,8 @@ export default function SettingsPage({
   const [build, setBuild] = useState<BuildInfo | null>(null)
   const [sandbox, setSandbox] = useState<SandboxInfo | null>(null)
   const [sandboxBusy, setSandboxBusy] = useState(false)
+  const [update, setUpdate] = useState<UpdateStatus | null>(null)
+  const [updateBusy, setUpdateBusy] = useState(false)
 
   // 四张供应商卡片：卡片数据只读，Key 只回显"已配置"
   const [info, setInfo] = useState<AiSettingsInfo | null>(null)
@@ -200,7 +223,10 @@ export default function SettingsPage({
     void window.api.system.appVersion().then(setVersion)
     void window.api.system.buildInfo().then(setBuild)
     void window.api.sandbox.get().then(setSandbox).catch(() => undefined)
+    void window.api.updates.status().then(setUpdate).catch(() => undefined)
+    const offUpdates = window.api.events.onUpdateStatus(setUpdate)
     void loadInfo()
+    return () => offUpdates()
   }, [])
 
   const set = <K extends keyof Settings>(key: K, value: Settings[K]) => {
@@ -560,6 +586,51 @@ export default function SettingsPage({
   const quitApp = () => {
     if (window.confirm('退出 WordMemo？未入库的草稿已经自动保存，下次打开会恢复。')) {
       void window.api.system.quit()
+    }
+  }
+
+  /** U2：检查更新（手动检查无视 24h 节流和「跳过这个版本」） */
+  const checkForUpdates = async () => {
+    setUpdateBusy(true)
+    try {
+      const result = await window.api.updates.check()
+      setUpdate(result.status)
+      if (!result.ok) {
+        // 只读操作失败、旧版照常能用 → 警告，不是错误
+        notify(result.message || '这次没检查到更新，旧的照常用', 'warn')
+      } else if (result.status.phase === 'ready') {
+        notify(result.message, 'ok')
+        // pendingVersion 落在 settings 里，重读一次，别让设置页的草稿带着旧值
+        await refreshSettings()
+      } else {
+        notify(result.message || '已经是最新版本', 'info')
+      }
+    } catch (err) {
+      notify(`检查更新失败：${err instanceof Error ? err.message : String(err)}`, 'warn')
+    } finally {
+      setUpdateBusy(false)
+    }
+  }
+
+  const skipUpdateVersion = async () => {
+    setUpdateBusy(true)
+    try {
+      setUpdate(await window.api.updates.skipVersion())
+      await refreshSettings()
+      notify('已跳过这个版本，之后不会再自动提示；想更新可以再点「检查更新」', 'info')
+    } catch (err) {
+      notify(`跳过版本失败：${err instanceof Error ? err.message : String(err)}`, 'err')
+    } finally {
+      setUpdateBusy(false)
+    }
+  }
+
+  const setAutoCheckUpdate = async (enabled: boolean) => {
+    try {
+      setUpdate(await window.api.updates.setAutoCheck(enabled))
+      await refreshSettings()
+    } catch (err) {
+      notify(`保存自动检查设置失败：${err instanceof Error ? err.message : String(err)}`, 'err')
     }
   }
 
@@ -1136,6 +1207,79 @@ export default function SettingsPage({
                 v{build?.version ?? version ?? '0.1.0'} · {formatBuild(build?.buildTime)}
               </span>
             </div>
+            {/* U2 自更新：应用只下载，换目录靠启动器在下一次启动时做 */}
+            <Toggle
+              checked={update?.autoCheck ?? settings.updates.autoCheck}
+              onChange={(v) => void setAutoCheckUpdate(v)}
+              label="自动检查更新"
+              hint="启动后每天检查一次；下载完不会自己重启，退出后重新双击 WordMemo.exe 才会换到新版。"
+            />
+            {update && !update.enabled ? (
+              <div className="hint">开发模式（或不是便携版目录）：不检查更新。</div>
+            ) : (
+              <div className="col" style={{ gap: 6 }}>
+                <div className="row-between">
+                  <span className="muted tiny">更新</span>
+                  <span className="tiny">{updateStateText(update)}</span>
+                </div>
+                {update?.phase === 'downloading' && (
+                  <>
+                    <Progress
+                      value={
+                        update.progress?.total
+                          ? Math.min(1, update.progress.received / update.progress.total)
+                          : 0
+                      }
+                    />
+                    <span className="muted tiny">
+                      已下载 {formatBytes(update.progress?.received ?? 0)}
+                      {update.progress?.total ? ` / ${formatBytes(update.progress.total)}` : ''}
+                    </span>
+                  </>
+                )}
+                <div className="row">
+                  <Button
+                    size="sm"
+                    onClick={() => void checkForUpdates()}
+                    disabled={
+                      updateBusy ||
+                      update?.phase === 'checking' ||
+                      update?.phase === 'downloading'
+                    }
+                  >
+                    {update?.phase === 'checking'
+                      ? '正在检查…'
+                      : update?.phase === 'downloading'
+                        ? '正在下载…'
+                        : '检查更新'}
+                  </Button>
+                  {update?.pendingVersion && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void skipUpdateVersion()}
+                      disabled={updateBusy}
+                    >
+                      跳过 v{update.pendingVersion}
+                    </Button>
+                  )}
+                  <span className="muted tiny">
+                    下载好之后，退出程序再重新双击 WordMemo.exe 才会换成新版。
+                  </span>
+                </div>
+                {update?.notes && (
+                  <div className="hint" style={{ whiteSpace: 'pre-wrap' }}>
+                    {update.notes}
+                  </div>
+                )}
+                {update?.lastCheckAt && (
+                  <div className="muted tiny">上次检查：{formatAgo(update.lastCheckAt)}</div>
+                )}
+                {update?.phase === 'error' && update.message && (
+                  <div className="hint">{update.message}</div>
+                )}
+              </div>
+            )}
             <div className="row-between">
               <span className="muted tiny">后台运行</span>
               <span className="tiny">关闭窗口只是收进托盘，到期提醒仍然生效</span>

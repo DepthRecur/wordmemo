@@ -9,7 +9,7 @@ import {
   Upload,
   X
 } from 'lucide-react'
-import type { BuildInfo, DashboardStats, Deck, DraftIssueSummary, Settings } from '@shared/types'
+import type { BuildInfo, DashboardStats, Deck, DraftIssueSummary, Settings, UpdateStatus } from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import Review from './pages/Review'
 import Notes from './pages/Notes'
@@ -395,6 +395,31 @@ export default function App() {
       .catch(() => undefined)
     return () => {
       cancelled = true
+    }
+  }, [ready, syncSystemNotice])
+
+  // U2：新版本已经下载好，下次启动生效。只是提醒、不拦任何操作 → 警告（黄色常驻）
+  useEffect(() => {
+    if (!ready) return
+    let cancelled = false
+    const sync = (status: UpdateStatus | null) => {
+      if (cancelled) return
+      const pending = status?.pendingVersion ?? null
+      syncSystemNotice(
+        'update-ready',
+        !!pending,
+        pending
+          ? `新版本 v${pending} 已下载；退出程序后重新双击 WordMemo.exe 就会换到新版。`
+          : '',
+        { label: '查看设置', route: 'settings' },
+        'warn'
+      )
+    }
+    void window.api.updates.status().then(sync).catch(() => undefined)
+    const off = window.api.events.onUpdateStatus(sync)
+    return () => {
+      cancelled = true
+      off()
     }
   }, [ready, syncSystemNotice])
 

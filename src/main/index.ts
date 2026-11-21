@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, dialog } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, dialog, net } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { backupBeforeMigrate, openDb } from './db/connection'
@@ -18,6 +18,7 @@ import { onBudgetExhausted } from './ai/budget'
 import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
 import { beginProbe, evaluateSandboxOnStart, markReady } from './sandbox'
+import { initUpdater } from './updater'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
@@ -47,6 +48,51 @@ if (sandboxBoot.state.compatMode) {
 function userDataDir(): string {
   fs.mkdirSync(dataRoot, { recursive: true })
   return dataRoot
+}
+
+/**
+ * 便携版根目录 = `<root>/app/WordMemo.exe` 的上两级；只有它旁边有 app/version.json 才启用更新。
+ * 开发模式（!isPackaged）整个更新模块不初始化（PLAN-UPDATE §11.3）。
+ */
+function portableProgramDir(): string | null {
+  if (!app.isPackaged) return null
+  try {
+    const root = path.dirname(path.dirname(app.getPath('exe')))
+    return fs.existsSync(path.join(root, 'app', 'version.json')) ? root : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * U2：应用只负责检查/下载/解压/写 state.json，绝不替换 app/、不重启。
+ * 换目录由启动器在下一次启动时做（PLAN-UPDATE §3.11）。
+ */
+function startUpdater(): void {
+  const programDir = portableProgramDir()
+  if (!programDir) {
+    log('update-disabled', { packaged: app.isPackaged, reason: 'not-portable-dir' })
+    return
+  }
+  const updater = initUpdater({
+    programDir,
+    currentVersion: app.getVersion(),
+    readUpdates: () => getSettings().updates,
+    patchUpdates: (patch) => {
+      updateSettings({ updates: { ...getSettings().updates, ...patch } })
+    },
+    // 用 Electron 的 net.fetch 而不是 Node 的 fetch：前者走系统代理（国内用户常开代理）
+    fetchImpl: ((input: RequestInfo | URL, init?: RequestInit) =>
+      net.fetch(input as string, init)) as unknown as typeof fetch,
+    onStatus: (status) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('updates:event', status)
+      }
+    },
+    log
+  })
+  updater.start()
+  app.on('before-quit', () => updater.dispose())
 }
 
 function createWindow(): void {
@@ -373,6 +419,8 @@ async function bootstrap(): Promise<void> {
   buildTray()
   startReminderLoop()
   dailyBackup()
+  // U2：启动 60 秒后检查更新（24h 一次、失败退避）；开发模式不初始化
+  startUpdater()
   // 模型目录 / 价格：启动 30 秒后后台刷新（过期才真的联网，见 PLAN-PROVIDERS §4.1/§4.2）。
   // 没有 Key 时 AI 功能整体不用，价格目录也没有意义，不要发这个请求。
   scheduleCatalogRefresh()

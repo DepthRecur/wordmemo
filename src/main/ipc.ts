@@ -49,6 +49,7 @@ import { isProviderId, type ProviderId } from './ai/providers'
 import { getDiagnostics } from './diagnostics'
 import { clearReviewSession, readReviewSession, saveReviewSession } from './reviewSession'
 import { ackSandboxNotice, sandboxInfo, setCompatMode } from './sandbox'
+import { disabledUpdateStatus, getUpdater } from './updater'
 import {
   commitAllDrafts,
   commitDraft,
@@ -136,6 +137,32 @@ export function registerIpc(): void {
     setCompatMode(dataDir(), enabled === true)
   )
   ipcMain.handle('sandbox:ackNotice', () => ackSandboxNotice(dataDir()))
+
+  // U2 自更新：只有 status/check/skipVersion/setAutoCheck，没有 install——
+  // 换 app/ 目录是启动器在下一次启动时做的事（PLAN-UPDATE §3.11）。
+  const updateStatusNow = () => {
+    const updater = getUpdater()
+    return updater ? updater.status() : disabledUpdateStatus(app.getVersion(), getSettings().updates)
+  }
+  ipcMain.handle('updates:status', () => updateStatusNow())
+  ipcMain.handle('updates:check', async () => {
+    const updater = getUpdater()
+    if (!updater) {
+      return { ok: false, message: '开发模式下不检查更新，打包成便携版后才有。', status: updateStatusNow() }
+    }
+    return updater.checkNow(true)
+  })
+  ipcMain.handle('updates:skipVersion', (_e, version?: string) => {
+    const updater = getUpdater()
+    if (!updater) return updateStatusNow()
+    return updater.skipVersion(typeof version === 'string' ? version : undefined)
+  })
+  ipcMain.handle('updates:setAutoCheck', (_e, enabled?: boolean) => {
+    const updater = getUpdater()
+    if (updater) return updater.setAutoCheck(enabled === true)
+    updateSettings({ updates: { ...getSettings().updates, autoCheck: enabled === true } })
+    return updateStatusNow()
+  })
 
   ipcMain.handle('notes:list', (_e, query?: NoteQuery) => listNotes(query ?? {}))
   ipcMain.handle('notes:get', (_e, id: number) => getNote(id))
