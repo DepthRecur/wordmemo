@@ -496,7 +496,7 @@ WordMemo-Portable/
 
 ---
 
-### U1 兼容模式（2026-11-21，`feat/portable-u1`，完成）
+### U1 兼容模式（2026-11-21，已并入 master，完成）
 
 **状态：完成。** `npm run typecheck` 0 错误、`npm test` 16 文件 163 项全绿、`npm run build` / `npm run dist` 通过。版本仍是 `0.3.0`（按 §11.1，U1 不升版本）。
 
@@ -553,16 +553,18 @@ WordMemo-Portable/
 
 ### 11.1 当前基线
 
-- 分支：`master`（= 之前的 `fix/decks-ui`，已包含 U0 + 多供应商修复 + 多库修复）。工作区应干净；`npm run typecheck` 0 错误、`npm test` 15 文件 / 150 项全绿、`npm run build` 通过。
-- **U1 完成后**：分支 `feat/portable-u1`，`npm test` 16 文件 / 163 项；实现记录见 §10 的 U1 小节。
-- 开始新分支：`git checkout -b feat/portable-u1`（U2 再 `feat/portable-u2`，U3 `feat/portable-u3`）。
+- 分支：`master` 已包含 U0 + U1 + 多供应商修复 + 多库修复；工作区应干净；`npm run typecheck` 0 错误、`npm test` 16 文件 / 163 项全绿、`npm run build` 通过。
+- U1 的历史分支是 `feat/portable-u1`（已快进合并到 master），不要从它继续；U2 从 master 开 `feat/portable-u2`（U3 `feat/portable-u3`）。
+- 交接产物：`release/WordMemo-0.3.0-portable.zip`（U1 代码；sha256 `6b04676d46c64f7485839ab47393b534279c1ed67801c81e639c36644c24510a`）+ `.sha256`。U2 验收应从这份 U1 zip 开始，再发 0.4.1。
+- 本机测试数据（`%APPDATA%\WordMemo`、`D:\WordMemo-U1-*`）已清理；`release/` 和 `build/WordMemo.exe` 都被 gitignore。
+- **本次交接的目标**：另一个会话从 master 开始做 U2，U2 验收后再做 U3；不要在 U2 里顺手改 U1 的判定规则或其它功能。
 - 版本纪律：`package.json` 现在是 `0.3.0`。U1 可以不升版本（用户不可见的行为修复）；**U2 发版前升到 `0.4.0`**，并让 `app/version.json` 由构建脚本写入（`scripts/make-portable.mjs` 已这么做，别手改）。
 - 构建：`npm run dist`（约 1~2 分钟，产出 `release/WordMemo-<ver>-portable.zip` + `.sha256`）。`npm run dist:app` 只出 `win-unpacked`；`npm run launcher` 只重编启动器。
 - 测试数据：源码模式在 `.data/`，便携版在 `%APPDATA%\WordMemo`，两者不互通。做 U1/U2 验收前先确认 `%APPDATA%\WordMemo` 有可识别的数据（或先备份/改名），程序目录里不应该有 `*.db` / `settings.json` / `secrets*`。
 
 ### 11.2 U1 兼容模式（先做，0.5~1 天）
 
-> **2026-11-21 已完成**，实现记录、与原计划的差异（启动器也维护 probe）、验收均见 §10 的 U1 小节。下面是原计划，保留作背景。
+> **2026-11-21 已完成并并入 master**，实现记录、与原计划的差异（启动器也维护 probe）、验收均见 §10 的 U1 小节。下面是原计划，保留作背景。
 
 **目标**：这台必须 `--no-sandbox` 的机器解压即用；正常机器保持沙箱；启动器不再无条件降级。
 

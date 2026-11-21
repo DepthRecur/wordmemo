@@ -1,7 +1,7 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-21（U1 兼容模式完成后）　当前分支：`feat/portable-u1`（从 master 开，未合并）　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 已在本地快进到最新（含 U0 + 全部修复 + 本文档），但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push；`feat/portable-u1` 也只在本机。网络恢复后 `git push origin master`、`git push origin feat/portable-u1` 即可；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
+> 最后更新：2026-11-21（U1 并入 master，准备 U2/U3 交接）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
+> **推送状态**：`master` 已在本地包含 U0 + U1 + 全部修复 + 本文档，但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可（`feat/portable-u1` 是 U1 的历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
@@ -12,7 +12,7 @@
 - **多供应商**（2026-11-18 ~ 19，已冻结）：四家可配 Key、角色路由、设置页、模型目录/价格、`npm run ai-smoke`；DeepSeek/GLM 真机验证，OpenAI/Gemini 等社区反馈。bug 清单已处理完（P-07 决定不修，见 [BUGS-PROVIDERS.md](BUGS-PROVIDERS.md)）。
 - **多个库**（2026-11-19 完成；2026-11-20 第二轮修 bug）：`decks` 表 + 全部查询按库作用域、每库新词额度、批量移动/复制/删除、今日任务/导入/考试/统计/托盘接库。第二轮修完 [BUGS-DECKS.md](BUGS-DECKS.md) 全部条目（考试范围悬空、统计口径、空范围、删当前库、导入目标库、下拉被弹窗裁剪），`tests/decks.test.ts` 扩到 21 项。实现记录见 [PLAN-DECKS §15](PLAN-DECKS.md)。
 - **便携版 U0**（2026-11-19，已并入主线）：`npm run dist` 出 `release/WordMemo-0.3.0-portable.zip`（141.5 MB）+ sha256；启动器按 sandbox-state.json 决定是否降级；数据固定在 `%APPDATA%\WordMemo`。
-- **便携版 U1**（2026-11-21，`feat/portable-u1`）：`sandbox-state.json` 探针 + 连续 3 次启动失败自愈 + 设置页开关 + 启动器按 compatMode 传参；无沙箱机器连续失败 3 次后会自动切兼容模式，不会永久打不开。**U2 自更新 / U3 CI 未做**，交接清单见 [PLAN-UPDATE §11](PLAN-UPDATE.md)，实现记录见 §10 的 U1 小节。
+- **便携版 U1**（2026-11-21，已并入主线）：`sandbox-state.json` 探针 + 连续 3 次启动失败自愈 + 设置页开关 + 启动器按 compatMode 传参；无沙箱机器连续失败 3 次后会自动切兼容模式，不会永久打不开。**U2 自更新 / U3 CI 未做**，交接清单见 [PLAN-UPDATE §11](PLAN-UPDATE.md)，实现记录见 §10 的 U1 小节。
 - **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用（见 §5.6）。
 
 **3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
@@ -327,10 +327,10 @@ docs/               ← 四份计划 + 调研 + 本文件
 再读 docs/PLAN-UPDATE.md：§3.11 是定稿方案，§10 是 U0/U1 实现记录，§11 是 U2–U3 的交接清单；
 需要背景时读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）。
 
-当前状态（2026-11-21）：master 已包含多供应商（冻结）、多个库 + 第二轮 bug 修复、便携版 U0；
-U1 兼容模式在 feat/portable-u1（已完成：sandbox-state.json 探针/启动器按 compatMode 传参/设置页开关，
-见 PLAN-UPDATE §10 的 U1 小节）。typecheck 0 错误、npm test 16 文件 163 项全绿、npm run build 通过。
-下一步：先合并 feat/portable-u1（或从它开 feat/portable-u2），做 U2 自更新；U3 再做 CI 发版。
+当前状态（2026-11-21）：master 已包含多供应商（冻结）、多个库 + 第二轮 bug 修复、便携版 U0 + U1
+（U1 = sandbox-state.json 探针/启动器按 compatMode 传参/设置页开关，见 PLAN-UPDATE §10 的 U1 小节）。
+typecheck 0 错误、npm test 16 文件 163 项全绿、npm run build 通过。
+下一步：从 master 开 feat/portable-u2，做 U2 自更新；U3 再做 CI 发版。
 release/ 里的 0.3.0 zip 是 U1 后打的；U2 发版前把 package.json 升到 0.4.0，version.json 由构建脚本写。
 
 硬约束（已定，不要再讨论）：
