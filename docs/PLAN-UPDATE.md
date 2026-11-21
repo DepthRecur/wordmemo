@@ -612,7 +612,7 @@ WordMemo-Portable/
 - 更新是**全量**下载（约 142 MB），没有差分；这是 §3.11 已接受的代价。
 - 遗留：U3 已补上 README 两条路径、Release Notes 三行、CI 的 `latest.json` 上传（见下方 U3 小节）。
 
-### U3 CI 发版 + 路线 B（2026-11-21，`feat/portable-u3`，完成）
+### U3 CI 发版 + 路线 B（2026-11-21，`feat/portable-u3`，已并入 master，完成）
 
 **状态：完成（本地能验的部分全验了；真实 GitHub Actions 首次运行待推送后观察）。** U3 不改代码，版本仍是 `0.4.0`；`npm run typecheck` 0 错误、`npm test` 17 文件 185 项、`npm run build` 通过。
 
@@ -753,7 +753,7 @@ WordMemo-Portable/
 
 ### 11.4 U3 CI 发版 + 路线 B（1 天）
 
-> **2026-11-21 已完成**（`feat/portable-u3`，不改代码）。实现记录、本地验证与「没验到的部分」见 §10 的 U3 小节；下面是原计划，保留作背景。
+> **2026-11-21 已完成**（`feat/portable-u3` 已快进合并，不改代码）。实现记录、本地验证与「没验到的部分」见 §10 的 U3 小节；下面是原计划，保留作背景。
 
 - `.github/workflows/release.yml`：只 `tag v*` 触发（+ 手动 dry-run）；`npm ci` → `typecheck` → `test` → `build` → `npm run dist` → 生成 `latest.json`（版本、zip 名、sha256、notes）→ 上传 `WordMemo-x.y.z-portable.zip`、`.sha256`、`latest.json` 到 Release。
 - `permissions: contents: write`；**不要** PR 触发；dry-run 不发布。
