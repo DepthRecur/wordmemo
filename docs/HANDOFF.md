@@ -1,6 +1,6 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-21（便携版 U0–U3 全部完成并并入 master，准备同步）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
+> 最后更新：2026-11-23（三机真机验收：A 自测 T1–T10 全通过；B/C 首轮卡在测试指南缺陷，已修）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
 > **推送状态**：`master` 已在本地包含 U0 + U1 + U2 + U3 + 全部修复 + 本文档，但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可（`feat/portable-u1` / `feat/portable-u2` / `feat/portable-u3` 是历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
@@ -15,6 +15,7 @@
 - **便携版 U1**（2026-11-21，已并入主线）：`sandbox-state.json` 探针 + 连续 3 次启动失败自愈 + 设置页开关 + 启动器按 compatMode 传参；无沙箱机器连续失败 3 次后会自动切兼容模式，不会永久打不开。
 - **便携版 U2**（2026-11-21，已并入 master）：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，有新版本自动下载 + 流式 sha256 + 解压到 `update/app-new`，只提示「下次启动生效」；启动器在下一次启动时按七步换目录（`app→app-old` / `app-new→app`），失败回滚 + `update/error.log`。**应用绝不替换自己、不静默重启**。实现记录与验收见 [PLAN-UPDATE §10 U2](PLAN-UPDATE.md)。
 - **便携版 U3**（2026-11-21，`feat/portable-u3`）：`.github/workflows/release.yml`（tag `v*` → typecheck/test/build/dist → 三件套校验 → GitHub Release）+ `release-notes/v<version>.md` 约定 + README 两条更新路径与发版流程。**不改代码，版本仍是 0.4.0**。实现记录见 [PLAN-UPDATE §10 U3](PLAN-UPDATE.md)。
+- **便携版真机验收**（2026-11-21 ~ 23，见 [PLAN-UPDATE §10 真机验收](PLAN-UPDATE.md)）：测试包 `D:\WordMemo-U3-Package` 三份独立指南发 A/B/C。**A 自测 T1–T10 全通过**（报告在包内 `报告-A-20261123.md`，截图 `D:\WordMemo-A-Evidence\`）；C（VM）T1–T4/T9 通过后卡住、B 同现象，根因是**测试指南 T5 第 4 步用错启动方式**（`启动（普通）` 不带 `WORDMEMO_UPDATE_URL` → 打到 private 仓库 404），已修指南并加「常见现象」对照表，**不是代码缺陷**。另修 T7（`app-old` 只在下一次更新时删）与 T6（stale 在第一次启动就清）。B/C 待按新指南复测 T5–T10。
 - **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用（见 §5.6）。
 
 **3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
