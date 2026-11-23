@@ -688,6 +688,41 @@ WordMemo-Portable/
 
 **测试包维护**：改指南/脚本后必须重跑 `SHA256SUMS.txt` 生成（本次 25 个文件，`报告-*.md` 不计入，避免测试者填报告后校验失败）；`收集日志.cmd` 已改为打印「本次文件夹」+ 自动打开 + 生成 `本次日志.txt` 摘要（C 的测试者不知道发哪个文件夹）。
 
+### 真实发布链路（2026-11-23，v0.5.0 / v0.5.1）
+
+**状态：链路打通，发过两次真 Release（CI 各 3 分钟）；应用侧从真 GitHub 拉到 latest.json 并开始流式下载 148 MB。这条线路上没有把 148 MB 下完（见下面的缺陷），其余环节都验过。**
+
+**做了什么**
+
+| 步骤 | 结果 |
+|---|---|
+| 推送 | `master` + tag `v0.5.0`、`v0.5.1`。这台机器到 `github.com:443` 时通时断（`Recv failure: Connection was reset` / 连不上），用重试脚本第 3 次成功；`api.github.com` 一直正常，所以 API 能查、git 要重试 |
+| 可见性 | 仓库 private → **public**（Release 资产只有公开仓库能匿名下载）；默认分支顺手从 `feat/decks` 改成 `master` |
+| CI 首次运行 | run [45088691592](https://github.com/DepthRecur/wordmemo/actions/runs/45088691592) 3 分钟成功，自动建 Release `v0.5.0`：`latest.json` 622 B、`WordMemo-0.5.0-portable.zip` 148,469,715 B、`.sha256` 94 B |
+| 第二次（0.5.1） | run 45091192481 3 分钟成功，Release `v0.5.1`：`latest.json` 691 B、zip 148,469,925 B、`.sha256` |
+| 匿名可下载 | `api.github.com` 匿名 200；`releases/latest/download/latest.json` 能取到（这条线路会偶发连不上，属网络问题） |
+| 应用侧 | 0.4.0 用默认 GitHub 地址检查更新：拿到 `0.5.0`、开始下载 148 MB、进度正常推进（实测 34–45 KB/s） |
+
+**这次真实验证发现的缺陷（已修，0.5.1）**
+
+下载的「总时长上限 30 分钟」把**慢但没断**的下载当成超时：本机 148 MB 需要约 54 分钟，实际在 08:33:30 开始、09:03:30 被掐断在 53%，文案「下载超时」。改成：
+
+- `DOWNLOAD_TIMEOUT_MS` 30 分钟 → **3 小时**（150 MB @ 40 KB/s ≈ 60 分钟）；
+- 新增 `DOWNLOAD_STALL_TIMEOUT_MS` **5 分钟**：连续 5 分钟没收到任何新字节才算卡死，文案「下载停住了（5 分钟没有新数据）」；
+- `tests/updater.test.ts` 新增 3 项：正常下载、慢速但持续（总量上限内每块都在等）、流卡住 → 断开并删 `.part`（全套 17 文件 / 188 项）。
+
+**没验到的（如实写）**
+
+- 这条 40 KB/s 的线路没把 148 MB 走完，所以「真 GitHub 全量下载 → sha256 → 解压 → 启动器换目录」这一段只在**本地服务**上端到端跑通过（同一份 zip、同样的 sha256 校验路径）。换台网络好的机器（B）或让 0.5.1 挂着跑一次即可补上。
+- 未签名 → 首次运行仍会 SmartScreen；全量包无增量、无断点续传（一次失败要从 0 重下，所以更该在快速网络上更新）。
+
+**发版复盘（下次照做）**
+
+1. 改 `package.json` + `package-lock.json` 顶部版本，写 `release-notes/v<version>.md`（3 行以内会进 `latest.json`）。
+2. `npm run typecheck && npm test && npm run dist` 本地过一遍；`git tag -a v<version> && git push origin master && git push origin v<version>`（push 失败就重试，见上）。
+3. Actions 跑完会自动建 Release；`latest.json` 必须是 CI 生成的那份，不要手工上传。
+4. 0.4.0 及更早的版本下载超时仍是 30 分钟——慢速网络上的用户要手动下载一次 0.5.1，之后的版本就宽松了。
+
 ## 11. 交接：U1–U3 起点（2026-11-20）
 
 > 给接手的会话：先读 [HANDOFF.md](HANDOFF.md) 的 §1（命令）、§8（坑）、§9（开场提示词），再读本节。§3.11 是定稿方案，本节只写**从哪里下手、验收什么、别碰什么**。

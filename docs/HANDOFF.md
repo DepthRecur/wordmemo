@@ -1,7 +1,7 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-23（三机真机验收：A 自测 T1–T10 全通过；B/C 首轮卡在测试指南缺陷，已修）　当前分支：`master`　仓库：`DepthRecur/wordmemo`
-> **推送状态**：`master` 已在本地包含 U0 + U1 + U2 + U3 + 全部修复 + 本文档，但 **2026-11-20 晚 GitHub 连不上**（connection reset），尚未 push。网络恢复后 `git push origin master` 即可（`feat/portable-u1` / `feat/portable-u2` / `feat/portable-u3` 是历史分支，可一起推）；远端 `https://github.com/DepthRecur/wordmemo` 仍是 **private**，公开前按 §10 清理。`feat/decks`、`feat/portable`、`fix/providers-bugs`、`fix/decks-ui` 为历史分支。
+> 最后更新：2026-11-23（真实发布链路打通：仓库已 push + **公开**，`v0.5.0` / `v0.5.1` 已由 CI 发出 Release）　当前分支：`master`　仓库：`DepthRecur/wordmemo`（public）
+> **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过两次（各约 3 分钟），Release 三件套由 CI 生成。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
