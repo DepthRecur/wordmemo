@@ -125,7 +125,7 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 - **手动更新（GitHub 连不上时的兜底，和自动更新是同一份 zip）**：退出程序 → 下载新版 zip → 把 zip 里的 `app` 解压覆盖到程序目录的 `app` → 重新打开。数据不会丢。
 - 更新源只有 GitHub Releases（`releases/latest/download/latest.json`），不做镜像、不接受远程下发的配置或脚本。
 - **首次运行（以及每个新版本的第一次运行）** Windows 可能提示「未知发布者」：点「更多信息 → 仍要运行」。不做代码签名是明确选择，不是漏打包。
-- 想先核对文件：`certutil -hashfile WordMemo-0.4.0-portable.zip SHA256`，与 Release 里的 `.sha256` 对比；发布说明里也会给 sha256。
+- 想先核对文件：`certutil -hashfile WordMemo-<版本>-portable.zip SHA256`，与 Release 里的 `.sha256` 对比；发布说明里也会给 sha256。
 
 ## 发布（维护者）
 

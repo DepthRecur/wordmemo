@@ -599,7 +599,9 @@ export async function extractZipFile(zipFile: string, destDir: string): Promise<
       maxBuffer: 1024 * 1024
     })
   } catch (err) {
-    throw new UpdateError('更新包解压失败', err)
+    // 杀软（360 主动防御之类）会拦住刚解出来的 dll，表现为 tar 报 Can't create；
+    // 一条 EACCES 就整次失败，所以把「先关防护再试」写进用户能看到的文案里
+    throw new UpdateError('更新包解压失败（杀毒软件可能在拦截，暂时关闭防护后再试一次）', err)
   }
 }
 
@@ -964,7 +966,9 @@ export class Updater {
         }
         if (!response.ok) {
           throw new UpdateError(
-            response.status === 404 ? '发布页还没有更新信息' : `发布页返回 HTTP ${response.status}`,
+            response.status === 404
+              ? '发布页还没有更新信息（可能还没发布过更新，或地址不对）'
+              : `发布页返回 HTTP ${response.status}`,
             new Error(`HTTP ${response.status}`)
           )
         }
