@@ -2,7 +2,7 @@ import type { Card, CardDirection, DailyPlan, QueueCard, ReviewMode, SubmitRevie
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { getItem, addAcceptedZh, learnQueue, learnedTodayCount } from './items'
 import { deckInClause, deckNewPerDay, deckScope } from './decks'
-import { cardFlagUid, examUid, itemUid, withSync } from './sync'
+import { cardFlagUid, examUid, itemUid, recordSyncOp, withSync } from './sync'
 import { newUid } from './uid'
 import { getSettings } from '../settings'
 import { retrievabilityNow, reviewSnapshot } from '../fsrs'
@@ -145,13 +145,36 @@ export function markItemLearned(itemId: number, known: boolean): void {
   if (!row || row.learned_at) return
 
   const learnedAt = localIso()
+  const learnMark = known ? 1 : 0
+  const cards = d
+    .prepare(
+      'SELECT direction, needs_check, learn_mark FROM cards WHERE item_id = ? AND suspended = 0'
+    )
+    .all(itemId) as unknown as {
+    direction: string
+    needs_check: number
+    learn_mark: number
+  }[]
   withSync(
     { entity: 'item', uid: row.uid ?? '', fields: { learned_at: learnedAt } },
     () => {
       d.prepare('UPDATE items SET learned_at = ? WHERE id = ?').run(learnedAt, itemId)
       d.prepare(
         'UPDATE cards SET needs_check = 1, learn_mark = ? WHERE item_id = ? AND suspended = 0'
-      ).run(known ? 1 : 0, itemId)
+      ).run(learnMark, itemId)
+      // 卡片标志不属于重放（PLAN-SYNC §3.3）：按 cardFlag 事件单独同步，只记变了的
+      if (row.uid) {
+        for (const card of cards) {
+          const fields: Record<string, unknown> = {}
+          if (toInt(card.needs_check) !== 1) fields.needs_check = 1
+          if (toInt(card.learn_mark) !== learnMark) fields.learn_mark = learnMark
+          recordSyncOp({
+            entity: 'cardFlag',
+            uid: cardFlagUid(row.uid, card.direction),
+            fields
+          })
+        }
+      }
     }
   )
 }
@@ -254,9 +277,35 @@ export function applyReview(input: SubmitReview, now: Date = new Date()): Review
       )
       // Anki 的 sibling bury：一个词条的一张卡复习后，其他方向今天不再出现
       const today = reviewedAt.slice(0, 10)
+      const siblings = d
+        .prepare(
+          'SELECT direction, buried_until FROM cards WHERE item_id = ? AND id <> ? AND suspended = 0'
+        )
+        .all(toInt(row.item_id), input.cardId) as unknown as {
+        direction: string
+        buried_until: string | null
+      }[]
       d.prepare(
         `UPDATE cards SET buried_until = ? WHERE item_id = ? AND id <> ? AND suspended = 0`
       ).run(today, toInt(row.item_id), input.cardId)
+      // 卡片标志不属于重放（PLAN-SYNC §3.3）：按 cardFlag 事件单独同步，只记变了的
+      if (itemUidValue) {
+        if (toInt(row.needs_check) === 1) {
+          recordSyncOp({
+            entity: 'cardFlag',
+            uid: cardFlagUid(itemUidValue, row.direction),
+            fields: { needs_check: 0 }
+          })
+        }
+        for (const sibling of siblings) {
+          if (sibling.buried_until === today) continue
+          recordSyncOp({
+            entity: 'cardFlag',
+            uid: cardFlagUid(itemUidValue, sibling.direction),
+            fields: { buried_until: today }
+          })
+        }
+      }
       d.prepare(
         `INSERT INTO reviews (uid, card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`

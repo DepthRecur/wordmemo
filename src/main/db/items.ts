@@ -2,7 +2,7 @@ import type { CardDirection, Example, Item, ItemKind } from '@shared/types'
 import { normalizeEn, mergePosText } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt } from './connection'
 import { deckScope } from './decks'
-import { itemUid, withSync } from './sync'
+import { cardFlagUid, itemUid, withSync } from './sync'
 import { newUid } from './uid'
 import { newCardSnapshot } from '../fsrs'
 
@@ -276,16 +276,24 @@ export function setDirection(itemId: number, direction: CardDirection, enabled: 
   const row = d
     .prepare('SELECT id FROM cards WHERE item_id = ? AND direction = ?')
     .get(itemId, direction) as { id?: number } | undefined
+  const itemUidValue = itemUid(itemId)
+  // 卡片标志单独走 cardFlag 事件（PLAN-SYNC §3.3）：卡片本身不传，本地重放
+  const flagUid = itemUidValue ? cardFlagUid(itemUidValue, direction) : ''
   if (row?.id) {
-    d.prepare('UPDATE cards SET suspended = ? WHERE id = ?').run(enabled ? 0 : 1, row.id)
+    const cardId = row.id
+    withSync({ entity: 'cardFlag', uid: flagUid, fields: { suspended: enabled ? 0 : 1 } }, () => {
+      d.prepare('UPDATE cards SET suspended = ? WHERE id = ?').run(enabled ? 0 : 1, cardId)
+    })
     return
   }
   if (!enabled) return
   const snap = newCardSnapshot(new Date())
-  d.prepare(
-    `INSERT INTO cards (item_id, direction, due_at, stability, difficulty, reps, lapses, state, last_review, suspended, fsrs_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)`
-  ).run(itemId, direction, snap.dueAt, snap.stability, snap.difficulty, snap.reps, snap.lapses, snap.state, snap.fsrsJson)
+  withSync({ entity: 'cardFlag', uid: flagUid, fields: { suspended: 0 } }, () => {
+    d.prepare(
+      `INSERT INTO cards (item_id, direction, due_at, stability, difficulty, reps, lapses, state, last_review, suspended, fsrs_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?)`
+    ).run(itemId, direction, snap.dueAt, snap.stability, snap.difficulty, snap.reps, snap.lapses, snap.state, snap.fsrsJson)
+  })
 }
 
 export function updateItem(

@@ -299,7 +299,10 @@ describe('sync_ops：写入口契约', () => {
       judgeBy: 'ai'
     })
     const list = ops()
-    expect(list.map((op) => op.entity).sort()).toEqual(['item', 'review'])
+    // 这次复习也会 bury 兄弟卡，所以还有 cardFlag；本用例只关心 item + review 两条
+    const entities = list.map((op) => op.entity)
+    expect(entities).toContain('item')
+    expect(entities).toContain('review')
     const itemOp = list.find((op) => op.entity === 'item')!
     expect(itemOp.uid).toBe(uidOfItem(itemId))
     expect(itemOp.fields.accepted_zh).toEqual(['a brand new answer'])
