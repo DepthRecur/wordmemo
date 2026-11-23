@@ -16,17 +16,19 @@ import type {
 import { Badge, Button, Field, Modal, Progress, Toggle } from '../components/UI'
 import { ModelPicker } from '../components/ModelPicker'
 import { Select } from '../components/Select'
+import { SyncPanel } from '../components/SyncPanel'
 import type { Navigate, Notify } from '../App'
 import { cls, formatBytes } from '../lib/utils'
 import { ownedPatch } from '../lib/settingsPatch'
 
-type SettingsSection = 'providers' | 'ai' | 'review' | 'decks' | 'reminder' | 'tts' | 'advanced'
+type SettingsSection = 'providers' | 'ai' | 'review' | 'decks' | 'sync' | 'reminder' | 'tts' | 'advanced'
 
 const SECTIONS: { key: SettingsSection; label: string }[] = [
   { key: 'providers', label: 'AI 供应商' },
   { key: 'ai', label: 'AI 角色与预算' },
   { key: 'review', label: '复习节奏' },
   { key: 'decks', label: '笔记库' },
+  { key: 'sync', label: '同步' },
   { key: 'reminder', label: '提醒' },
   { key: 'tts', label: '发音源' },
   { key: 'advanced', label: '高级与诊断' }
@@ -1188,6 +1190,10 @@ export default function SettingsPage({
             </Button>
           </div>
         </div>
+
+        {section === 'sync' && (
+          <SyncPanel notify={notify} settings={settings} refreshSettings={refreshSettings} />
+        )}
 
         <div className="panel" hidden={section !== 'advanced'}>
           <div className="panel-title row">

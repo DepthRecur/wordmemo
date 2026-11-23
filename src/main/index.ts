@@ -19,10 +19,12 @@ import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
 import { beginProbe, evaluateSandboxOnStart, markReady } from './sandbox'
 import { initUpdater } from './updater'
+import { flushBeforeQuit, initSyncManager, setSyncStatusSink } from './sync/manager'
 
 let mainWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
+let syncFlushDone = false
 let lastFired = ''
 let trayHintShown = false
 
@@ -417,6 +419,11 @@ async function bootstrap(): Promise<void> {
 
   createWindow()
   buildTray()
+  // 同步（S2）：状态推给渲染进程；已连接才启动调度（启动 60 秒后拉一次）
+  setSyncStatusSink((status) => {
+    mainWindow?.webContents.send('sync:event', status)
+  })
+  initSyncManager()
   startReminderLoop()
   dailyBackup()
   // U2：启动 60 秒后检查更新（24h 一次、失败退避）；开发模式不初始化
@@ -445,8 +452,13 @@ if (!gotLock) {
     app.quit()
   })
   app.on('activate', () => showWindow())
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
     quitting = true
+    // 同步：退出前尽力推一次，最多等 3 秒（PLAN-SYNC §3.8）；只拦一次，避免死循环
+    if (syncFlushDone) return
+    event.preventDefault()
+    syncFlushDone = true
+    void flushBeforeQuit(3000).finally(() => app.quit())
   })
   app.on('window-all-closed', () => {
     // 保留托盘，不退出

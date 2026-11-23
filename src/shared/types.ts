@@ -425,6 +425,63 @@ export interface AiBudgetNotice {
   month: string
 }
 
+/** 同步配置（不含任何密钥：PAT/口令在加密的 secrets 文件里） */
+export interface SyncSettings {
+  /** false = 用户没连过（或已断开）；true 才有 owner/repo 的意义 */
+  enabled: boolean
+  owner: string
+  repo: string
+  /** 自建/代理用；默认 https://api.github.com */
+  apiBase: string
+  /** 定时同步间隔（分钟）；0 = 只手动 */
+  intervalMin: number
+}
+
+export type SyncUiState = 'disconnected' | 'idle' | 'syncing' | 'error'
+
+/** 设置页同步面板的一份完整状态（不含 token/口令） */
+export interface SyncStatus {
+  configured: boolean
+  enabled: boolean
+  state: SyncUiState
+  owner: string
+  repo: string
+  apiBase: string
+  intervalMin: number
+  deviceId: string
+  deviceName: string | null
+  lastSuccessAt: string | null
+  lastErrorCode: string | null
+  lastErrorMessage: string | null
+  pendingOps: number
+  lastPushAt: string | null
+  lastPullAt: string | null
+  rateLimitRemaining: number | null
+}
+
+export interface SyncConnectInput {
+  owner: string
+  repo: string
+  pat: string
+  passphrase: string
+  apiBase?: string
+  intervalMin?: number
+}
+
+export interface SyncActionResult {
+  ok: boolean
+  status: SyncStatus
+  errorCode?: string
+  message?: string
+}
+
+export interface SyncImportResult extends SyncActionResult {
+  applied?: number
+  notes?: number
+  items?: number
+  reviews?: number
+}
+
 export interface Settings {
   /** 派生：默认角色那家是否已有 Key（不落盘） */
   apiKeySet: boolean
@@ -455,6 +512,8 @@ export interface Settings {
   currentDeckId: number
   /** 自更新（U2）：自动检查开关、跳过版本、节流记账 */
   updates: UpdateSettings
+  /** 同步（S2）：仓库与节奏；PAT/口令不在这里 */
+  sync: SyncSettings
 }
 
 export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet' | 'modelSet' | 'aiReady'>> {}
@@ -774,6 +833,18 @@ export interface WordmemoApi {
     /** 自动检查开关；关掉后本次运行不再自动检查 */
     setAutoCheck(enabled: boolean): Promise<UpdateStatus>
   }
+  sync: {
+    status(): Promise<SyncStatus>
+    /** 校验 PAT/仓库/口令并保存连接（成功后立即首次同步） */
+    connect(input: SyncConnectInput): Promise<SyncActionResult>
+    disconnect(): Promise<SyncStatus>
+    /** 立即同步（手动永远可用） */
+    now(): Promise<SyncActionResult>
+    /** 导出加密快照到用户选的位置；取消返回 path=null */
+    export(): Promise<SyncActionResult & { path: string | null }>
+    /** 导入加密快照（合并，不覆盖） */
+    import(): Promise<SyncImportResult>
+  }
   system: {
     openDataDir(): Promise<void>
     backup(): Promise<string>
@@ -792,6 +863,8 @@ export interface WordmemoApi {
     onBudgetExhausted(cb: (info: AiBudgetNotice) => void): () => void
     /** 更新状态每次变化推一份完整快照（检查/下载进度/就绪/失败） */
     onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
+    /** 同步状态每次变化推一份完整快照（不含 token/口令） */
+    onSyncStatus(cb: (status: SyncStatus) => void): () => void
   }
 }
 
@@ -829,6 +902,13 @@ export const DEFAULT_SETTINGS: Settings = {
     lastCheckAt: null,
     failStreak: 0,
     pendingVersion: null
+  },
+  sync: {
+    enabled: false,
+    owner: '',
+    repo: '',
+    apiBase: 'https://api.github.com',
+    intervalMin: 10
   }
 }
 
