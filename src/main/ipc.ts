@@ -68,10 +68,14 @@ import { storedFileAbs } from './storage'
 import { requestTrayRefresh } from './tray-bridge'
 import {
   buildStatus as syncStatus,
+  changeSyncPassphrase,
   connectSync,
   disconnectSync,
   exportSnapshotTo,
+  getSyncLog,
   importSnapshotFrom,
+  listSyncDevices,
+  removeSyncDevice,
   syncNow
 } from './sync/manager'
 
@@ -427,6 +431,12 @@ export function registerIpc(): void {
   ipcMain.handle('sync:connect', (_e, input: SyncConnectInput) => connectSync(input))
   ipcMain.handle('sync:disconnect', () => disconnectSync())
   ipcMain.handle('sync:now', () => syncNow())
+  ipcMain.handle('sync:devices', () => listSyncDevices())
+  ipcMain.handle('sync:removeDevice', (_e, deviceId: string) => removeSyncDevice(deviceId))
+  ipcMain.handle('sync:changePassphrase', (_e, passphrase: string) =>
+    changeSyncPassphrase(passphrase)
+  )
+  ipcMain.handle('sync:log', () => getSyncLog())
   ipcMain.handle('sync:export', async () => {
     const picked = await dialog.showSaveDialog({
       title: '导出加密快照',

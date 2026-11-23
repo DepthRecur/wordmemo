@@ -99,10 +99,17 @@ beforeAll(async () => {
           if (children.length) return send(res, 200, children)
           return send(res, 404, { message: 'Not Found' })
         }
+        if (method === 'DELETE') {
+          const existing = files.get(filePath)
+          if (!existing) return send(res, 404, { message: 'Not Found' })
+          files.delete(filePath)
+          return send(res, 200, { commit: { sha: shaOf(Buffer.from(filePath)) } })
+        }
         if (method === 'PUT') {
           const payload = JSON.parse(body) as { content: string; sha?: string }
           const existing = files.get(filePath)
-          if (payload.sha && existing && existing.sha !== payload.sha) {
+          // 带 sha 但文件已经不存在（被别的设备删了）：和真实 GitHub 一样冲突
+          if (payload.sha && (!existing || existing.sha !== payload.sha)) {
             return send(res, 409, { message: 'sha mismatch' })
           }
           if (!payload.sha && existing) return send(res, 422, { message: 'sha required' })
@@ -127,16 +134,20 @@ afterAll(() => {
   fs.rmSync(dir, { recursive: true, force: true })
 })
 
-function engine(): SyncEngine {
+function engineWith(passphrase: string): SyncEngine {
   return new SyncEngine({
     owner: 'DepthRecur',
     repo: 'wordmemo-sync-test',
     token: 'test-token',
-    passphrase: PASS,
+    passphrase,
     apiBase: base,
     // 测试里降低 age 的 scrypt work factor（生产默认 18）
     workFactor: 12
   })
+}
+
+function engine(): SyncEngine {
+  return engineWith(PASS)
 }
 
 function q<T = Record<string, unknown>>(sql: string, ...params: unknown[]): T[] {
@@ -257,5 +268,85 @@ describe('传输引擎：两台设备对着假仓库同步', () => {
     } finally {
       repoPrivate = true
     }
+  })
+})
+
+describe('S3：设备管理、换密码与压缩', () => {
+  const NEW_PASS = 'granite-harbor-tulip-orbit-zephyr'
+  let peerId = ''
+  let aDeviceId = ''
+  let oldVerifier = ''
+
+  it('设备列表包含本机与对端', async () => {
+    const a = engine()
+    await a.connect()
+    const devices = await a.listDevices()
+    expect(devices.some((device) => device.isCurrent)).toBe(true)
+    const peer = devices.find((device) => !device.isCurrent)
+    expect(peer).toBeTruthy()
+    peerId = peer!.id
+    aDeviceId = devices.find((device) => device.isCurrent)!.id
+    oldVerifier = JSON.parse(files.get('meta.json')!.content.toString('utf8')).kdfVerifier
+  })
+
+  it('先产生 op 分片；换密码后本机 checkpoint 覆盖历史并删掉分片与其它设备', async () => {
+    const note = q<{ id: number }>('SELECT id FROM notes ORDER BY id LIMIT 1')[0]
+    updateNote(note.id, { title: 'S3 换密码前' })
+    const a = engine()
+    await a.connect()
+    const pushed = await a.syncNow()
+    expect(pushed.pushedCheckpoint).toBe(false)
+    expect(pushed.pushedOps).toBeGreaterThan(0)
+    expect([...files.keys()].some((key) => key.startsWith(`devices/${aDeviceId}/ops/`))).toBe(true)
+
+    const changer = engine()
+    await changer.connect()
+    await changer.changePassphrase(NEW_PASS)
+
+    // 压缩：本机 op 分片被删
+    expect([...files.keys()].some((key) => key.startsWith(`devices/${aDeviceId}/ops/`))).toBe(false)
+    // 其它设备的目录被删（旧密码加密，换完读不了）
+    expect([...files.keys()].some((key) => key.startsWith(`devices/${peerId}/`))).toBe(false)
+    // meta 校验值换成新密码的
+    const meta = JSON.parse(files.get('meta.json')!.content.toString('utf8'))
+    expect(meta.kdfVerifier).not.toBe(oldVerifier)
+  })
+
+  it('旧密码连不上；新密码让对端重新加入（缓存 sha 失效时自动重建）', async () => {
+    closeDb()
+    openDb(dbB)
+    const oldEngine = engine()
+    const oldError = await oldEngine.connect().catch((error) => error)
+    expect(oldError).toBeInstanceOf(SyncSetupError)
+    expect(oldError.code).toBe('bad_passphrase')
+
+    const rejoined = engineWith(NEW_PASS)
+    await rejoined.connect()
+    const pushed = await rejoined.syncNow()
+    expect(pushed.pushedCheckpoint).toBe(true)
+    expect(
+      [...files.keys()].some((key) => key.startsWith(`devices/${peerId}/checkpoint`))
+    ).toBe(true)
+  })
+
+  it('移除设备：远端目录消失、列表标成已移除、对端被拒绝', async () => {
+    closeDb()
+    openDb(dbA)
+    const a = engineWith(NEW_PASS)
+    await a.connect()
+    const devices = await a.listDevices()
+    const peer = devices.find((device) => !device.isCurrent && !device.revoked)
+    expect(peer).toBeTruthy()
+    await a.removeDevice(peer!.id)
+    expect([...files.keys()].some((key) => key.startsWith(`devices/${peer!.id}/`))).toBe(false)
+    const after = await a.listDevices()
+    expect(after.find((device) => device.id === peer!.id)?.revoked).toBe(true)
+
+    closeDb()
+    openDb(dbB)
+    const b = engineWith(NEW_PASS)
+    const error = await b.connect().catch((err) => err)
+    expect(error).toBeInstanceOf(SyncSetupError)
+    expect(error.code).toBe('device_revoked')
   })
 })

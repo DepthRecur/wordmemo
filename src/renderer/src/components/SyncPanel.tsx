@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { CloudUpload, Download, KeyRound, RefreshCw, Upload, Unplug } from 'lucide-react'
-import type { Settings, SyncActionResult, SyncStatus } from '@shared/types'
+import type {
+  Settings,
+  SyncActionResult,
+  SyncDeviceInfo,
+  SyncLogEntry,
+  SyncStatus
+} from '@shared/types'
 import { checkPassphrase, generatePassphrase } from '@shared/passphrase'
 import type { Notify } from '../App'
 import { Button, Field } from './UI'
@@ -54,11 +60,30 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
   const [passphrase, setPassphrase] = useState('')
   const [intervalMin, setIntervalMin] = useState(settings.sync.intervalMin)
   const [showConnect, setShowConnect] = useState(!settings.sync.enabled)
+  const [devices, setDevices] = useState<SyncDeviceInfo[]>([])
+  const [log, setLog] = useState<SyncLogEntry[]>([])
+  const [showChange, setShowChange] = useState(false)
+  const [newPass, setNewPass] = useState('')
+  const [confirmPass, setConfirmPass] = useState('')
 
   useEffect(() => {
     void window.api.sync.status().then(setStatus)
     return window.api.events.onSyncStatus(setStatus)
   }, [])
+
+  useEffect(() => {
+    if (!status?.configured) {
+      setDevices([])
+      setLog([])
+      return
+    }
+    void window.api.sync.devices().then(setDevices)
+    void window.api.sync.log().then(setLog)
+  }, [status?.configured, status?.lastSuccessAt])
+
+  async function refreshDevices(): Promise<void> {
+    setDevices(await window.api.sync.devices())
+  }
 
   async function connect(): Promise<void> {
     if (!owner.trim() || !repo.trim()) {
@@ -129,6 +154,68 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
       setShowConnect(true)
       notify('已断开同步', 'info')
       await refreshSettings()
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function removeDevice(deviceId: string): Promise<void> {
+    if (
+      !window.confirm(
+        '移除这台设备？\n它在云上的数据会被删除；它下次同步会被拒绝，需要重新连接一次。'
+      )
+    ) {
+      return
+    }
+    setBusy(`device:${deviceId}`)
+    try {
+      const result = await window.api.sync.removeDevice(deviceId)
+      setStatus(result.status)
+      if (result.ok) {
+        notify('已移除该设备', 'ok')
+        await refreshDevices()
+      } else {
+        notify(result.message ?? '移除失败', 'err')
+      }
+    } catch (error) {
+      notify(`移除失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function changePassphrase(): Promise<void> {
+    if (!newPass || newPass !== confirmPass) {
+      notify('两次输入的新密码不一致', 'info')
+      return
+    }
+    const strength = checkPassphrase(newPass)
+    if (!strength.ok) {
+      notify(strengthText(newPass), 'info')
+      return
+    }
+    if (
+      !window.confirm(
+        '换密码会重新加密并上传本机数据；其它设备需要用新密码重新连接。\n确定继续？'
+      )
+    ) {
+      return
+    }
+    setBusy('passphrase')
+    try {
+      const result = await window.api.sync.changePassphrase(newPass)
+      setStatus(result.status)
+      if (!result.ok) {
+        notify(result.message ?? '更换密码失败', 'err')
+        return
+      }
+      setNewPass('')
+      setConfirmPass('')
+      setShowChange(false)
+      notify('同步密码已更换；其它设备需要用新密码重新连接', 'ok')
+      await refreshSettings()
+    } catch (error) {
+      notify(`更换密码失败：${error instanceof Error ? error.message : String(error)}`, 'err')
     } finally {
       setBusy(null)
     }
@@ -240,8 +327,100 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
               「导出加密快照」是一个 .wmsync 文件，适合换机、备份或 GitHub 连不上时手动搬数据；
               导入是合并，不会覆盖现有内容。
             </div>
+
+            {status.repoSizeKb !== null && status.repoSizeKb > 200 * 1024 && (
+              <div className="hint" style={{ color: 'var(--yellow)' }}>
+                远端仓库已经超过 200 MB（{(status.repoSizeKb / 1024).toFixed(0)} MB）：
+                GitHub 对仓库有软限制，建议在 GitHub 上清理旧副本，或换一个仓库。
+              </div>
+            )}
+
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted tiny">设备</span>
+              {devices.length === 0 ? (
+                <span className="hint">还没有其它设备。</span>
+              ) : (
+                devices.map((device) => (
+                  <div className="row-between" key={device.id}>
+                    <span className="tiny" title={device.id}>
+                      {device.isCurrent ? '本机 · ' : ''}
+                      {device.name ?? device.id.slice(0, 8)}
+                      {device.revoked ? '（已移除）' : ''}
+                    </span>
+                    {!device.isCurrent && !device.revoked && (
+                      <Button
+                        size="sm"
+                        onClick={() => void removeDevice(device.id)}
+                        disabled={busy !== null}
+                      >
+                        移除
+                      </Button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="col" style={{ gap: 4 }}>
+              <span className="muted tiny">最近同步</span>
+              {log.length === 0 ? (
+                <span className="hint">还没有记录。</span>
+              ) : (
+                log.slice(0, 8).map((entry, index) => (
+                  <div className="row-between" key={`${entry.at}-${index}`}>
+                    <span className="tiny">{entry.at.replace('T', ' ')}</span>
+                    <span
+                      className="tiny"
+                      style={entry.ok ? undefined : { color: 'var(--red)' }}
+                    >
+                      {entry.ok
+                        ? `成功 · ${entry.durationMs}ms · 上传 ${entry.pushedOps} / 应用 ${entry.appliedOps}`
+                        : `失败 · ${entry.errorCode ?? 'unknown'}`}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <Button size="sm" onClick={() => setShowChange((value) => !value)}>
+              {showChange ? '收起更换同步密码' : '更换同步密码'}
+            </Button>
+            {showChange && (
+              <div className="col" style={{ gap: 8 }}>
+                <div className="hint" style={{ color: 'var(--yellow)' }}>
+                  换密码会重新加密并上传本机数据；其它设备下次同步会提示密码不对，
+                  需要输入新密码重新连接。没有恢复密钥，忘了就谁也解不开。
+                </div>
+                <Field label="新密码">
+                  <input
+                    className="input"
+                    type="password"
+                    value={newPass}
+                    placeholder="至少 10 个字符"
+                    onChange={(e) => setNewPass(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </Field>
+                <Field label="再输一遍">
+                  <input
+                    className="input"
+                    type="password"
+                    value={confirmPass}
+                    placeholder="再输一遍新密码"
+                    onChange={(e) => setConfirmPass(e.target.value)}
+                    autoComplete="new-password"
+                  />
+                </Field>
+                <div className="row">
+                  <Button onClick={() => void changePassphrase()} disabled={busy !== null}>
+                    确认更换
+                  </Button>
+                </div>
+              </div>
+            )}
+
             <Button size="sm" onClick={() => setShowConnect((value) => !value)}>
-              {showConnect ? '收起重新连接' : '重新连接 / 更换密码'}
+              {showConnect ? '收起重新连接' : '重新连接 / 更换仓库'}
             </Button>
           </>
         ) : (

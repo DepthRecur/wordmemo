@@ -1,12 +1,15 @@
 import type {
   SyncActionResult,
   SyncConnectInput,
+  SyncDeviceInfo,
   SyncImportResult,
+  SyncLogEntry,
   SyncStatus
 } from '@shared/types'
 import { checkPassphrase } from '@shared/passphrase'
 import { exportEncryptedSnapshot, importEncryptedSnapshot } from '../db/checkpoint'
 import { countPendingOps, getSyncState, onSyncOpWritten } from '../db/sync'
+import { getDb, localIso } from '../db/connection'
 import { getSettings, updateSettings } from '../settings'
 import { SyncEngine, SyncSetupError } from './engine'
 import { SyncApiError } from './github'
@@ -75,7 +78,8 @@ export function buildStatus(): SyncStatus {
     pendingOps: countPendingOps(),
     lastPushAt: syncState.lastPushAt,
     lastPullAt: syncState.lastPullAt,
-    rateLimitRemaining: engine?.rateLimit.remaining ?? null
+    rateLimitRemaining: engine?.rateLimit.remaining ?? null,
+    repoSizeKb: engine?.repositorySizeKb ?? null
   }
 }
 
@@ -106,16 +110,78 @@ function detachRuntime(): void {
   engine = null
 }
 
+interface RunRecord {
+  durationMs: number
+  pushedOps: number
+  pushedCheckpoint: boolean
+  peers: number
+  pulledCheckpoints: number
+  pulledOpsFiles: number
+  appliedOps: number
+}
+
+/** 记录一次同步（最近 20 条；不含任何内容明文） */
+function recordRun(record: RunRecord, ok: boolean, errorCode: string | null): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO sync_runs
+        (at, duration_ms, pushed_ops, pushed_checkpoint, peers, pulled_checkpoints, pulled_ops_files, applied_ops, ok, error_code)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      localIso(),
+      Math.max(0, Math.trunc(record.durationMs)),
+      record.pushedOps,
+      record.pushedCheckpoint ? 1 : 0,
+      record.peers,
+      record.pulledCheckpoints,
+      record.pulledOpsFiles,
+      record.appliedOps,
+      ok ? 1 : 0,
+      errorCode
+    )
+    db.prepare(
+      'DELETE FROM sync_runs WHERE id NOT IN (SELECT id FROM sync_runs ORDER BY id DESC LIMIT 20)'
+    ).run()
+  } catch {
+    /* 日志失败不影响同步 */
+  }
+}
+
 async function runSync(): Promise<boolean> {
   if (!engine || running) return true
   running = true
   emit()
+  const started = Date.now()
+  const empty: RunRecord = {
+    durationMs: 0,
+    pushedOps: 0,
+    pushedCheckpoint: false,
+    peers: 0,
+    pulledCheckpoints: 0,
+    pulledOpsFiles: 0,
+    appliedOps: 0
+  }
   try {
-    await engine.syncNow()
+    const result = await engine.syncNow()
     lastError = null
+    recordRun(
+      {
+        durationMs: Date.now() - started,
+        pushedOps: result.pushedOps,
+        pushedCheckpoint: result.pushedCheckpoint,
+        peers: result.peers,
+        pulledCheckpoints: result.pulledCheckpoints,
+        pulledOpsFiles: result.pulledOpsFiles,
+        appliedOps: result.appliedOps
+      },
+      true,
+      null
+    )
     return true
   } catch (error) {
     lastError = describeError(error)
+    recordRun({ ...empty, durationMs: Date.now() - started }, false, lastError.code)
     return false
   } finally {
     running = false
@@ -283,6 +349,93 @@ export function resetSyncManagerForTests(): void {
 
 function getLastError(): { code: string; message: string } | null {
   return lastError
+}
+
+/** 设备列表：未连接时只显示本机；拉取失败也退回本机，不打扰用户 */
+export async function listSyncDevices(): Promise<SyncDeviceInfo[]> {
+  const state = getSyncState()
+  const local: SyncDeviceInfo = {
+    id: state.deviceId,
+    name: state.deviceName,
+    lastSeenAt: localIso(),
+    isCurrent: true,
+    revoked: false
+  }
+  if (!configured() || !engine) return [local]
+  try {
+    return await engine.listDevices()
+  } catch {
+    return [local]
+  }
+}
+
+/** 移除其它设备（S3）：远端目录删掉并写进 meta.revokedDevices，它自己下次同步会被拒绝 */
+export async function removeSyncDevice(deviceId: string): Promise<SyncActionResult> {
+  if (!configured() || !engine) return fail('not_configured', '还没有连接同步')
+  try {
+    await engine.removeDevice(deviceId)
+    return { ok: true, status: buildStatus() }
+  } catch (error) {
+    const info = describeError(error)
+    return { ok: false, status: buildStatus(), errorCode: info.code, message: info.message }
+  }
+}
+
+/** 更换同步密码（危险操作）：本机重加密重推，其它设备需要重新输入新密码 */
+export async function changeSyncPassphrase(passphrase: string): Promise<SyncActionResult> {
+  if (!configured() || !engine) return fail('not_configured', '还没有连接同步')
+  const strength = checkPassphrase(passphrase)
+  if (!strength.ok) {
+    return fail(
+      'weak_passphrase',
+      strength.reason === 'too_common' ? '这个密码太常见了，换一个' : '同步密码至少 10 个字符'
+    )
+  }
+  const secrets = loadSyncSecrets()
+  if (!secrets) return fail('no_secret', '没有找到本机保存的同步密码，请重新连接一次')
+  try {
+    await engine.changePassphrase(passphrase)
+  } catch (error) {
+    const info = describeError(error)
+    return { ok: false, status: buildStatus(), errorCode: info.code, message: info.message }
+  }
+  if (!saveSyncSecrets({ token: secrets.token, passphrase })) {
+    return fail('secret_store', '本机保存新密码失败；远端已经换成新密码，请重新连接')
+  }
+  lastError = null
+  attach({ token: secrets.token, passphrase })
+  emit()
+  return { ok: true, status: buildStatus() }
+}
+
+/** 最近 20 次同步记录（设置页的同步日志） */
+export function getSyncLog(): SyncLogEntry[] {
+  const rows = getDb()
+    .prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 20')
+    .all() as unknown as {
+    at: string
+    duration_ms: number
+    pushed_ops: number
+    pushed_checkpoint: number
+    peers: number
+    pulled_checkpoints: number
+    pulled_ops_files: number
+    applied_ops: number
+    ok: number
+    error_code: string | null
+  }[]
+  return rows.map((row) => ({
+    at: row.at,
+    durationMs: Number(row.duration_ms) || 0,
+    pushedOps: Number(row.pushed_ops) || 0,
+    pushedCheckpoint: row.pushed_checkpoint === 1,
+    peers: Number(row.peers) || 0,
+    pulledCheckpoints: Number(row.pulled_checkpoints) || 0,
+    pulledOpsFiles: Number(row.pulled_ops_files) || 0,
+    appliedOps: Number(row.applied_ops) || 0,
+    ok: row.ok === 1,
+    errorCode: row.error_code
+  }))
 }
 
 function fail(code: string, message: string): SyncActionResult {

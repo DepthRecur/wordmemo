@@ -69,10 +69,16 @@ describe('GitHubClient：读', () => {
       sendJson(res, 200, {
         private: true,
         default_branch: 'main',
-        permissions: { push: true, admin: true }
+        permissions: { push: true, admin: true },
+        size: 1234
       })
     const repo = await client().getRepo()
-    expect(repo).toEqual({ private: true, defaultBranch: 'main', permissions: { push: true, admin: true } })
+    expect(repo).toEqual({
+      private: true,
+      defaultBranch: 'main',
+      permissions: { push: true, admin: true },
+      sizeKb: 1234
+    })
     const request = recorded[0]
     expect(request.url).toBe('/repos/DepthRecur/wordmemo-sync-test')
     expect(request.headers.authorization).toBe('Bearer test-token')

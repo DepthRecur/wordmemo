@@ -10,6 +10,7 @@ import {
 import { getDb, localDate, localIso, toInt } from '../db/connection'
 import { getSyncState, pendingSyncOps, updateSyncState } from '../db/sync'
 import { SYNC_FORMAT_VERSION } from '@shared/sync'
+import type { SyncDeviceInfo } from '@shared/types'
 import {
   decryptEnvelope,
   encryptEnvelope,
@@ -38,6 +39,8 @@ export type SyncSetupCode =
   | 'no_write_access'
   | 'format_too_new'
   | 'bad_meta'
+  | 'device_revoked'
+  | 'bad_input'
 
 export class SyncSetupError extends Error {
   code: SyncSetupCode
@@ -65,6 +68,8 @@ export interface MetaFile {
   kdfVerifier: string
   createdAt: string
   app: 'WordMemo'
+  /** 已移除的设备：不再拉取；它自己下次同步会被拒绝（S3） */
+  revokedDevices?: string[]
 }
 
 export interface SyncResult {
@@ -145,6 +150,7 @@ export class SyncEngine {
   private readonly client: GitHubClient
   private readonly workFactor: number
   private meta: MetaFile | null = null
+  private repoSizeKb: number | null = null
 
   constructor(private readonly settings: SyncSettings) {
     this.workFactor = settings.workFactor ?? DEFAULT_SCRYPT_WORK_FACTOR
@@ -160,6 +166,11 @@ export class SyncEngine {
     return this.client.rateLimit
   }
 
+  /** 远端仓库体积（KB；拿不到就是 null） */
+  get repositorySizeKb(): number | null {
+    return this.repoSizeKb
+  }
+
   /** 连接校验：PAT 是谁的、仓库是否私有可写、口令与 meta.json 是否一致 */
   async connect(): Promise<{
     login: string
@@ -173,8 +184,50 @@ export class SyncEngine {
     if (repo.permissions && repo.permissions.push === false) {
       throw new SyncSetupError('no_write_access', '这个 PAT 没有写权限（需要 Contents: Read and write）')
     }
+    this.repoSizeKb = repo.sizeKb
     this.meta = await this.ensureMeta()
+    this.assertNotRevoked(this.meta)
     return { login: user.login, repo: { private: repo.private, defaultBranch: repo.defaultBranch } }
+  }
+
+  /** 解析并校验一份 meta.json（格式版本 + 口令） */
+  private parseMeta(content: Buffer): MetaFile {
+    let meta: MetaFile
+    try {
+      meta = JSON.parse(content.toString('utf8')) as MetaFile
+    } catch {
+      throw new SyncSetupError('bad_meta', '远端 meta.json 损坏，无法同步')
+    }
+    if (toInt(meta.formatVersion) !== SYNC_FORMAT_VERSION) {
+      throw new SyncSetupError(
+        'format_too_new',
+        `远端格式版本 ${meta.formatVersion} 与本机（${SYNC_FORMAT_VERSION}）不一致，请升级 WordMemo`
+      )
+    }
+    if (!verifyKdfVerifier(this.settings.passphrase, String(meta.salt), String(meta.kdfVerifier))) {
+      throw new SyncSetupError('bad_passphrase', '同步密码不对')
+    }
+    return meta
+  }
+
+  /** 这台设备是否已经被其它设备移除（它自己下次同步必须被拒绝） */
+  private assertNotRevoked(meta: MetaFile): void {
+    const id = getSyncState().deviceId
+    if (meta.revokedDevices?.includes(id)) {
+      throw new SyncSetupError('device_revoked', '这台设备已被移除同步，请重新连接一次')
+    }
+  }
+
+  /** 每次同步前重新读一次 meta：别的设备可能移除了本机、或改了密码 */
+  private async refreshMeta(): Promise<MetaFile> {
+    const cached = this.meta ? cacheGet('meta.json') : undefined
+    const file = await this.client.getFile('meta.json', cached?.etag ?? null)
+    if (file.status === 304 && this.meta) return this.meta
+    if (!file.content) throw new SyncSetupError('bad_meta', '远端 meta.json 不见了，请重新连接')
+    const meta = this.parseMeta(file.content)
+    cachePut('meta.json', file.sha, file.etag)
+    this.meta = meta
+    return meta
   }
 
   private async ensureMeta(): Promise<MetaFile> {
@@ -187,21 +240,7 @@ export class SyncEngine {
     }
 
     if (remote?.content) {
-      let meta: MetaFile
-      try {
-        meta = JSON.parse(remote.content.toString('utf8')) as MetaFile
-      } catch {
-        throw new SyncSetupError('bad_meta', '远端 meta.json 损坏，无法同步')
-      }
-      if (toInt(meta.formatVersion) !== SYNC_FORMAT_VERSION) {
-        throw new SyncSetupError(
-          'format_too_new',
-          `远端格式版本 ${meta.formatVersion} 与本机（${SYNC_FORMAT_VERSION}）不一致，请升级 WordMemo`
-        )
-      }
-      if (!verifyKdfVerifier(this.settings.passphrase, String(meta.salt), String(meta.kdfVerifier))) {
-        throw new SyncSetupError('bad_passphrase', '同步密码不对')
-      }
+      const meta = this.parseMeta(remote.content)
       cachePut('meta.json', remote.sha, remote.etag)
       return meta
     }
@@ -213,12 +252,34 @@ export class SyncEngine {
       salt,
       kdfVerifier: kdfVerifier(this.settings.passphrase, salt),
       createdAt: localIso(),
-      app: 'WordMemo'
+      app: 'WordMemo',
+      revokedDevices: []
     }
     const content = Buffer.from(JSON.stringify(meta, null, 2), 'utf8')
-    const { sha } = await this.client.putFile('meta.json', content, 'sync: init meta')
-    cachePut('meta.json', sha, null)
+    await this.putFileSafe('meta.json', content, 'sync: init meta')
     return meta
+  }
+
+  /**
+   * PUT 文件。远端目录可能被别的设备删过（移除设备/换密码），缓存里的 sha 就失效了；
+   * 冲突或找不到时丢掉 sha 重建一次（新建文件不需要 sha）。
+   */
+  private async putFileSafe(path: string, content: Buffer, message: string): Promise<string> {
+    const cached = cacheGet(path)
+    try {
+      const { sha } = await this.client.putFile(path, content, message, cached?.sha ?? null)
+      cachePut(path, sha, null)
+      return sha
+    } catch (error) {
+      const retry =
+        cached?.sha &&
+        error instanceof SyncApiError &&
+        (error.code === 'conflict' || error.code === 'not_found')
+      if (!retry) throw error
+      const { sha } = await this.client.putFile(path, content, message, null)
+      cachePut(path, sha, null)
+      return sha
+    }
   }
 
   /** 推一次设备信息（设备列表用；失败不影响同步） */
@@ -237,14 +298,7 @@ export class SyncEngine {
       this.settings.passphrase,
       this.workFactor
     )
-    const cached = cacheGet(path)
-    const { sha } = await this.client.putFile(
-      path,
-      file,
-      `sync: ${state.deviceId.slice(0, 6)} info`,
-      cached?.sha ?? null
-    )
-    cachePut(path, sha, null)
+    await this.putFileSafe(path, file, `sync: ${state.deviceId.slice(0, 6)} info`)
   }
 
   /**
@@ -254,6 +308,16 @@ export class SyncEngine {
   async syncNow(): Promise<SyncResult> {
     const startedAt = localIso()
     if (!this.meta) await this.connect()
+    else {
+      this.meta = await this.refreshMeta()
+      this.assertNotRevoked(this.meta)
+    }
+    // 仓库体积：拿不到不影响同步，S4 只用来提醒
+    try {
+      this.repoSizeKb = (await this.client.getRepo()).sizeKb
+    } catch {
+      /* ignore */
+    }
     const state = getSyncState()
     const result: SyncResult = {
       deviceId: state.deviceId,
@@ -284,16 +348,21 @@ export class SyncEngine {
     const pending = pendingSyncOps(100_000)
     const rows = dayOps()
     const lastCheckpoint = cacheUpdatedAt(checkpointPath)
+    // 远端目录可能被移除设备/换密码删掉：先确认自己的 checkpoint 还在，
+    // 不在就整份重推（否则只推 op 分片会丢历史）
+    const checkpointExists = await this.remoteExists(checkpointPath)
     const needCheckpoint =
-      !cacheGet(checkpointPath) ||
+      !checkpointExists ||
       pending.length >= CHECKPOINT_EVERY_OPS ||
       (rows.length > 0 && Date.now() - lastCheckpoint > CHECKPOINT_MAX_AGE_MS)
 
-    if (needCheckpoint && (rows.length > 0 || pending.length > 0 || !cacheGet(checkpointPath))) {
+    if (needCheckpoint && (rows.length > 0 || pending.length > 0 || !checkpointExists)) {
       await this.pushCheckpoint(deviceId, checkpointPath)
       getDb().prepare("UPDATE sync_ops SET pushed = 1 WHERE origin = 'local'").run()
       result.pushedCheckpoint = true
       result.pushedOps = rows.length
+      // 压缩（S3）：checkpoint 已经覆盖全部历史，本机旧的 op 分片可以删掉
+      await this.pruneOwnOps(deviceId)
       return
     }
 
@@ -318,17 +387,22 @@ export class SyncEngine {
       this.settings.passphrase,
       this.workFactor
     )
-    const cached = cacheGet(path)
-    const { sha } = await this.client.putFile(
-      path,
-      file,
-      `sync: ${deviceId.slice(0, 6)} ops`,
-      cached?.sha ?? null
-    )
-    cachePut(path, sha, null)
+    await this.putFileSafe(path, file, `sync: ${deviceId.slice(0, 6)} ops`)
     const maxSeq = Math.max(...rows.map((row) => row.seq))
     getDb().prepare("UPDATE sync_ops SET pushed = 1 WHERE origin = 'local' AND seq <= ?").run(maxSeq)
     result.pushedOps = rows.length
+  }
+
+  /** 远端某个文件是否还在（304 也算在；拿不到 etag 时会读一次内容） */
+  private async remoteExists(path: string): Promise<boolean> {
+    const cached = cacheGet(path)
+    try {
+      await this.client.getFile(path, cached?.etag ?? null)
+      return true
+    } catch (error) {
+      if (error instanceof SyncApiError && error.code === 'not_found') return false
+      throw error
+    }
   }
 
   private async pushCheckpoint(deviceId: string, path: string): Promise<void> {
@@ -345,14 +419,7 @@ export class SyncEngine {
       this.settings.passphrase,
       this.workFactor
     )
-    const cached = cacheGet(path)
-    const { sha } = await this.client.putFile(
-      path,
-      file,
-      `sync: ${deviceId.slice(0, 6)} checkpoint`,
-      cached?.sha ?? null
-    )
-    cachePut(path, sha, null)
+    await this.putFileSafe(path, file, `sync: ${deviceId.slice(0, 6)} checkpoint`)
   }
 
   /* ------------------------------ 拉取 ------------------------------ */
@@ -366,7 +433,12 @@ export class SyncEngine {
       throw error
     }
 
-    const peers = devices.filter((entry) => entry.type === 'dir' && entry.name !== deviceId)
+    const peers = devices.filter(
+      (entry) =>
+        entry.type === 'dir' &&
+        entry.name !== deviceId &&
+        !(this.meta?.revokedDevices ?? []).includes(entry.name)
+    )
     result.peers = peers.length
     for (const peer of peers) {
       await this.pullCheckpoint(peer.name, result)
@@ -435,6 +507,193 @@ export class SyncEngine {
            ON CONFLICT(device_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`
         )
         .run(peer, localIso())
+    }
+  }
+
+  /* ------------------------------ 设备管理（S3） ------------------------------ */
+
+  /** 更新 meta.json（先把新内容推上去，再更新本地缓存/内存） */
+  private async putMeta(meta: MetaFile, message: string): Promise<void> {
+    const content = Buffer.from(JSON.stringify(meta, null, 2), 'utf8')
+    await this.putFileSafe('meta.json', content, message)
+    this.meta = meta
+  }
+
+  /** 设备列表：本机 + 远端 devices/ 下的设备（名称来自 info.json.age，解密失败退回本地表） */
+  async listDevices(): Promise<SyncDeviceInfo[]> {
+    if (!this.meta) await this.connect()
+    const meta = this.meta ?? (await this.refreshMeta())
+    const revoked = new Set(meta.revokedDevices ?? [])
+    const state = getSyncState()
+    const out: SyncDeviceInfo[] = [
+      {
+        id: state.deviceId,
+        name: state.deviceName,
+        lastSeenAt: localIso(),
+        isCurrent: true,
+        revoked: false
+      }
+    ]
+
+    let dirs: { name: string; type: string }[] = []
+    try {
+      dirs = await this.client.listDir('devices')
+    } catch (error) {
+      if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+    }
+    for (const dir of dirs) {
+      if (dir.type !== 'dir' || dir.name === state.deviceId) continue
+      let name: string | null = null
+      let lastSeenAt: string | null = null
+      const infoPath = `devices/${dir.name}/info.json.age`
+      try {
+        const file = await this.client.getFile(infoPath)
+        if (file.content) {
+          const envelope = await decryptEnvelope<{ name?: string; lastSeenAt?: string }>(
+            file.content,
+            this.settings.passphrase,
+            { kind: 'info', path: infoPath }
+          )
+          name = envelope.payload.name ?? null
+          lastSeenAt = envelope.payload.lastSeenAt ?? null
+        }
+      } catch {
+        /* 没 info 或解不开：退回本地表 */
+      }
+      if (!name || !lastSeenAt) {
+        const row = getDb()
+          .prepare('SELECT name, last_seen_at FROM sync_devices WHERE device_id = ?')
+          .get(dir.name) as { name: string | null; last_seen_at: string | null } | undefined
+        name = name ?? row?.name ?? null
+        lastSeenAt = lastSeenAt ?? row?.last_seen_at ?? null
+      }
+      out.push({ id: dir.name, name, lastSeenAt, isCurrent: false, revoked: revoked.has(dir.name) })
+    }
+    // 已移除、远端目录也删掉的设备也列出来（标成「已移除」）
+    for (const id of revoked) {
+      if (!out.some((device) => device.id === id)) {
+        out.push({ id, name: null, lastSeenAt: null, isCurrent: false, revoked: true })
+      }
+    }
+    return out
+  }
+
+  /** 移除其它设备：远端目录删除 + 写进 meta.revokedDevices（它自己下次同步会被拒绝） */
+  async removeDevice(deviceId: string): Promise<void> {
+    const state = getSyncState()
+    if (!deviceId || deviceId === state.deviceId) {
+      throw new SyncSetupError('bad_input', '不能移除本机')
+    }
+    if (!this.meta) await this.connect()
+    const meta = this.meta ?? (await this.refreshMeta())
+    const revoked = [...new Set([...(meta.revokedDevices ?? []), deviceId])]
+    await this.putMeta({ ...meta, revokedDevices: revoked }, `sync: remove ${deviceId.slice(0, 6)}`)
+    await this.deleteDeviceFiles(deviceId)
+    getDb().prepare('DELETE FROM sync_files WHERE path LIKE ?').run(`devices/${deviceId}/%`)
+    getDb().prepare('DELETE FROM sync_devices WHERE device_id = ?').run(deviceId)
+  }
+
+  /** 删掉一个设备在远端的所有文件（checkpoint / info / ops/*） */
+  private async deleteDeviceFiles(deviceId: string): Promise<void> {
+    const root = `devices/${deviceId}`
+    const files: { path: string; sha: string }[] = []
+    let entries: { name: string; path: string; sha: string; type: string }[] = []
+    try {
+      entries = await this.client.listDir(root)
+    } catch (error) {
+      if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+    }
+    for (const entry of entries) {
+      if (entry.type === 'file') {
+        files.push({ path: entry.path, sha: entry.sha })
+        continue
+      }
+      if (entry.type !== 'dir') continue
+      try {
+        const children = await this.client.listDir(entry.path)
+        for (const child of children) {
+          if (child.type === 'file') files.push({ path: child.path, sha: child.sha })
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    for (const file of files) {
+      try {
+        await this.client.deleteFile(file.path, file.sha, `sync: remove ${deviceId.slice(0, 6)}`)
+      } catch (error) {
+        if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      }
+      getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(file.path)
+    }
+  }
+
+  /**
+   * 换密码（危险操作）：用新口令重写本机 checkpoint → 更新 meta → 删掉其它设备目录。
+   * 其它设备下次同步会因为 meta 校验不通过而报「密码不对」，需要用户输入新密码重新连接。
+   */
+  async changePassphrase(newPassphrase: string): Promise<void> {
+    if (!newPassphrase) throw new SyncSetupError('bad_input', '同步密码不能为空')
+    if (!this.meta) await this.connect()
+    const meta = this.meta ?? (await this.refreshMeta())
+    const state = getSyncState()
+
+    const checkpointPath = `devices/${state.deviceId}/checkpoint.json.age`
+    const checkpoint = exportCheckpoint('checkpoint')
+    const file = await encryptEnvelope(
+      {
+        formatVersion: SYNC_FORMAT_VERSION,
+        kind: 'checkpoint',
+        path: checkpointPath,
+        deviceId: state.deviceId,
+        createdAt: checkpoint.createdAt
+      },
+      checkpoint,
+      newPassphrase,
+      this.workFactor
+    )
+    await this.putFileSafe(checkpointPath, file, `sync: ${state.deviceId.slice(0, 6)} checkpoint`)
+    getDb().prepare("UPDATE sync_ops SET pushed = 1 WHERE origin = 'local'").run()
+    await this.pruneOwnOps(state.deviceId)
+
+    const salt = makeSalt()
+    const next: MetaFile = {
+      ...meta,
+      salt,
+      kdfVerifier: kdfVerifier(newPassphrase, salt),
+      revokedDevices: meta.revokedDevices ?? []
+    }
+    await this.putMeta(next, 'sync: change passphrase')
+
+    // 其它设备的数据是旧口令加密的，换完后谁也读不了：直接删掉，让它们重新连接后重推
+    let dirs: { name: string; type: string }[] = []
+    try {
+      dirs = await this.client.listDir('devices')
+    } catch {
+      /* ignore */
+    }
+    for (const dir of dirs) {
+      if (dir.type === 'dir' && dir.name !== state.deviceId) await this.deleteDeviceFiles(dir.name)
+    }
+  }
+
+  /** checkpoint 覆盖全部历史之后，本机的 op 分片就是冗余的（S3 压缩） */
+  private async pruneOwnOps(deviceId: string): Promise<void> {
+    const root = `devices/${deviceId}/ops`
+    let files: { path: string; sha: string }[] = []
+    try {
+      files = (await this.client.listDir(root)) as unknown as { path: string; sha: string }[]
+    } catch (error) {
+      if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      return
+    }
+    for (const file of files) {
+      try {
+        await this.client.deleteFile(file.path, file.sha, `sync: compact ${deviceId.slice(0, 6)}`)
+      } catch (error) {
+        if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      }
+      getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(file.path)
     }
   }
 }

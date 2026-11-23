@@ -128,7 +128,12 @@ const api: WordmemoApi = {
     disconnect: () => ipcRenderer.invoke('sync:disconnect'),
     now: () => ipcRenderer.invoke('sync:now'),
     export: () => ipcRenderer.invoke('sync:export'),
-    import: () => ipcRenderer.invoke('sync:import')
+    import: () => ipcRenderer.invoke('sync:import'),
+    devices: () => ipcRenderer.invoke('sync:devices'),
+    removeDevice: (deviceId: string) => ipcRenderer.invoke('sync:removeDevice', deviceId),
+    changePassphrase: (passphrase: string) =>
+      ipcRenderer.invoke('sync:changePassphrase', passphrase),
+    log: () => ipcRenderer.invoke('sync:log')
   },
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),

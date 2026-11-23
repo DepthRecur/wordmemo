@@ -194,6 +194,21 @@ CREATE TABLE IF NOT EXISTS sync_devices (
   last_checkpoint_at TEXT
 );
 
+-- 同步日志（S3/S4）：最近 20 次，设置页展示；不记录任何内容明文
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  pushed_ops INTEGER NOT NULL DEFAULT 0,
+  pushed_checkpoint INTEGER NOT NULL DEFAULT 0,
+  peers INTEGER NOT NULL DEFAULT 0,
+  pulled_checkpoints INTEGER NOT NULL DEFAULT 0,
+  pulled_ops_files INTEGER NOT NULL DEFAULT 0,
+  applied_ops INTEGER NOT NULL DEFAULT 0,
+  ok INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT
+);
+
 CREATE TABLE IF NOT EXISTS pronunciations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   word_norm TEXT NOT NULL,

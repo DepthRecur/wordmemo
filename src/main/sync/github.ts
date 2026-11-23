@@ -54,6 +54,8 @@ export interface RepoInfo {
   private: boolean
   defaultBranch: string
   permissions: { push?: boolean; admin?: boolean } | null
+  /** GitHub 给的仓库体积（KB），S4 用来提醒 > 200 MB */
+  sizeKb: number | null
 }
 
 export interface DirEntry {
@@ -201,11 +203,13 @@ export class GitHubClient {
       private: boolean
       default_branch: string
       permissions?: { push?: boolean; admin?: boolean }
+      size?: number
     }>(this.repoPath())
     return {
       private: data.private,
       defaultBranch: data.default_branch,
-      permissions: data.permissions ?? null
+      permissions: data.permissions ?? null,
+      sizeKb: typeof data.size === 'number' ? data.size : null
     }
   }
 

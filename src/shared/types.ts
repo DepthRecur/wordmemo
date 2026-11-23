@@ -457,6 +457,32 @@ export interface SyncStatus {
   lastPushAt: string | null
   lastPullAt: string | null
   rateLimitRemaining: number | null
+  /** 远端仓库体积（KB；GitHub 的 size 字段），超过 200 MB 时界面提醒 */
+  repoSizeKb: number | null
+}
+
+/** 设备列表的一项（本机 + 远端见过的设备） */
+export interface SyncDeviceInfo {
+  id: string
+  name: string | null
+  lastSeenAt: string | null
+  isCurrent: boolean
+  /** 已被移除：不再拉取，它自己下次同步会被拒绝 */
+  revoked: boolean
+}
+
+/** 同步日志一项（不含任何内容明文） */
+export interface SyncLogEntry {
+  at: string
+  durationMs: number
+  pushedOps: number
+  pushedCheckpoint: boolean
+  peers: number
+  pulledCheckpoints: number
+  pulledOpsFiles: number
+  appliedOps: number
+  ok: boolean
+  errorCode: string | null
 }
 
 export interface SyncConnectInput {
@@ -844,6 +870,14 @@ export interface WordmemoApi {
     export(): Promise<SyncActionResult & { path: string | null }>
     /** 导入加密快照（合并，不覆盖） */
     import(): Promise<SyncImportResult>
+    /** 设备列表（本机 + 远端见过的设备） */
+    devices(): Promise<SyncDeviceInfo[]>
+    /** 移除其它设备：远端目录删掉，并把它列进 meta.revokedDevices */
+    removeDevice(deviceId: string): Promise<SyncActionResult>
+    /** 更换同步密码：本机重新加密并重推，其它设备需要用新密码重新连接 */
+    changePassphrase(passphrase: string): Promise<SyncActionResult>
+    /** 最近 20 次同步记录 */
+    log(): Promise<SyncLogEntry[]>
   }
   system: {
     openDataDir(): Promise<void>
