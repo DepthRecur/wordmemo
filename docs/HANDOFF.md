@@ -362,10 +362,12 @@ docs/               ← 四份计划 + 调研 + 本文件
 改任何用户可见文案前先读 docs/MESSAGES.md。
 
 当前状态（2026-11-23）：多供应商（冻结）、多个库、便携版 U0–U3 + 真机验收 + 真实发布（0.5.1）全部完结。
-typecheck 0 错误、npm test 17 文件 188 项全绿、npm run build 通过；GitHub 仓库已公开，`v0.5.0`/`v0.5.1` 已发 Release。
+typecheck 0 错误、npm test 18 文件 191 项全绿；GitHub 仓库已公开，`v0.5.0`/`v0.5.1` 已发 Release。
 **便携版板块不再改**（B/C 不再测试；更新失败靠用户自己下 zip 兜底）。
-下一步：从 master 开 feat/sync，做同步 S0：加 uid（先备份）、写入口统一 withSync、抽 replayCards()、golden test。
-S0 不通过就别往下做：3 天内做不到「真实库重放 0 差异」就退回「以 cards 为准 + 冲突副本」。
+同步：分支 `feat/sync` 已开，S0 第一步（重放）**判据通过**——`replayCard()` 在真实写入口造出的轨迹上与库里那张卡逐字段相等，
+`enableFuzz` 必须关（否则重放不收敛），细节见 PLAN-SYNC §10「S0 第一步」。
+下一步（接着 S0）：给 notes/items/reviews/exams 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2→3，
+写入口统一 `withSync` + `sync_ops` 表，`cardFlag` 事件单独同步。
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
@@ -377,7 +379,7 @@ S0 不通过就别往下做：3 天内做不到「真实库重放 0 差异」就
 
 S0 的关键点（详见 PLAN-SYNC §3.2/§3.3/§5）：
 - 加 uid 是 schema 变更：先 backupBeforeMigrate、升 SCHEMA_VERSION；迁移只加不删。
-- 变更捕获不靠触发器，靠写入口统一走 withSync；replayCards() 必须能复现现有 cards。
+- 变更捕获不靠触发器，靠写入口统一走 withSync；replayCards() 必须能复现现有 cards。**（2026-11-23：重放已通过，见 PLAN-SYNC §10；fuzz 必须关。）**
 - 同步 op 用 ts_utc（epoch ms），due_at 保持本地时间；本地 localIso() 不能跨设备比较。
 - 先只在本机验证（两个 WORDMEMO_DATA_DIR 造两台设备），不连网、不写远端。
 - 考试模式、buried、learn_mark 是重放最难对齐的位置，先列出来逐个处理。

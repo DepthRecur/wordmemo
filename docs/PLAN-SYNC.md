@@ -367,3 +367,33 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 - 不做 Gitee / 自建 Git 托管（结构上支持，但配置项先只暴露 GitHub；`apiBase` 已留口子）。
 - **不做附件同步——永久不做**（图片/docx 原件、TTS 缓存、AI 缓存都不传；`import_drafts` 也不传）。
 - 不做"云端备份托管"（那是服务器，违背前提）。
+
+---
+
+## 10. 实现记录
+
+### S0 第一步：重放（2026-11-23，`feat/sync`，**判据通过**）
+
+PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == 真实卡片」，就退回「以 cards 为准 + 冲突副本」。**这一步现在有结论了：重放成立。**
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `src/main/fsrs.ts`：`replayCard(reviews, cardId?)` | 从复习记录重放卡片状态；只用长期调度器（因为 `applyReview` 今天不看 `mode`） |
+| `src/main/fsrs.ts`：`enableFuzz: false` | **这条是前提**：开 fuzz 时间隔带 ±5% 随机抖动，两台设备重放同一串复习会得出不同 `due_at`，「cards 是 reviews 的函数」不成立 |
+| `src/main/db/cards.ts`：`applyReview(input, now = new Date())` | 可选时钟，测试用来钉时间；生产不传，行为不变 |
+| `tests/replay.test.ts`（新，3 项） | 走真实写入口（`createNote` → `upsertItem` → `applyReview`）造轨迹，再和库里那张卡逐字段比 |
+
+**golden test 覆盖的轨迹**：学习步骤（3 → 3，间隔 10 分钟）→ 隔天忘了（2）→ 重来（3）→ 考试模式（4，这里验证「mode 不影响调度」）→ 两周后完全忘（1）→ 当天重学（3）。结果：`due_at` / `state` / `reps` / `lapses` / `stability` / `difficulty` / `fsrs_json` **全部相等**；连跑三次逐字节一致。
+
+**两个必须记住的坑**
+
+1. `newCard()` 每次生成随机 `cardId`（ts-fsrs 内部的 uuid），它会出现在 `fsrs_json` 里。重放时要么沿用原卡的 `cardId`（`replayCard(reviews, cardId)`），要么比较时忽略该字段——否则「只差一个 uuid」会被当成重放不成立。
+2. `reviews.reviewed_at` 只存到秒（`localIso`），而生产时钟带毫秒。早复习（还没到期就点）时这点差别会放大到几秒，所以**合并后本地那张卡的 `due_at` 会挪动几秒**。收敛性不受影响（每台设备从同一批记录重放得出同一结果），`due_at` 也只用于排序/到期判断，接受。
+
+**还没做的 S0 部分**（下一步直接接着做）
+
+- `notes` / `items` / `reviews` / `exams` 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2 → 3（`backupBeforeMigrate` 会自动备份）。
+- 写入口统一 `withSync(entity, uid, fields, fn)` 与 `sync_ops` 表（§3.4）。
+- `cards` 的手动状态（`suspended` / `learn_mark` / `buried_until` / `needs_check`）作为 `cardFlag` 事件，不参与重放。
