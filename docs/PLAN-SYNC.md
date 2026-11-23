@@ -603,3 +603,51 @@ S0 之前的旧卡片标志不被快照默认值清掉 → 格式版本错误与
 - **推送队列的确认**（`markPushed`）：没有推送就没有「推到哪」，等 S2 的传输层。
 - **IPC / 界面**：`sync:export` / `sync:import` 的按钮和文案在 S2；S1 只有库函数与测试。
 
+### S2 第一步：加密边界（2026-11-23，`feat/sync`）
+
+新增依赖 **`age-encryption@0.3.1`**（typage，BSD-3，只依赖 `@noble/*`）——已确认可以加。
+
+**文件格式**（`.wmsync` 与远端分片共用）：
+
+```
+WORDMEMO-SYNC 1\n          ← 明文魔数，只用来快速识别「是不是我们的文件」
+<age 密文>                  ← 密文里是 { header, payload }
+header = { formatVersion, kind, path, deviceId, createdAt }
+```
+
+- **路径/类型/版本都放在密文里**：age 没有 AAD，解密后必须校验 `path` 与 `kind` 与预期一致，
+  所以「把 A 的文件改名成 B」会被拒绝（`sync/crypto.ts`）。
+- 口令错与文件损坏在 age 层无法区分，统一报「同步密码不对，或者文件已经损坏」。
+- **`kdfVerifier`**：`scrypt(passphrase, salt)` 的前 16 字节（N=2^15），常量时间比较；
+  salt 16 字节随机 hex。`meta.json`（明文）只放 `{ formatVersion, salt, kdfVerifier, createdAt }`。
+- **口令规则**：至少 10 字符、常见弱口令表直接拒绝、强度分 0–4；「帮我生成」= 5 个词（约 130 词表）。
+- **work factor**：生产默认 18；测试传 12 加速。加密参数写在 age 文件头里，解密不需要知道 work factor。
+- `checkpoint.ts` 增加 `exportEncryptedSnapshot` / `importEncryptedSnapshot`（S1 的合并逻辑原样复用）。
+
+**测试**：`tests/crypto.test.ts`（11 项：加解密往返、口令错、密文被改、路径/类型/版本不符、
+空口令、强度与生成、`kdfVerifier`）+ `tests/snapshot-crypto.test.ts`（1 项：加密导出 → 另一台设备导入、
+**明文里不含标题/单词**、口令错拒绝且不动库、重复导入幂等）。
+
+### S2 第二步：GitHub 客户端（2026-11-23，`feat/sync`）
+
+`src/main/sync/github.ts`：只做「这个仓库里读写文件」，不碰同步语义。
+
+| 能力 | 说明 |
+|---|---|
+| `getRepo` / `getUser` | 连接校验：仓库存在、`private === true`、有 push 权限、PAT 属于谁 |
+| `getFile(path, etag)` | 条件请求（`If-None-Match`），304 不占配额、返回 `status: 304` |
+| `putFile` / `deleteFile` | Contents API；带 `sha` 表示更新 |
+| `putLargeFile` | >1 MB 走 Git Data：blob → tree（`base_tree`）→ commit → 移动 ref；空仓库自动建首个 ref |
+| `listDir` | `devices/` 下列设备 |
+| 错误归一 | 401→`pat_invalid`、403（配额 0）→`rate_limited`、403→`forbidden`、404→`not_found`、409/422→`conflict`、429→`rate_limited`、5xx→`server_error`、网络/超时单独分 |
+| 配额 | 记录 `x-ratelimit-remaining` / `reset`（S3 的降级策略会用） |
+
+**安全**：token 只在 `Authorization` 头里，不进错误信息、不进日志（测试专门断言错误文案里没有 token）。
+
+**测试**：`tests/github-client.test.ts`（15 项，本地 `http.createServer` mock，不连真网）——
+认证头、base64 解码、304、PUT/DELETE、Git Data 全链路、八种错误码、连接失败与超时。
+
+**真仓库**：已按用户授权在 `DepthRecur` 账号下建好 **`DepthRecur/wordmemo-sync-test`**（private、空仓库）。
+它**还没被任何测试碰过**——真仓库 e2e 要等 S2 的传输层接上、并且把 PAT 配进应用（或手动脚本）再跑，
+且只在手动执行，不进常规 CI。
+
