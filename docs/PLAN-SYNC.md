@@ -706,3 +706,41 @@ token 后跑，不会打印 token）。在 **`DepthRecur/wordmemo-sync-test`** �
 `meta.json`（明文，只有 salt/kdfVerifier）与 `devices/<id>/{checkpoint,info,ops}` 的 age 密文。
 这条测试只在手动跑，不进常规 CI。
 
+### S2 第五步：safeStorage、调度与界面（2026-11-23，待手动验收）
+
+**密钥存储**（`src/main/sync/secretStore.ts`）：PAT 与同步口令只写
+`<userData>/sync-secrets.bin`（整份 `safeStorage` 加密；不可用时与 AI Key 一样退化为 base64）。
+`settings.json` 的 `sync` 只有 `{ enabled, owner, repo, apiBase, intervalMin }`，**没有任何密钥**。
+
+**调度**（`src/main/sync/scheduler.ts`，7 项假定时器测试）：
+
+- 启动 60 秒后拉一次；写操作 debounce 30 秒；两次自动同步至少隔 60 秒；
+- 成功后按 `intervalMin`（0/5/10/30/60，0 = 只手动）；失败退避 1→5→15→60 分钟封顶；
+- 所有自动触发 ±20% 抖动；`dispose()` 停掉；手动「立即同步」不受限。
+
+**管理器**（`src/main/sync/manager.ts`）：
+
+- `connect`：校验 PAT/仓库/口令 → 保存密钥与设置 → 立即首次同步（首同步失败不回滚连接）；
+- 状态：`disconnected / idle / syncing / error`，带上次成功、待上传条数、设备 id/名称、错误码；
+- 退出前 `flushBeforeQuit(3000)` 尽力推一次（`before-quit` 只拦一次，防死循环）；
+- `onSyncOpWritten`：本地写入触发 `markDirty()`；合并写回的 remote op 不触发。
+
+**界面**（设置页新增「同步」一节，`src/renderer/src/components/SyncPanel.tsx`）：
+
+- 未连接：仓库（owner/repo）、PAT、同步密码（强度条 + 「帮我生成」）、自动同步间隔、「测试并首次同步」；
+- 已连接：仓库/状态/上次成功/待上传/设备、立即同步、导出加密快照、导入加密快照（合并）、断开连接；
+- 文案级别按 MESSAGES：未连接与「已取消」是提示；PAT 失效、口令错、文件损坏、格式不符、连接失败是错误；
+  「上次同步失败」用红色，不弹窗；密码页明确写「忘了这串密码，云上的数据谁也解不开」。
+
+**IPC / preload**：`sync:status|connect|disconnect|now|export|import`，事件 `sync:event`；
+导出/导入用系统文件对话框。
+
+**冒烟**：用临时 `WORDMEMO_DATA_DIR` 启动构建后的应用 → 托盘正常、`diagnostics.log` 无错误；
+CDP 打开「设置 → 同步」→ 表单渲染完整、控制台 0 错误（截图 `.data/shots/sync-panel.png`）。
+
+**测试**：`tests/sync-scheduler.test.ts`（7 项）、`tests/sync-secrets.test.ts`（3 项）；
+`npm test` **32 文件 / 270 项通过 + 2 份手动测试跳过**；`npm run build` 通过。
+
+**手动验收准备**：`DepthRecur/wordmemo-sync-test` 已清空（原有 e2e 数据用的是固定测试口令），
+你可以在设置页自选同步密码；两台设备用同一仓库、同一密码即可。
+
