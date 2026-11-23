@@ -82,14 +82,14 @@ export function recordSyncOp(meta: SyncMeta): void {
       meta.origin ?? 'local',
       Math.trunc(meta.tsUtc ?? Date.now())
     )
-  if (op === 'delete') rememberTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now())
+  if (op === 'delete') recordTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now())
 }
 
 /**
  * 删除的影子（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要能比 ts，
- * 同一 uid 只保留最新的那次删除。
+ * 同一 uid 只保留最新的那次删除。合并远端快照时也用它落影子。
  */
-function rememberTombstone(entity: SyncEntity, uid: string, tsUtc: number): void {
+export function recordTombstone(entity: SyncEntity, uid: string, tsUtc: number): void {
   getDb()
     .prepare(
       `INSERT INTO sync_tombstones (entity, uid, ts_utc) VALUES (?, ?, ?)

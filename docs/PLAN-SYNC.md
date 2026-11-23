@@ -548,3 +548,60 @@ S1 开工前确认了两个会定死传输格式的决定（2026-11-23）：
 
 **验证**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 214 项通过 + 1 份手动测试跳过**。
 
+### S1 第二步：快照与合并引擎（2026-11-23，`feat/sync`）
+
+新文件 `src/main/db/checkpoint.ts`：导出全量快照、校验、合并（`.wmsync` 的读写边界就在这里；
+S2 只在这条边界上加 age，合并逻辑不动）。
+
+**快照格式（formatVersion = 1）**
+
+```json
+{
+  "formatVersion": 1, "kind": "wmsync", "createdAt": "...", "createdAtMs": 1763...,
+  "deviceId": "ULID", "deviceName": "…", "counts": {...},
+  "tombstones": [...],
+  "decks": [...], "notes": [...], "items": [...], "reviews": [...],
+  "exams": [...], "noteItems": [...], "cardFlags": [...]
+}
+```
+
+- 整份快照共用一个 `createdAtMs` 作为**合并时间**；跨设备的引用全是 uid（`deckUid` / `cardUid` / `noteUid+itemUid`）。
+- `cardFlags` 导出所有卡片（包括四个字段都是默认值的）：全量快照里「没带」和「是 0」必须能区分，
+  否则一台取消挂起、另一台导入时清不掉。
+- `tombstones` 一起导出，删除才能随快照传播。
+
+**合并规则**
+
+| 数据 | 规则 |
+|---|---|
+| 标量字段（notes/items/exams/decks/cardFlags） | **字段级 LWW**。每个字段的最后修改时间从 `sync_ops` 推出来（`clockFor`），没有 op 的老行退回 `created_at` / `updated_at` |
+| items 的 `meanings` / `collocations` / `examples` / `accepted_zh` | **并集**（§3.9），不按时间覆盖 |
+| `items.learned_at` | 取最早的非空值 |
+| `reviews` | 按 uid 并集（不可变）；合并后**重放**受影响卡片（`replayCard`） |
+| `noteItems` | 按（note uid, item uid）并集，doc 位置/原文取更新的 |
+| `cardFlags` | 字段级 LWW；本机缺这张卡时先建卡（听写方向不会被 `ensureCards` 建出来）。**没有字段时钟的本地非默认值优先**：S0 之前设置过、之后没改过的挂起/标志，不会被一次导入悄悄清掉 |
+| 删除 | `tombstones`：删除比更早的 upsert 优先；快照里同 uid 的记录比删除更新 → 复活 |
+| 同名库 / 同词不同 uid | 唯一键只允许一条 → 合并进本机那条，并在 `sync_aliases` 记「远端 uid → 本机 uid」（S3 再做真正的词条归并） |
+
+**两条关键设计**
+
+1. **合并回来的 op 标 `origin: 'remote:<deviceId>'`**：不进推送队列（防回声），但会成为
+   **下一次合并的字段时钟**——所以同一份快照导入 10 次，第 2 次开始不再产生任何变化（幂等）。
+2. **`sync_aliases` 不是 S3 才需要**：两台设备各自建过「默认库」，uid 必然不同；没有别名表，
+   A 的笔记导进 B 会掉进「未归类」。表用 `CREATE TABLE IF NOT EXISTS`，老库打开时自动补上。
+
+**测试**：`tests/snapshot.test.ts`（新，8 项）——两台「设备」（两个库文件）走完整验收：
+A 造数据（库/笔记/词条/复习/听写方向/考试）→ 导出 → B 导入（含别名、关联、重放、建听写卡）→
+B 改标题/补释义/标记已学/再复习 → 导出 → A 导入（字段 LWW、数组并集、复习并集、reps=2）→
+**重复导入 10 次指纹与队列长度都不变** → A 删笔记导出 → B 导入后笔记/词条/复习/卡片全清 →
+S0 之前的旧卡片标志不被快照默认值清掉 → 格式版本错误与坏文件明确拒绝且不动库。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **24 文件 / 222 项通过 + 1 份手动测试跳过**；
+两份真实库副本重新跑 v4 迁移仍然通过（`SCHEMA_VERSION` 已在 S1 第一步升到 4）。
+
+**S1 明确没做**（都归 S2/S3，别误以为漏了）
+
+- **逐条 op 的合并**：S1 的合并单位是「快照里的记录」；S2 拿到远端增量后，把 op 当单字段更新喂给同一套时钟即可，但入口还没写。
+- **推送队列的确认**（`markPushed`）：没有推送就没有「推到哪」，等 S2 的传输层。
+- **IPC / 界面**：`sync:export` / `sync:import` 的按钮和文案在 S2；S1 只有库函数与测试。
+

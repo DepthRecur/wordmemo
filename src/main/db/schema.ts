@@ -158,6 +158,15 @@ CREATE TABLE IF NOT EXISTS sync_tombstones (
   PRIMARY KEY (entity, uid)
 );
 
+-- 同一条数据在两台设备上可能 uid 不同（同名库、同词不同 uid）：记住「远端 uid → 本机 uid」。
+-- 没有它，另一台设备的笔记/复习会指向本机不存在的 uid（PLAN-SYNC §3.2 的映射表）。
+CREATE TABLE IF NOT EXISTS sync_aliases (
+  entity TEXT NOT NULL,
+  remote_uid TEXT NOT NULL,
+  local_uid TEXT NOT NULL,
+  PRIMARY KEY (entity, remote_uid)
+);
+
 -- 本机的同步状态（单行）：设备 id 只在本机，不上传（§3.9 的 settings 白名单排除它）
 CREATE TABLE IF NOT EXISTS sync_state (
   id INTEGER PRIMARY KEY CHECK (id = 1),
