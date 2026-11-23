@@ -107,8 +107,11 @@ describe('replayCards：卡片状态 = 复习记录的函数', () => {
 
   it('生产时钟（带毫秒）下重放只差亚秒级，不改变任何整数状态', () => {
     const card = makeCard('wallclock', 'wallclock')
-    applyReview(review(card.id, 3))
-    applyReview(review(card.id, 3))
+    // 显式给一个带毫秒的时钟：仍然验证「生产时钟带毫秒、reviews 只存到秒」这件事，
+    // 但两次复习不再各自取当前时间——并行跑测试时它们可能跨过整秒，导致这个用例偶发失败。
+    const now = new Date('2026-11-23T10:00:00.456')
+    applyReview(review(card.id, 3), now)
+    applyReview(review(card.id, 3), new Date(now.getTime() + 10 * 60_000))
 
     const row = getCardRow(card.id)!
     const replayed = replayCard(reviewsOf(card.id), JSON.parse(row.fsrs_json).cardId)
