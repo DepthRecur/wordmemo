@@ -10,15 +10,17 @@
 ## 0. 一句话现状
 
 前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`）。
-同步的 **S0（数据模型 + 重放）和 S1（本地队列 + 快照）都已做完并验收**：uid 迁移（v2→v4）、
-`sync_ops` + `withSync`、`cardFlag`、`deck` / `noteItem` 事件、checkpoint 与合并引擎（tombstone、别表、重放）
-都在 `feat/sync`（**`master` 还没有**，已发布的 0.5.1 不含它们）。
-下一步是 **S2（加密与传输）**——第一个会连网、会出现在界面上的阶段；开工前先看 §3 末尾的待确认项。
+同步的 **S0 / S1 已完成**（uid 迁移 v2→v4、`sync_ops` + `withSync`、`cardFlag`、`deck`/`noteItem`、
+checkpoint 与合并引擎）；**S2 已过大半**：age 加密边界、GitHub 客户端、逐条 op 合并、传输引擎、
+**真仓库 e2e**（`DepthRecur/wordmemo-sync-test`）都跑通了。全部在 `feat/sync`（`master` 还没有）。
 
 - `npm run typecheck` → 0 错误
-- `npm test` → **24 文件 / 222 项通过 + 1 份手动迁移测试跳过**
+- `npm test` → **30 文件 / 260 项通过 + 2 份手动测试跳过**（真实库迁移、真仓库同步）
 - `npm run build` → 通过
-- 工作区干净；S0/S1 的提交都在 `feat/sync`（最新提交以 `git log -1` 为准）
+- 工作区干净；最新提交以 `git log -1` 为准
+
+**S2 还剩**：`safeStorage` 记住口令、IPC + 界面（连接向导 / 状态面板 / 快照按钮）、
+退避与抖动调度器。
 
 ---
 
@@ -29,7 +31,7 @@ cd D:\ymh\Code\tools\wordmemo
 git checkout feat/sync          # 已经在上面
 npm install                     # 只有删过 node_modules 才需要
 npm run typecheck
-npm test                        # 24 文件 222 项通过（+1 份手动迁移测试跳过）
+npm test                        # 30 文件 260 项通过（+2 份手动测试跳过）
 npm run build
 npm run dev                     # 开发模式（脚本自带 --noSandbox）
 ```
@@ -75,7 +77,7 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 ---
 
-## 3. S1 已完成，下一步 S2
+## 3. S0/S1 已完成，S2 进行中
 
 S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验收**，记录在 [PLAN-SYNC.md](PLAN-SYNC.md) §10。
 必须记住的结论：
@@ -90,22 +92,28 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 5. **同名库 / 同词不同 uid 走 `sync_aliases`**：两台设备各自的「默认库」uid 必然不同，
    没有这张表笔记会掉进「未归类」。
 
-### 下一步：S2（加密与传输）
+### S2 进展（2026-11-23）
 
-按 PLAN-SYNC §5 / §3.5–§3.8：
+| 块 | 位置 | 状态 |
+|---|---|---|
+| age 加密边界、口令强度、`kdfVerifier` | `src/main/sync/crypto.ts`、`db/checkpoint.ts` | 完成 |
+| GitHub 客户端（条件请求 / Contents / Git Data / 错误归一） | `src/main/sync/github.ts` | 完成 |
+| 逐条 op 合并（远端增量） | `db/checkpoint.ts` 的 `applyRemoteOp` | 完成 |
+| 传输引擎（meta / checkpoint / 当天 op 分片 / 拉取顺序 / etag 缓存） | `src/main/sync/engine.ts` | 完成 |
+| 真仓库 e2e（`DepthRecur/wordmemo-sync-test`） | `tests/real-sync.test.ts` + `.data/sync-e2e.ps1` | 通过（约 41 秒） |
 
-- 口令强度 + `kdfVerifier` + `safeStorage`；age 加密（`age-encryption` 包）加在 `checkpoint.ts` 的读写边界上；
-- GitHub 客户端：条件请求、Contents / Git Data 两条路径、PAT 校验、错误归一；
-- 连接向导 + 状态面板 + 退避与抖动；`.wmsync` 导出/导入的界面（库函数已经能用了）；
-- 远端增量：逐条 op 的合并入口（S1 只做了「快照记录」粒度）。
+已确认：**可以新增依赖**（已加 `age-encryption`）；**测试仓库**用 `DepthRecur/wordmemo-sync-test`（已建）。
 
-### S2 开工前必须先确认
+### 下一步：S2 剩余
 
-1. **加密库**：PLAN 定的是 `age-encryption`（typage，BSD-3），要新增依赖；确认可以加。
-2. **测试仓库**：真仓库 e2e 用哪个私有仓库 / PAT（只手动跑，不进 CI）。
-3. **界面范围**：S2 是否一次做完「连接向导 + 状态面板 + 快照按钮」，还是先做设置页里的一块。
+1. **`safeStorage` 记住口令**（DPAPI，本地文件；用户可勾「不记住」）。
+2. **IPC + 界面**：连接向导（仓库 / PAT / 口令三步）、状态面板（上次同步、待上传、错误码）、
+   `.wmsync` 导出/导入按钮。默认按「一次做完」推进（用户还没否定）。
+3. **调度**：启动拉一次、写后 debounce 30 秒、10 分钟定时、失败退避 1→5→15→60 分钟、
+   ±20% 抖动、退出前尽力推一次。
 
-**S2 之前不要写任何请求代码**：先把加密往返、口令校验和错误归一在本机测通。
+界面文案按 [MESSAGES.md](MESSAGES.md) 定级：无 Key / 未连接是正常状态；PAT 失效、口令错、
+文件损坏、格式版本不符都是**错误**（功能不可用）；「上次同步成功时间」这类是提示。
 
 ---
 
@@ -117,9 +125,8 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 | **S3** 冲突与设备管理 | 并集/LWW/tombstone 全规则、`sync_devices` 游标、移除设备、换密码全量重推 | 同一词条两台各加一个释义 → 两个都在；一台改释义一台改音标 → 都保留；一台删一台改 → 按 ts 判定且可解释 |
 | **S4** 打磨与文档 | README「同步」章节（会泄露什么/不会泄露什么）、丢密码说明、错误对照表、体积提示 | 没看过代码的人照文档 10 分钟连上 |
 
-**S2 之前不要写任何网络代码**：先把加密往返、口令校验和错误归一在本机跑通，成本最低。
-
-**S1 之前不要写任何网络代码**：先在本机用两个数据目录把合并跑通，成本最低。
+**S3 之前不要改传输格式**：`meta.json` 的字段、`devices/<id>/` 的路径、op 的字段名一旦改了，
+已经同步过的设备会读到不认识的格式（`formatVersion` 就是为此存在的；要改就升版本并按 §4 拒绝旧端）。
 
 ---
 
@@ -130,7 +137,10 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 | `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 4`；各表 uid、`sync_ops` / `sync_tombstones` / `sync_state` / `sync_aliases` |
 | `src/main/db/connection.ts` | `openDb` / `migrate` / 可重入的 `tx` / `localIso` / `addColumnIfMissing` / `backupBeforeMigrate`；`migrateUids()`（补列 + 回填 + 唯一索引） |
 | `src/main/db/sync.ts` | **同步层入口**：`withSync` / `recordSyncOp` / `pendingSyncOps` / `recordTombstone` / `getSyncState` / uid 映射 / `cardFlagUid` / `noteItemUid` |
-| `src/main/db/checkpoint.ts` | **S1 的快照与合并引擎**：`exportCheckpoint` / `exportSnapshot` / `readCheckpoint` / `importSnapshot` / `mergeCheckpoint`；S2 的 age 加在它的读写边界上 |
+| `src/main/db/checkpoint.ts` | **快照与合并引擎**：`exportCheckpoint` / `mergeCheckpoint` / `applyRemoteOp` / 加密快照；S2 的 age 加在它的读写边界上 |
+| `src/main/sync/crypto.ts` | age 信封（密文里带 path/kind/version）、口令强度、5 词生成、`kdfVerifier` |
+| `src/main/sync/github.ts` | GitHub 客户端：条件请求、Contents / Git Data、错误归一、配额 |
+| `src/main/sync/engine.ts` | **传输引擎**：`connect()` / `syncNow()`、meta 校验、checkpoint 节奏、当天 op 分片、拉取顺序 |
 | `src/main/db/uid.ts` | `newUid()`（ULID），已有，直接用 |
 | `src/main/db/notes.ts` `items.ts` `exams.ts` `cards.ts` | 写入口；uid、`withSync`、卡片标志 `cardFlag`、笔记↔词条 `noteItem` |
 | `src/main/db/decks.ts` | 库也进同步：建/改名/删发 `deck` op；`removeDeck` 连带改笔记归属与考试 scope |
@@ -143,6 +153,11 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 | `tests/uid.test.ts` `tests/sync-ops.test.ts` `tests/card-flag.test.ts` | S0 的三组契约测试：迁移回填、写入口队列、卡片标志 |
 | `tests/sync-relations.test.ts` | S1：deck / noteItem 事件、删除影子、`sync_state`、decks.uid 迁移 |
 | `tests/snapshot.test.ts` | S1 验收：两台「设备」（两个库文件）导出→导入→双向改→对齐、幂等、删除传播、格式版本拒绝 |
+| `tests/crypto.test.ts` `tests/snapshot-crypto.test.ts` | S2 加密：信封、口令错、路径绑定、kdfVerifier、加密 `.wmsync` |
+| `tests/github-client.test.ts` | S2 客户端：条件请求、Contents/Git Data、八种错误码（本地 mock） |
+| `tests/remote-ops.test.ts` | S2 逐条 op 合并：五类实体、LWW、并集、幂等、删除/复活 |
+| `tests/sync-engine.test.ts` | S2 引擎：两台设备对着内存假仓库同步 |
+| `tests/real-sync.test.ts` | 真仓库 e2e（默认跳过；设 `WORDMEMO_SYNC_E2E_TOKEN` 或跑 `.data/sync-e2e.ps1`） |
 | `tests/real-db-migration.test.ts` | 手动迁移验收（默认跳过；设 `WORDMEMO_REAL_DB_COPY` 跑） |
 | `docs/PLAN-SYNC.md` | 方案与实现记录（§3 方案、§5 阶段、§10 记录） |
 
@@ -175,7 +190,15 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
    否则两台设备会对「谁更新」得出不同结论。
 19. **合并顺序是先 tombstone 再记录**：删除优先，但快照里同 uid 的记录比删除新时允许复活。
 20. **`origin: 'remote:*'` 的 op 绝不推送**：`pendingSyncOps()` 已经过滤；别把合并写回当成新变更推回去。
-21. **S1 没做的三件**：逐条 op 的合并入口、`markPushed`、导出/导入的 IPC 与界面——都在 S2。
+21. **S1 没做的三件**：逐条 op 的合并入口、`markPushed`、导出/导入的 IPC 与界面——S2 已补前两件，
+    界面仍是下一步。
+22. **GitHub Contents 路径必须带 `/contents`**：客户端曾经漏了这一段，`meta.json` 一写就 404；
+    `tests/github-client.test.ts` 现在断言完整 URL。
+23. **远端写文件带 `sha`（新建除外）**：sha 从 `sync_files` 缓存拿，不要每次重新 GET；缓存丢了就重新读一次。
+24. **当天 op 分片每次推送都重写**（age 不能追加）：内容取「当天所有本地 op」，不是「未推送的 op」，
+    否则会丢掉当天更早、已经推送过的那批。
+25. **age 的 work factor**：生产 18、测试 12；它只影响加密时的 KDF，解密从文件头读参数。
+26. **`meta.json` 的 salt 与 `kdfVerifier` 必须用同一份盐**：`ensureMeta()` 里一次生成、一次派生。
 
 ---
 
@@ -211,23 +234,20 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 再读 docs/PLAN-SYNC.md 的 §3（方案）、§4（数据与接口变更）、§5（S0–S4）、§10（实现记录）。
 
 现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、
-npm test 24 文件 222 项通过（+1 份手动迁移测试默认跳过）。
-便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0 和 S1 都已完成并验收：
-uid + v2→v4 迁移、sync_ops + withSync、cardFlag、deck/noteItem 事件、checkpoint 与合并引擎
-（tombstone / 别名 / reviews 重放 / 字段级 LWW）都已落地；重放成立（enableFuzz 必须关），
-细节见 PLAN-SYNC §10。
+npm test 30 文件 260 项通过（+2 份手动测试默认跳过：真实库迁移、真仓库同步）。
+便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0、S1 已完成，S2 已过大半：
+uid + v2→v4 迁移、sync_ops + withSync、cardFlag、deck/noteItem、快照合并、
+age 加密（加密库已加）、GitHub 客户端、逐条 op 合并、传输引擎、真仓库 e2e 都已落地。
 
-接着做 S2（加密与传输）。开工前先确认三件事（见 HANDOFF-SYNC §3）：
-1) 加密库用 age-encryption（typage，BSD-3），新增依赖；
-2) 真仓库 e2e 用哪个私有仓库 / PAT；
-3) 界面范围：连接向导 + 状态面板 + 快照按钮一次做完还是先做设置页一块。
+接着做 S2 剩余（见 HANDOFF-SYNC §3）：
+1) safeStorage 记住口令；
+2) IPC + 界面：连接向导（仓库/PAT/口令）、状态面板、.wmsync 导出/导入按钮；
+3) 调度：启动拉一次、写后 debounce 30s、10 分钟定时、失败退避 1→5→15→60 分钟、±20% 抖动。
 
-S2 的内容：口令强度 + kdfVerifier + safeStorage；age 加密加在 checkpoint 的读写边界；
-GitHub 客户端（条件请求、Contents/Git Data、PAT 校验、错误归一）；连接向导 + 状态面板 + 退避；
-逐条 op 的合并入口。验收：真私有仓库两台设备自动同步；仓库文件改坏 → 报「文件损坏」；
-PAT 撤销 → 报「PAT 失效」；断网 10 分钟恢复后自动补上。
+验收：两台设备自动同步；仓库文件改坏 → 报「文件损坏」；PAT 撤销 → 报「PAT 失效」；
+断网 10 分钟恢复后自动补上。界面文案按 docs/MESSAGES.md 定级。
 
-硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
+硬约束见 HANDOFF-SYNC §8。
 每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
 ```
 
@@ -236,13 +256,14 @@ PAT 撤销 → 报「PAT 失效」；断网 10 分钟恢复后自动补上。
 ## 10. 交接自检（新会话花两分钟确认）
 
 - [ ] `git branch --show-current` → `feat/sync`
-- [ ] `npm test` → 24 文件 222 项通过（另 1 份手动迁移测试跳过）
+- [ ] `npm test` → 30 文件 260 项通过（另 2 份手动测试跳过）
 - [ ] `npm run typecheck` → 0 错误
-- [ ] `git log --oneline -8` → 能看到 `feat(sync): export and merge snapshots`、
-      `feat(sync): sync decks and note-item links`、`feat(sync): sync card flags as events`、
-      `feat(sync): record writes in sync_ops`、`feat(sync): give synced tables a uid`
+- [ ] `git log --oneline -8` → 能看到 `feat(sync): push and pull between two devices`、
+      `feat(sync): merge remote ops one by one`、`feat(sync): encrypt sync files with age`、
+      `feat(sync): add a GitHub client`、`feat(sync): export and merge snapshots`
 - [ ] `grep -n "enableFuzz" src/main/fsrs.ts` → 必须是 `false`
 - [ ] `grep -n "withSync" src/main/db/sync.ts src/main/db/notes.ts` → 都在
-- [ ] `grep -n "mergeCheckpoint" src/main/db/checkpoint.ts` → 在（S1 的合并入口）
-- [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` 四张表
-- [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI），已被 gitignore
+- [ ] `grep -n "mergeCheckpoint\|applyRemoteOp" src/main/db/checkpoint.ts` → 都在
+- [ ] `grep -n "class SyncEngine" src/main/sync/engine.ts` → 在
+- [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` / `sync_files` / `sync_devices`
+- [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`），已被 gitignore
