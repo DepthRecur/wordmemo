@@ -130,6 +130,25 @@ CREATE TABLE IF NOT EXISTS exams (
   created_at TEXT NOT NULL
 );
 
+-- 本地变更队列（PLAN-SYNC §3.4）：每个写入口在**自己那条事务里**追加一行，
+-- 推送端只认这里。新表用 CREATE TABLE IF NOT EXISTS 就够，老库打开时自动补上，
+-- 不需要为它单独提 user_version。
+CREATE TABLE IF NOT EXISTS sync_ops (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 稳定 id：note/item/review/exam 用各自 uid；cardFlag 用「item uid:direction」
+  uid TEXT NOT NULL,
+  entity TEXT NOT NULL,
+  op TEXT NOT NULL,
+  -- JSON：只放变更字段，键用数据库列名，跨设备引用一律换成 uid
+  fields TEXT NOT NULL DEFAULT '{}',
+  -- local = 本机产生（要推送）；remote:<device> = 合并来的（不推回，防回声）
+  origin TEXT NOT NULL DEFAULT 'local',
+  -- epoch ms；跨设备排序/冲突判定只用它，不用本地的 localIso 字符串
+  ts_utc INTEGER NOT NULL,
+  pushed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_sync_ops_pending ON sync_ops(origin, pushed, seq);
+
 CREATE TABLE IF NOT EXISTS pronunciations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   word_norm TEXT NOT NULL,

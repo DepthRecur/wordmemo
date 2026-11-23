@@ -9,6 +9,7 @@ let db: SqliteDatabase | null = null
 
 export function openDb(file: string): SqliteDatabase {
   db = new DatabaseSync(file, { timeout: 8000 })
+  txDepth = 0
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA synchronous = NORMAL')
@@ -300,11 +301,25 @@ export function closeDb(): void {
     /* ignore */
   }
   db = null
+  txDepth = 0
 }
+
+/**
+ * 事务。**可重入**：已经在事务里时直接搭外层那条事务。
+ *
+ * 同步层要求「写操作和它那条 sync_ops 同一条事务」，而写入口会互相调用
+ * （`applyReview` → `addAcceptedZh`、`copyNotes` → 每条笔记的 withSync、
+ * 导入入库 → `createNote` + `upsertItem`）。如果这里一见 BEGIN 就开，
+ * 嵌套调用会直接报 "cannot start a transaction within a transaction"，
+ * 所以内层只身参与外层事务：内层失败由最外层统一 ROLLBACK。
+ */
+let txDepth = 0
 
 export function tx<T>(fn: () => T): T {
   const d = getDb()
+  if (txDepth > 0) return fn()
   d.exec('BEGIN IMMEDIATE')
+  txDepth++
   try {
     const result = fn()
     d.exec('COMMIT')
@@ -316,6 +331,8 @@ export function tx<T>(fn: () => T): T {
       /* ignore */
     }
     throw err
+  } finally {
+    txDepth--
   }
 }
 

@@ -2,6 +2,7 @@ import type { Card, CardDirection, DailyPlan, QueueCard, ReviewMode, SubmitRevie
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { getItem, addAcceptedZh, learnQueue, learnedTodayCount } from './items'
 import { deckInClause, deckNewPerDay, deckScope } from './decks'
+import { cardFlagUid, examUid, itemUid, withSync } from './sync'
 import { newUid } from './uid'
 import { getSettings } from '../settings'
 import { retrievabilityNow, reviewSnapshot } from '../fsrs'
@@ -138,15 +139,20 @@ export function dailyPlan(deckId?: number | null): DailyPlan {
  */
 export function markItemLearned(itemId: number, known: boolean): void {
   const d = getDb()
-  const row = d.prepare('SELECT learned_at FROM items WHERE id = ?').get(itemId) as
-    | { learned_at?: string | null }
+  const row = d.prepare('SELECT uid, learned_at FROM items WHERE id = ?').get(itemId) as
+    | { uid?: string | null; learned_at?: string | null }
     | undefined
   if (!row || row.learned_at) return
 
-  d.prepare('UPDATE items SET learned_at = ? WHERE id = ?').run(localIso(), itemId)
-  d.prepare('UPDATE cards SET needs_check = 1, learn_mark = ? WHERE item_id = ? AND suspended = 0').run(
-    known ? 1 : 0,
-    itemId
+  const learnedAt = localIso()
+  withSync(
+    { entity: 'item', uid: row.uid ?? '', fields: { learned_at: learnedAt } },
+    () => {
+      d.prepare('UPDATE items SET learned_at = ? WHERE id = ?').run(learnedAt, itemId)
+      d.prepare(
+        'UPDATE cards SET needs_check = 1, learn_mark = ? WHERE item_id = ? AND suspended = 0'
+      ).run(known ? 1 : 0, itemId)
+    }
   )
 }
 
@@ -213,46 +219,67 @@ export function applyReview(input: SubmitReview, now: Date = new Date()): Review
   if (!row) throw new Error('卡片不存在')
   const updated = reviewSnapshot(row.fsrs_json, input.rating, now)
   const d = getDb()
-  d.prepare(
-    `UPDATE cards SET due_at = ?, stability = ?, difficulty = ?, reps = ?, lapses = ?, state = ?, last_review = ?, needs_check = 0, fsrs_json = ?
-     WHERE id = ?`
-  ).run(
-    updated.dueAt,
-    updated.stability,
-    updated.difficulty,
-    updated.reps,
-    updated.lapses,
-    updated.state,
-    localIso(now),
-    updated.fsrsJson,
-    input.cardId
-  )
-  // Anki 的 sibling bury：一个词条的一张卡复习后，其他方向今天不再出现
-  const today = localIso(now).slice(0, 10)
-  d.prepare(
-    `UPDATE cards SET buried_until = ? WHERE item_id = ? AND id <> ? AND suspended = 0`
-  ).run(today, toInt(row.item_id), input.cardId)
-  d.prepare(
-    `INSERT INTO reviews (uid, card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).run(
-    newUid(),
-    input.cardId,
-    localIso(now),
-    input.rating,
-    input.answer ?? '',
-    input.correct ? 1 : 0,
-    Math.round(input.elapsedMs ?? 0),
-    input.mode,
-    input.judgeBy,
-    input.examId ?? null
-  )
-
-  if (input.correct && input.judgeBy === 'ai' && input.answer.trim()) {
-    addAcceptedZh(toInt(row.item_id), input.answer.trim())
+  const reviewedAt = localIso(now)
+  const itemUidValue = itemUid(toInt(row.item_id))
+  const reviewUid = newUid()
+  // 复习记录是「事实」：卡片状态由它重放（PLAN-SYNC §3.3），所以 op 里带的也是事实字段。
+  // 卡片本身不传，card_uid 只是「这条记录属于哪张卡」的稳定标识。
+  const reviewFields = {
+    card_uid: itemUidValue ? cardFlagUid(itemUidValue, row.direction) : '',
+    reviewed_at: reviewedAt,
+    rating: input.rating,
+    answer: input.answer ?? '',
+    correct: input.correct ? 1 : 0,
+    elapsed_ms: Math.round(input.elapsedMs ?? 0),
+    mode: input.mode,
+    judge_by: input.judgeBy,
+    exam_uid: input.examId ? examUid(input.examId) : null
   }
+  return withSync(
+    { entity: 'review', uid: reviewUid, fields: reviewFields, tsUtc: now.getTime() },
+    () => {
+      d.prepare(
+        `UPDATE cards SET due_at = ?, stability = ?, difficulty = ?, reps = ?, lapses = ?, state = ?, last_review = ?, needs_check = 0, fsrs_json = ?
+         WHERE id = ?`
+      ).run(
+        updated.dueAt,
+        updated.stability,
+        updated.difficulty,
+        updated.reps,
+        updated.lapses,
+        updated.state,
+        reviewedAt,
+        updated.fsrsJson,
+        input.cardId
+      )
+      // Anki 的 sibling bury：一个词条的一张卡复习后，其他方向今天不再出现
+      const today = reviewedAt.slice(0, 10)
+      d.prepare(
+        `UPDATE cards SET buried_until = ? WHERE item_id = ? AND id <> ? AND suspended = 0`
+      ).run(today, toInt(row.item_id), input.cardId)
+      d.prepare(
+        `INSERT INTO reviews (uid, card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        reviewUid,
+        input.cardId,
+        reviewedAt,
+        input.rating,
+        input.answer ?? '',
+        input.correct ? 1 : 0,
+        Math.round(input.elapsedMs ?? 0),
+        input.mode,
+        input.judgeBy,
+        input.examId ?? null
+      )
 
-  return { dueAt: updated.dueAt, state: updated.state }
+      if (input.correct && input.judgeBy === 'ai' && input.answer.trim()) {
+        addAcceptedZh(toInt(row.item_id), input.answer.trim())
+      }
+
+      return { dueAt: updated.dueAt, state: updated.state }
+    }
+  )
 }
 
 /** 到期卡片数（按词条去重）；deckId = 只数这个库，不传 = 全部库 */

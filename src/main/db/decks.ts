@@ -1,5 +1,7 @@
 import type { Deck, DeckPatch, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
+import { scopeForSync } from './exams'
+import { deckUid, recordSyncOp } from './sync'
 import { newUid } from './uid'
 import { getSettings, updateSettings } from '../settings'
 
@@ -245,6 +247,11 @@ export function removeDeck(
   const wasCurrent = getSettings().currentDeckId === id
   const result = tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
+    // 先取 uid：改完归属要发 note / exam 的 op，别的设备才知道这些行变了
+    const noteRows = getDb()
+      .prepare('SELECT id, uid FROM notes WHERE deck_id = ?')
+      .all(id) as unknown as { id: number; uid: string | null }[]
+    const targetUid = moveTo === null ? null : deckUid(moveTo)
     if (moveTo === null) {
       getDb()
         .prepare('UPDATE notes SET deck_id = 0, updated_at = ? WHERE deck_id = ?')
@@ -257,11 +264,15 @@ export function removeDeck(
         .run(moveTo, localIso(), id)
       getDb().prepare('UPDATE import_drafts SET deck_id = ? WHERE deck_id = ?').run(moveTo, id)
     }
+    for (const note of noteRows) {
+      recordSyncOp({ entity: 'note', uid: note.uid ?? '', fields: { deck_uid: targetUid } })
+    }
     // 考试范围是 JSON，没有外键：不同步就会留下永远查不到卡的悬空 deckId（D-01）。
     // 用 JS 解析/写回，避免依赖 SQLite JSON1；moveTo = null（删最后一个库）时
     // 删掉 deckId = 退回「全部库」，不要写 0（0 在 deckInClause 里是「未归类」）。
-    const examRows = getDb().prepare('SELECT id, scope FROM exams').all() as {
+    const examRows = getDb().prepare('SELECT id, uid, scope FROM exams').all() as {
       id: number
+      uid: string | null
       scope: string
     }[]
     if (examRows.length) {
@@ -272,6 +283,11 @@ export function removeDeck(
         if (moveTo === null) delete scope.deckId
         else scope.deckId = moveTo
         updateScope.run(JSON.stringify(scope), toInt(exam.id))
+        recordSyncOp({
+          entity: 'exam',
+          uid: exam.uid ?? '',
+          fields: { scope: scopeForSync(scope) }
+        })
       }
     }
     getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)

@@ -1,9 +1,11 @@
 import type { Exam, ExamInput, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
+import { deckUid, examUid, withSync } from './sync'
 import { newUid } from './uid'
 
 interface ExamRow {
   id: number
+  uid: string | null
   title: string
   exam_date: string
   scope: string
@@ -40,44 +42,105 @@ export function getExam(id: number): Exam | null {
   return row ? mapExam(row) : null
 }
 
+/**
+ * 考试范围的同步形态：`scope.deckId` 是本机的库 id，不能出网，换成 `deck_uid`。
+ * 落在本机的字段仍然用 deckId（查询路径不变）。
+ */
+export function scopeForSync(scope: ExamScope): Record<string, unknown> {
+  const { deckId, ...rest } = scope
+  return deckId === undefined ? rest : { ...rest, deck_uid: deckUid(deckId) }
+}
+
 export function createExam(input: ExamInput): number {
-  const res = getDb()
-    .prepare(
-      `INSERT INTO exams (uid, title, exam_date, scope, level, target_retention, daily_minutes, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`
-    )
-    .run(
-      newUid(),
-      input.title.trim() || '英语听写',
-      input.examDate,
-      JSON.stringify(input.scope ?? {}),
-      input.level,
-      input.targetRetention,
-      input.dailyMinutes,
-      localIso()
-    )
-  return toInt(res.lastInsertRowid)
+  const title = input.title.trim() || '英语听写'
+  const uid = newUid()
+  const createdAt = localIso()
+  return withSync(
+    {
+      entity: 'exam',
+      uid,
+      fields: {
+        title,
+        exam_date: input.examDate,
+        scope: scopeForSync(input.scope ?? {}),
+        level: input.level,
+        target_retention: input.targetRetention,
+        daily_minutes: input.dailyMinutes,
+        status: 'active',
+        created_at: createdAt
+      }
+    },
+    () => {
+      const res = getDb()
+        .prepare(
+          `INSERT INTO exams (uid, title, exam_date, scope, level, target_retention, daily_minutes, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`
+        )
+        .run(
+          uid,
+          title,
+          input.examDate,
+          JSON.stringify(input.scope ?? {}),
+          input.level,
+          input.targetRetention,
+          input.dailyMinutes,
+          createdAt
+        )
+      return toInt(res.lastInsertRowid)
+    }
+  )
 }
 
 export function updateExam(id: number, patch: Partial<ExamInput> & { status?: string }): void {
   const current = getExam(id)
   if (!current) throw new Error('考试不存在')
-  getDb()
-    .prepare(
-      `UPDATE exams SET title = ?, exam_date = ?, scope = ?, level = ?, target_retention = ?, daily_minutes = ?, status = ? WHERE id = ?`
-    )
-    .run(
-      patch.title ?? current.title,
-      patch.examDate ?? current.examDate,
-      JSON.stringify(patch.scope ?? current.scope),
-      patch.level ?? current.level,
-      patch.targetRetention ?? current.targetRetention,
-      patch.dailyMinutes ?? current.dailyMinutes,
-      patch.status ?? current.status,
-      id
-    )
+  const row = getDb().prepare('SELECT uid FROM exams WHERE id = ?').get(id) as {
+    uid?: string | null
+  }
+  const next = {
+    title: patch.title ?? current.title,
+    examDate: patch.examDate ?? current.examDate,
+    scope: patch.scope ?? current.scope,
+    level: patch.level ?? current.level,
+    targetRetention: patch.targetRetention ?? current.targetRetention,
+    dailyMinutes: patch.dailyMinutes ?? current.dailyMinutes,
+    status: patch.status ?? current.status
+  }
+  // 只记真正变了的字段（同 notes/items）
+  const fields: Record<string, unknown> = {}
+  if (next.title !== current.title) fields.title = next.title
+  if (next.examDate !== current.examDate) fields.exam_date = next.examDate
+  const nextScope = scopeForSync(next.scope)
+  if (JSON.stringify(nextScope) !== JSON.stringify(scopeForSync(current.scope))) {
+    fields.scope = nextScope
+  }
+  if (next.level !== current.level) fields.level = next.level
+  if (next.targetRetention !== current.targetRetention) {
+    fields.target_retention = next.targetRetention
+  }
+  if (next.dailyMinutes !== current.dailyMinutes) fields.daily_minutes = next.dailyMinutes
+  if (next.status !== current.status) fields.status = next.status
+  withSync({ entity: 'exam', uid: row?.uid ?? '', fields }, () => {
+    getDb()
+      .prepare(
+        `UPDATE exams SET title = ?, exam_date = ?, scope = ?, level = ?, target_retention = ?, daily_minutes = ?, status = ? WHERE id = ?`
+      )
+      .run(
+        next.title,
+        next.examDate,
+        JSON.stringify(next.scope),
+        next.level,
+        next.targetRetention,
+        next.dailyMinutes,
+        next.status,
+        id
+      )
+  })
 }
 
 export function deleteExam(id: number): void {
-  getDb().prepare('DELETE FROM exams WHERE id = ?').run(id)
+  const uid = examUid(id)
+  withSync({ entity: 'exam', uid: uid ?? '', op: 'delete' }, () => {
+    getDb().prepare('DELETE FROM exams WHERE id = ?').run(id)
+  })
 }

@@ -2,11 +2,13 @@ import type { CardDirection, Example, Item, ItemKind } from '@shared/types'
 import { normalizeEn, mergePosText } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt } from './connection'
 import { deckScope } from './decks'
+import { itemUid, withSync } from './sync'
 import { newUid } from './uid'
 import { newCardSnapshot } from '../fsrs'
 
 interface ItemRow {
   id: number
+  uid: string | null
   kind: string
   headword: string
   headword_norm: string
@@ -135,9 +137,8 @@ export function upsertItem(input: UpsertItemInput): number {
     .prepare(`SELECT * FROM items WHERE headword_norm = ?`)
     .get(norm) as ItemRow | undefined
 
-  let itemId: number
   if (existing) {
-    itemId = toInt(existing.id)
+    const itemId = toInt(existing.id)
     const meanings = mergeUnique(parseJson<string[]>(existing.meanings, []), input.meanings)
     const collocations = mergeUnique(
       parseJson<string[]>(existing.collocations, []),
@@ -153,47 +154,91 @@ export function upsertItem(input: UpsertItemInput): number {
     const mergedKind =
       existing.kind === 'word' || kind === 'word' ? 'word' : existing.kind || kind
     const phonetic = existing.phonetic?.trim() || input.phonetic?.trim() || null
-    d.prepare(
-      `UPDATE items SET pos = ?, kind = ?, phonetic = ?, meanings = ?, collocations = ?, examples = ?, extra = ?
-       WHERE id = ?`
-    ).run(
-      mergedPos,
-      mergedKind,
-      phonetic,
-      JSON.stringify(meanings),
-      JSON.stringify(collocations),
-      JSON.stringify(examples),
-      extra,
-      itemId
-    )
-  } else {
-    const res = d
-      .prepare(
-        `INSERT INTO items (uid, kind, headword, headword_norm, pos, phonetic, meanings, collocations, examples, extra, accepted_zh, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`
+    // 只记真正变了的字段（字段级 LWW：全量重写会盖掉别的设备改的字段）
+    const fields: Record<string, unknown> = {}
+    if (mergedPos !== existing.pos) fields.pos = mergedPos
+    if (mergedKind !== existing.kind) fields.kind = mergedKind
+    if (phonetic !== existing.phonetic) fields.phonetic = phonetic
+    if (JSON.stringify(meanings) !== existing.meanings) fields.meanings = meanings
+    if (JSON.stringify(collocations) !== existing.collocations) fields.collocations = collocations
+    if (JSON.stringify(examples) !== existing.examples) fields.examples = examples
+    if (extra !== existing.extra) fields.extra = extra
+    return withSync({ entity: 'item', uid: existing.uid ?? '', fields }, () => {
+      d.prepare(
+        `UPDATE items SET pos = ?, kind = ?, phonetic = ?, meanings = ?, collocations = ?, examples = ?, extra = ?
+         WHERE id = ?`
+      ).run(
+        mergedPos,
+        mergedKind,
+        phonetic,
+        JSON.stringify(meanings),
+        JSON.stringify(collocations),
+        JSON.stringify(examples),
+        extra,
+        itemId
       )
-      .run(
-        newUid(),
-        kind,
-        headword,
-        norm,
-        pos,
-        input.phonetic?.trim() || null,
-        JSON.stringify(input.meanings.filter(Boolean)),
-        JSON.stringify(input.collocations ?? []),
-        JSON.stringify(input.examples ?? []),
-        input.extra?.trim() || null,
-        localIso()
-      )
-    itemId = toInt(res.lastInsertRowid)
+      return finishItemWrite(itemId, input)
+    })
   }
 
-  ensureCards(itemId, input.listenEnabled)
-  d.prepare(
-    `INSERT INTO note_items (note_id, item_id, raw_line, position) VALUES (?, ?, ?, ?)
-     ON CONFLICT(note_id, item_id) DO UPDATE SET raw_line = excluded.raw_line`
-  ).run(input.noteId, itemId, input.rawLine ?? null, input.position)
+  const uid = newUid()
+  const createdAt = localIso()
+  const newMeanings = input.meanings.filter(Boolean)
+  const newCollocations = input.collocations ?? []
+  const newExamples = input.examples ?? []
+  const extra = input.extra?.trim() || null
+  const newPhonetic = input.phonetic?.trim() || null
+  return withSync(
+    {
+      entity: 'item',
+      uid,
+      fields: {
+        kind,
+        headword,
+        pos,
+        phonetic: newPhonetic,
+        meanings: newMeanings,
+        collocations: newCollocations,
+        examples: newExamples,
+        extra,
+        accepted_zh: [],
+        learned_at: null,
+        created_at: createdAt
+      }
+    },
+    () => {
+      const res = d
+        .prepare(
+          `INSERT INTO items (uid, kind, headword, headword_norm, pos, phonetic, meanings, collocations, examples, extra, accepted_zh, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`
+        )
+        .run(
+          uid,
+          kind,
+          headword,
+          norm,
+          pos,
+          newPhonetic,
+          JSON.stringify(newMeanings),
+          JSON.stringify(newCollocations),
+          JSON.stringify(newExamples),
+          extra,
+          createdAt
+        )
+      return finishItemWrite(toInt(res.lastInsertRowid), input)
+    }
+  )
+}
 
+/** 词条写完之后的两件事：补卡片、挂到笔记上（两者都不单独发 op） */
+function finishItemWrite(itemId: number, input: UpsertItemInput): number {
+  ensureCards(itemId, input.listenEnabled)
+  getDb()
+    .prepare(
+      `INSERT INTO note_items (note_id, item_id, raw_line, position) VALUES (?, ?, ?, ?)
+       ON CONFLICT(note_id, item_id) DO UPDATE SET raw_line = excluded.raw_line`
+    )
+    .run(input.noteId, itemId, input.rawLine ?? null, input.position)
   return itemId
 }
 
@@ -264,28 +309,44 @@ export function updateItem(
   const examples = patch.examples ?? parseJson<Example[]>(current.examples, [])
   const extra = patch.extra === undefined ? current.extra : patch.extra
   const phonetic = patch.phonetic === undefined ? current.phonetic : patch.phonetic
-  try {
-    d.prepare(
-      `UPDATE items SET kind = ?, headword = ?, headword_norm = ?, pos = ?, phonetic = ?, meanings = ?, collocations = ?, examples = ?, extra = ? WHERE id = ?`
-    ).run(
-      kind,
-      headword,
-      normalizeEn(headword),
-      pos,
-      phonetic,
-      JSON.stringify(meanings),
-      JSON.stringify(collocations),
-      JSON.stringify(examples),
-      extra,
-      id
-    )
-  } catch (err) {
-    throw new Error('修改失败：已存在同名词条（同词性）')
-  }
+  const norm = normalizeEn(headword)
+  // 只记真正变了的字段（同 upsertItem）
+  const fields: Record<string, unknown> = {}
+  if (kind !== current.kind) fields.kind = kind
+  if (headword !== current.headword) fields.headword = headword
+  if (pos !== current.pos) fields.pos = pos
+  if (phonetic !== current.phonetic) fields.phonetic = phonetic
+  if (JSON.stringify(meanings) !== current.meanings) fields.meanings = meanings
+  if (JSON.stringify(collocations) !== current.collocations) fields.collocations = collocations
+  if (JSON.stringify(examples) !== current.examples) fields.examples = examples
+  if (extra !== current.extra) fields.extra = extra
+  withSync({ entity: 'item', uid: current.uid ?? '', fields }, () => {
+    try {
+      d.prepare(
+        `UPDATE items SET kind = ?, headword = ?, headword_norm = ?, pos = ?, phonetic = ?, meanings = ?, collocations = ?, examples = ?, extra = ? WHERE id = ?`
+      ).run(
+        kind,
+        headword,
+        norm,
+        pos,
+        phonetic,
+        JSON.stringify(meanings),
+        JSON.stringify(collocations),
+        JSON.stringify(examples),
+        extra,
+        id
+      )
+    } catch (err) {
+      throw new Error('修改失败：已存在同名词条（同词性）')
+    }
+  })
 }
 
 export function deleteItem(id: number): void {
-  getDb().prepare('DELETE FROM items WHERE id = ?').run(id)
+  const uid = itemUid(id)
+  withSync({ entity: 'item', uid: uid ?? '', op: 'delete' }, () => {
+    getDb().prepare('DELETE FROM items WHERE id = ?').run(id)
+  })
 }
 
 export function findExistingItemId(headword: string, _pos: string | null, _kind: ItemKind): number | null {
@@ -297,14 +358,16 @@ export function findExistingItemId(headword: string, _pos: string | null, _kind:
 
 export function addAcceptedZh(itemId: number, answer: string): void {
   const d = getDb()
-  const row = d.prepare('SELECT accepted_zh FROM items WHERE id = ?').get(itemId) as
-    | { accepted_zh?: string }
+  const row = d.prepare('SELECT uid, accepted_zh FROM items WHERE id = ?').get(itemId) as
+    | { uid?: string | null; accepted_zh?: string }
     | undefined
   if (!row) return
   const list = parseJson<string[]>(row.accepted_zh, [])
   if (!list.includes(answer)) {
     list.push(answer)
-    d.prepare('UPDATE items SET accepted_zh = ? WHERE id = ?').run(JSON.stringify(list), itemId)
+    withSync({ entity: 'item', uid: row.uid ?? '', fields: { accepted_zh: list } }, () => {
+      d.prepare('UPDATE items SET accepted_zh = ? WHERE id = ?').run(JSON.stringify(list), itemId)
+    })
   }
 }
 

@@ -394,13 +394,6 @@ PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == �
 1. `newCard()` 每次生成随机 `cardId`（ts-fsrs 内部的 uuid），它会出现在 `fsrs_json` 里。重放时要么沿用原卡的 `cardId`（`replayCard(reviews, cardId)`），要么比较时忽略该字段——否则「只差一个 uuid」会被当成重放不成立。
 2. `reviews.reviewed_at` 只存到秒（`localIso`），而生产时钟带毫秒。早复习（还没到期就点）时这点差别会放大到几秒，所以**合并后本地那张卡的 `due_at` 会挪动几秒**。收敛性不受影响（每台设备从同一批记录重放得出同一结果），`due_at` 也只用于排序/到期判断，接受。
 
-**还没做的 S0 部分**（下一步直接接着做）
-
-- ~~`notes` / `items` / `reviews` / `exams` 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2 → 3~~
-  （2026-11-23 已完成，见下一条）
-- 写入口统一 `withSync(entity, uid, fields, fn)` 与 `sync_ops` 表（§3.4）。
-- `cards` 的手动状态（`suspended` / `learn_mark` / `buried_until` / `needs_check`）作为 `cardFlag` 事件，不参与重放。
-
 ### S0 第二步：uid + 迁移（2026-11-23，`feat/sync`）
 
 `notes` / `items` / `reviews` / `exams` 各有 `uid TEXT`（唯一索引 `ux_<table>_uid`），`SCHEMA_VERSION` **2 → 3**。
@@ -426,4 +419,51 @@ PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == �
 
 **验证**：`npm run typecheck` 0 错误；`npm test` **19 文件 / 195 项全绿**。测试断言的是
 「迁移后行数不变、每行 26 位 uid、集合内无重复、唯一索引真的拦重复」。
+
+### S0 第三步：`sync_ops` + `withSync`（2026-11-23，`feat/sync`）
+
+所有对 `notes` / `items` / `reviews` / `exams` 的写入口，现在都在**自己那条事务里**追加一条
+`sync_ops`（§3.4）。`cards` 只同步标志位，留到下一步。
+
+**新文件 `src/main/db/sync.ts`**
+
+| 导出 | 作用 |
+|---|---|
+| `withSync(meta, fn)` | 开事务 → 执行 `fn` → 同事务写 op；`meta = null` 时只开事务 |
+| `recordSyncOp(meta)` | 已在事务里追加一条 op（多实体写入用，如删笔记连带删孤儿词条） |
+| `pendingSyncOps(limit)` | `origin = 'local' AND pushed = 0` 的待推送队列（S1 从这里读） |
+| `noteUid/itemUid/examUid/deckUid` | 本机 id → 同步 uid |
+| `cardFlagUid(itemUid, direction)` | cardFlag 的稳定 id：`<item uid>:<direction>`（卡片没有自己的 uid） |
+
+**op 的形状（定了，S1 直接照这个合并）**
+
+- `uid`：note/item/review/exam 用各自 uid；cardFlag 用 `<item uid>:<direction>`。
+- `fields`：键用数据库列名，**不含任何本机整数 id**。跨设备引用一律换 uid：
+  `notes.deck_id → deck_uid`、`reviews.card_id → card_uid`、`reviews.exam_id → exam_uid`、
+  `exams.scope.deckId → scope.deck_uid`。
+- **只记真正变了的字段**（`updateNote` / `updateItem` / `updateExam` / `upsertItem` 的已存在分支）。
+  一个字段都没变的 upsert 不写 op（重复入库、原地保存不会刷出一堆噪声）。
+- `ts_utc`：事件时间。复习 / 卡片标志用复习发生的时刻（`applyReview` 的可选时钟），其余取写入时刻。
+- `origin` 默认 `local`；`remote:<device>` 的 op 照常落库但**不进推送队列**（防回声）。
+
+**四处必须改的东西**
+
+1. **`tx()` 改成可重入**（`connection.ts`）。同步要求「写 + op 同一条事务」，而写入口会互相调用
+   （`applyReview` → `addAcceptedZh`、`copyNotes` → 每条 withSync、导入入库 → `createNote` + `upsertItem`）。
+   内层直接搭外层事务，只有最外层 COMMIT/ROLLBACK；否则嵌套会报
+   `cannot start a transaction within a transaction`。
+2. **`removeDeck` 也发 op**：删库时笔记要改 `deck_id`、考试 scope 里的 `deckId` 要改，
+   不发 op 别的设备会永远停在旧库。
+3. **草稿入库不动**：`importDrafts` 的入库走 `createNote` + `upsertItem`，自动被覆盖；
+   `note_items`（笔记↔词条关联）和 `validation_issues` 仍不同步，属于 S1 的传输格式。
+4. **`dedupeItems` 不包**：它是启动时的本地修复（老库合并重复词条），跑在 uid 回填之前，
+   真正的跨设备归并规则在 S3，届时它会产生新的 `local` op。
+
+**测试**：`tests/sync-ops.test.ts`（新，9 项）——四个写入口的 op 形状与「不含本机 id」、
+只记变更字段、移动/复制/删除、删库连带、`origin` 过滤、嵌套写入口，
+以及**写失败整体回滚（不留半条数据也不留 op）**。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **20 文件 / 204 项全绿**。
+
+**S0 还剩**：`cards` 的 `suspended` / `learn_mark` / `buried_until` / `needs_check` 作为 `cardFlag` 事件。
 
