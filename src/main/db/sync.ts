@@ -59,6 +59,15 @@ export function withSync<T>(meta: SyncMeta | null, fn: () => T): T {
   })
 }
 
+/** 写完一条本地 op 时通知（调度器用它 markDirty；合并写回的 remote op 不触发） */
+type SyncOpListener = (entity: SyncEntity) => void
+const opListeners = new Set<SyncOpListener>()
+
+export function onSyncOpWritten(listener: SyncOpListener): () => void {
+  opListeners.add(listener)
+  return () => opListeners.delete(listener)
+}
+
 /**
  * 追加一条 op。调用方必须已经在事务里（`withSync` 或外层 `tx`），
  * 这样「写入 + 队列」要么都成功、要么都回滚。
@@ -83,6 +92,16 @@ export function recordSyncOp(meta: SyncMeta): void {
       meta.origin ?? 'local',
       Math.trunc(meta.tsUtc ?? Date.now())
     )
+  // 只有本机产生的 op 才叫「有新东西要推」；合并写回的 remote op 不该触发同步
+  if ((meta.origin ?? 'local') === 'local') {
+    for (const listener of opListeners) {
+      try {
+        listener(meta.entity)
+      } catch {
+        /* 监听器出错不影响写入 */
+      }
+    }
+  }
   if (op === 'delete') recordTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now())
 }
 
@@ -207,6 +226,14 @@ export function pendingSyncOps(limit = 500): SyncOpRow[] {
     tsUtc: toInt(row.ts_utc),
     pushed: toInt(row.pushed) === 1
   }))
+}
+
+/** 待推送的本地 op 条数（设置页显示「有 N 条待上传」） */
+export function countPendingOps(): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) AS c FROM sync_ops WHERE origin = 'local' AND pushed = 0")
+    .get() as { c?: number } | undefined
+  return toInt(row?.c)
 }
 
 /** 某张表的本地 id → 同步 uid；行不存在返回 null */
