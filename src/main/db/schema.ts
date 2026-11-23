@@ -177,6 +177,23 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_pull_at TEXT
 );
 
+-- 远端文件的本地缓存（S2）：路径 → sha/etag。PUT 更新要 sha，GET 条件请求要 etag，
+-- 都不该每次重新拉一遍文件。
+CREATE TABLE IF NOT EXISTS sync_files (
+  path TEXT PRIMARY KEY,
+  sha TEXT,
+  etag TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- 见过的其它设备（S2 只用于状态展示；S3 的游标/移除设备也挂在这张表上）
+CREATE TABLE IF NOT EXISTS sync_devices (
+  device_id TEXT PRIMARY KEY,
+  name TEXT,
+  last_seen_at TEXT,
+  last_checkpoint_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS pronunciations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   word_norm TEXT NOT NULL,

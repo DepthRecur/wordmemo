@@ -535,6 +535,13 @@ function clockFor(entity: SyncEntity, uid: string, baseTs: number): Clock {
   const key = `${entity}|${uid}`
   const cached = clockCache.get(key)
   if (cached) return cached
+  const clock = buildClock(entity, uid, baseTs)
+  clockCache.set(key, clock)
+  return clock
+}
+
+/** 不走缓存：逐条应用远端 op 时，时钟刚被自己改过，缓存会读到旧值 */
+function buildClock(entity: SyncEntity, uid: string, baseTs: number): Clock {
   const rows = getDb()
     .prepare('SELECT op, fields, ts_utc FROM sync_ops WHERE entity = ? AND uid = ? ORDER BY seq ASC')
     .all(entity, uid) as unknown as { op: string; fields: string; ts_utc: number }[]
@@ -552,13 +559,11 @@ function clockFor(entity: SyncEntity, uid: string, baseTs: number): Clock {
   const tomb = getDb()
     .prepare('SELECT ts_utc FROM sync_tombstones WHERE entity = ? AND uid = ?')
     .get(entity, uid) as { ts_utc?: number } | undefined
-  const clock: Clock = {
+  return {
     field: (name) => Math.max(perField.get(name) ?? 0, baseTs),
     last,
     deletedAt: toInt(tomb?.ts_utc)
   }
-  clockCache.set(key, clock)
-  return clock
 }
 
 function unionStrings(local: string[], remote: unknown): string[] {
@@ -641,6 +646,13 @@ function examIdByUid(uid: string | null): number {
 
 function itemUidById(itemId: number): string {
   const row = getDb().prepare('SELECT uid FROM items WHERE id = ?').get(itemId) as
+    | { uid?: string | null }
+    | undefined
+  return row?.uid ?? ''
+}
+
+function noteUidById(noteId: number): string {
+  const row = getDb().prepare('SELECT uid FROM notes WHERE id = ?').get(noteId) as
     | { uid?: string | null }
     | undefined
   return row?.uid ?? ''
@@ -1479,4 +1491,564 @@ function mergeCardFlags(
     recordSyncOp({ entity: 'cardFlag', uid, origin, tsUtc: ts, fields })
     stats.cardFlags++
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* 逐条 op 合并（S2 的远端增量）                                        */
+/* ------------------------------------------------------------------ */
+
+/** 远端分片里的一行（`ops/*.jsonl.age` 的每一行） */
+export interface RemoteSyncOp {
+  entity: SyncEntity
+  uid: string
+  op: 'upsert' | 'delete'
+  fields: Record<string, unknown>
+  tsUtc: number
+}
+
+/**
+ * 应用一条远端 op。规则与快照合并一致（字段级 LWW、数组并集、删除优先），
+ * 只是粒度是「这条 op 带着的字段」。返回是否真的改动了本机数据。
+ */
+export function applyRemoteOp(op: RemoteSyncOp, origin: string): boolean {
+  const ts = toInt(op.tsUtc)
+  if (!op.uid || !ts) return false
+  const f = op.fields ?? {}
+
+  if (op.op === 'delete') {
+    const resolved = resolveAlias(op.entity, op.uid)
+    const row = findLocalRow(op.entity, op.uid)
+    let changed = false
+    if (row) {
+      const clock = buildClock(op.entity, resolved, baseTsOf(op.entity, row))
+      if (ts > clock.last) {
+        deleteLocalRow(op.entity, row)
+        changed = true
+      }
+    }
+    recordTombstone(op.entity, resolved, ts)
+    return changed
+  }
+
+  // 比删除更早的 upsert 不能把记录复活（快照合并里有同样的规则）
+  const resolvedUid = resolveAlias(op.entity, op.uid)
+  const tomb = getDb()
+    .prepare('SELECT ts_utc FROM sync_tombstones WHERE entity = ? AND uid = ?')
+    .get(op.entity, resolvedUid) as { ts_utc?: number } | undefined
+  if (tomb && ts <= toInt(tomb.ts_utc)) return false
+
+  switch (op.entity) {
+    case 'deck':
+      return applyDeckOp(op.uid, f, ts, origin)
+    case 'note':
+      return applyNoteOp(op.uid, f, ts, origin)
+    case 'item':
+      return applyItemOp(op.uid, f, ts, origin)
+    case 'exam':
+      return applyExamOp(op.uid, f, ts, origin)
+    case 'noteItem':
+      return applyNoteItemOp(f, ts, origin)
+    case 'review':
+      return applyReviewOp(op.uid, f, ts, origin)
+    case 'cardFlag':
+      return applyCardFlagOp(f, op.uid, ts, origin)
+    default:
+      return false
+  }
+}
+
+function applyDeckOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
+  const resolved = resolveAlias('deck', uidValue)
+  const row = findLocalRow('deck', uidValue)
+  if (!row) {
+    if (typeof f.name !== 'string' || !f.name) return false
+    getDb()
+      .prepare(
+        'INSERT INTO decks (uid, name, color, position, new_per_day, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+      )
+      .run(
+        resolved,
+        f.name,
+        (f.color as string | null) ?? null,
+        toInt(f.position),
+        f.new_per_day === null || f.new_per_day === undefined ? null : toInt(f.new_per_day),
+        String(f.created_at ?? localIso())
+      )
+    recordSyncOp({ entity: 'deck', uid: resolved, origin, tsUtc: ts, fields: f })
+    return true
+  }
+  const clock = buildClock('deck', resolved, baseTsOf('deck', row))
+  if (clock.deletedAt > ts) return false
+  const fields: Record<string, unknown> = {}
+  let name = String(row.name)
+  let color = row.color === null ? null : String(row.color)
+  let position = toInt(row.position)
+  let newPerDay = row.new_per_day === null ? null : toInt(row.new_per_day)
+  if ('name' in f && typeof f.name === 'string' && f.name !== name && ts > clock.field('name')) {
+    name = f.name
+    fields.name = f.name
+  }
+  if ('color' in f) {
+    const next = (f.color as string | null) ?? null
+    if (next !== color && ts > clock.field('color')) {
+      color = next
+      fields.color = next
+    }
+  }
+  if ('position' in f && toInt(f.position) !== position && ts > clock.field('position')) {
+    position = toInt(f.position)
+    fields.position = position
+  }
+  if ('new_per_day' in f) {
+    const next = f.new_per_day === null || f.new_per_day === undefined ? null : toInt(f.new_per_day)
+    if (next !== newPerDay && ts > clock.field('new_per_day')) {
+      newPerDay = next
+      fields.new_per_day = next
+    }
+  }
+  if (!Object.keys(fields).length) return false
+  try {
+    getDb()
+      .prepare('UPDATE decks SET name = ?, color = ?, position = ?, new_per_day = ? WHERE id = ?')
+      .run(name, color, position, newPerDay, toInt(row.id))
+  } catch {
+    return false
+  }
+  recordSyncOp({ entity: 'deck', uid: resolved, origin, tsUtc: ts, fields })
+  return true
+}
+
+function applyNoteOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
+  const row = findLocalRow('note', uidValue)
+  if (!row) {
+    if (typeof f.title !== 'string' || !f.title) return false
+    const at = localIso(new Date(ts))
+    getDb()
+      .prepare(
+        `INSERT INTO notes (uid, source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
+         VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        uidValue,
+        deckIdByUid(typeof f.deck_uid === 'string' ? f.deck_uid : null),
+        f.title,
+        (f.note_date as string | null) ?? null,
+        JSON.stringify(f.tags ?? []),
+        String(f.raw_markdown ?? ''),
+        String(f.status ?? 'validated'),
+        String(f.created_at ?? at),
+        String(f.updated_at ?? at)
+      )
+    recordSyncOp({ entity: 'note', uid: uidValue, origin, tsUtc: ts, fields: f })
+    return true
+  }
+  const clock = buildClock('note', uidValue, baseTsOf('note', row))
+  if (clock.deletedAt > ts) return false
+  const fields: Record<string, unknown> = {}
+  let title = String(row.title)
+  let noteDate = row.note_date === null ? null : String(row.note_date)
+  let tags = parseJson<string[]>(String(row.tags), [])
+  let rawMarkdown = String(row.raw_markdown)
+  let status = String(row.status)
+  let deckId = toInt(row.deck_id)
+  if ('title' in f && typeof f.title === 'string' && f.title !== title && ts > clock.field('title')) {
+    title = f.title
+    fields.title = f.title
+  }
+  if ('note_date' in f) {
+    const next = (f.note_date as string | null) ?? null
+    if (next !== noteDate && ts > clock.field('note_date')) {
+      noteDate = next
+      fields.note_date = next
+    }
+  }
+  if ('tags' in f) {
+    const next = Array.isArray(f.tags) ? f.tags.map(String) : tags
+    if (!sameJson(next, tags) && ts > clock.field('tags')) {
+      tags = next
+      fields.tags = next
+    }
+  }
+  if ('raw_markdown' in f && typeof f.raw_markdown === 'string' && f.raw_markdown !== rawMarkdown && ts > clock.field('raw_markdown')) {
+    rawMarkdown = f.raw_markdown
+    fields.raw_markdown = f.raw_markdown
+  }
+  if ('status' in f && typeof f.status === 'string' && f.status !== status && ts > clock.field('status')) {
+    status = f.status
+    fields.status = f.status
+  }
+  if ('deck_uid' in f) {
+    const next = deckIdByUid(typeof f.deck_uid === 'string' ? f.deck_uid : null)
+    if (next !== deckId && ts > clock.field('deck_uid')) {
+      deckId = next
+      fields.deck_uid = f.deck_uid ?? null
+    }
+  }
+  if (!Object.keys(fields).length) return false
+  getDb()
+    .prepare(
+      `UPDATE notes SET title = ?, note_date = ?, tags = ?, raw_markdown = ?, status = ?, deck_id = ?, updated_at = ? WHERE id = ?`
+    )
+    .run(title, noteDate, JSON.stringify(tags), rawMarkdown, status, deckId, localIso(new Date(ts)), toInt(row.id))
+  recordSyncOp({ entity: 'note', uid: uidValue, origin, tsUtc: ts, fields })
+  return true
+}
+
+function applyItemOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
+  let row = findLocalRow('item', uidValue)
+  if (!row && typeof f.headword === 'string') {
+    row = getDb()
+      .prepare('SELECT * FROM items WHERE headword_norm = ?')
+      .get(normalizeEn(f.headword)) as Record<string, unknown> | undefined
+    if (row) rememberAlias('item', uidValue, String(row.uid ?? ''))
+  }
+  if (!row) {
+    if (typeof f.headword !== 'string' || !f.headword) return false
+    const res = getDb()
+      .prepare(
+        `INSERT INTO items (uid, kind, headword, headword_norm, pos, phonetic, meanings, collocations, examples, extra, accepted_zh, learned_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        uidValue,
+        String(f.kind ?? 'word'),
+        f.headword,
+        normalizeEn(f.headword),
+        (f.pos as string | null) ?? null,
+        (f.phonetic as string | null) ?? null,
+        JSON.stringify(f.meanings ?? []),
+        JSON.stringify(f.collocations ?? []),
+        JSON.stringify(f.examples ?? []),
+        (f.extra as string | null) ?? null,
+        JSON.stringify(f.accepted_zh ?? []),
+        (f.learned_at as string | null) ?? null,
+        String(f.created_at ?? localIso(new Date(ts)))
+      )
+    ensureCards(toInt(res.lastInsertRowid), false)
+    recordSyncOp({ entity: 'item', uid: uidValue, origin, tsUtc: ts, fields: f })
+    return true
+  }
+  const localUid = String(row.uid ?? uidValue)
+  const clock = buildClock('item', localUid, baseTsOf('item', row))
+  if (clock.deletedAt > ts) return false
+  const fields: Record<string, unknown> = {}
+  let kind = String(row.kind)
+  let headword = String(row.headword)
+  let pos = row.pos === null ? null : String(row.pos)
+  let phonetic = row.phonetic === null ? null : String(row.phonetic)
+  let extra = row.extra === null ? null : String(row.extra)
+  let meanings = parseJson<string[]>(String(row.meanings), [])
+  let collocations = parseJson<string[]>(String(row.collocations), [])
+  let examples = parseJson<Example[]>(String(row.examples), [])
+  let acceptedZh = parseJson<string[]>(String(row.accepted_zh), [])
+  let learnedAt = row.learned_at === null ? null : String(row.learned_at)
+  for (const key of ['kind', 'pos', 'phonetic', 'extra'] as const) {
+    if (!(key in f)) continue
+    const current = key === 'kind' ? kind : key === 'pos' ? pos : key === 'phonetic' ? phonetic : extra
+    const next = f[key] === null || f[key] === undefined ? null : String(f[key])
+    if (next !== current && ts > clock.field(key)) {
+      if (key === 'kind') kind = next ?? 'word'
+      if (key === 'pos') pos = next
+      if (key === 'phonetic') phonetic = next
+      if (key === 'extra') extra = next
+      fields[key] = next
+    }
+  }
+  if ('meanings' in f) {
+    const next = unionStrings(meanings, f.meanings)
+    if (!sameJson(next, meanings)) {
+      meanings = next
+      fields.meanings = next
+    }
+  }
+  if ('collocations' in f) {
+    const next = unionStrings(collocations, f.collocations)
+    if (!sameJson(next, collocations)) {
+      collocations = next
+      fields.collocations = next
+    }
+  }
+  if ('examples' in f) {
+    const next = unionExamples(examples, f.examples)
+    if (!sameJson(next, examples)) {
+      examples = next
+      fields.examples = next
+    }
+  }
+  if ('accepted_zh' in f) {
+    const next = unionStrings(acceptedZh, f.accepted_zh)
+    if (!sameJson(next, acceptedZh)) {
+      acceptedZh = next
+      fields.accepted_zh = next
+    }
+  }
+  if (typeof f.learned_at === 'string' && f.learned_at && (!learnedAt || f.learned_at < learnedAt)) {
+    learnedAt = f.learned_at
+    fields.learned_at = f.learned_at
+  }
+  const headwordChanged =
+    typeof f.headword === 'string' && f.headword !== headword && ts > clock.field('headword')
+  if (headwordChanged) fields.headword = f.headword
+  if (!Object.keys(fields).length) return false
+
+  const update = (withHeadword: boolean): void => {
+    getDb()
+      .prepare(
+        `UPDATE items SET kind = ?, headword = ?, headword_norm = ?, pos = ?, phonetic = ?, meanings = ?, collocations = ?, examples = ?, extra = ?, accepted_zh = ?, learned_at = ?
+         WHERE id = ?`
+      )
+      .run(
+        kind,
+        withHeadword ? String(f.headword) : headword,
+        normalizeEn(withHeadword ? String(f.headword) : headword),
+        pos,
+        phonetic,
+        JSON.stringify(meanings),
+        JSON.stringify(collocations),
+        JSON.stringify(examples),
+        extra,
+        JSON.stringify(acceptedZh),
+        learnedAt,
+        toInt(row.id)
+      )
+  }
+  try {
+    update(headwordChanged)
+    if (headwordChanged) headword = String(f.headword)
+  } catch {
+    if (!headwordChanged) return false
+    delete fields.headword
+    try {
+      update(false)
+    } catch {
+      return false
+    }
+  }
+  recordSyncOp({ entity: 'item', uid: localUid, origin, tsUtc: ts, fields })
+  return true
+}
+
+function applyExamOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
+  let row = findLocalRow('exam', uidValue)
+  if (!row) {
+    if (typeof f.title !== 'string' || typeof f.exam_date !== 'string') return false
+    const scope = scopeFromSync((f.scope ?? {}) as Record<string, unknown>)
+    getDb()
+      .prepare(
+        `INSERT INTO exams (uid, title, exam_date, scope, level, target_retention, daily_minutes, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        uidValue,
+        f.title,
+        f.exam_date,
+        JSON.stringify(scope.scope),
+        String(f.level ?? 'dictate'),
+        toNum(f.target_retention, 0.95),
+        toInt(f.daily_minutes, 20),
+        String(f.status ?? 'active'),
+        String(f.created_at ?? localIso(new Date(ts)))
+      )
+    recordSyncOp({ entity: 'exam', uid: uidValue, origin, tsUtc: ts, fields: f })
+    return true
+  }
+  const clock = buildClock('exam', uidValue, baseTsOf('exam', row))
+  if (clock.deletedAt > ts) return false
+  const fields: Record<string, unknown> = {}
+  let title = String(row.title)
+  let examDate = String(row.exam_date)
+  let scope = parseJson<ExamScope>(String(row.scope), {})
+  let level = String(row.level)
+  let targetRetention = toNum(row.target_retention, 0.95)
+  let dailyMinutes = toInt(row.daily_minutes, 20)
+  let status = String(row.status)
+  if ('title' in f && typeof f.title === 'string' && f.title !== title && ts > clock.field('title')) {
+    title = f.title
+    fields.title = f.title
+  }
+  if ('exam_date' in f && typeof f.exam_date === 'string' && f.exam_date !== examDate && ts > clock.field('exam_date')) {
+    examDate = f.exam_date
+    fields.exam_date = f.exam_date
+  }
+  if ('scope' in f) {
+    const next = scopeFromSync((f.scope ?? {}) as Record<string, unknown>)
+    if (!sameJson(f.scope, scopeForSync(scope)) && ts > clock.field('scope')) {
+      scope = next.scope
+      fields.scope = f.scope
+    }
+  }
+  if ('level' in f && typeof f.level === 'string' && f.level !== level && ts > clock.field('level')) {
+    level = f.level
+    fields.level = f.level
+  }
+  if ('target_retention' in f) {
+    const next = toNum(f.target_retention, 0.95)
+    if (next !== targetRetention && ts > clock.field('target_retention')) {
+      targetRetention = next
+      fields.target_retention = next
+    }
+  }
+  if ('daily_minutes' in f) {
+    const next = toInt(f.daily_minutes, 20)
+    if (next !== dailyMinutes && ts > clock.field('daily_minutes')) {
+      dailyMinutes = next
+      fields.daily_minutes = next
+    }
+  }
+  if ('status' in f && typeof f.status === 'string' && f.status !== status && ts > clock.field('status')) {
+    status = f.status
+    fields.status = f.status
+  }
+  if (!Object.keys(fields).length) return false
+  getDb()
+    .prepare(
+      `UPDATE exams SET title = ?, exam_date = ?, scope = ?, level = ?, target_retention = ?, daily_minutes = ?, status = ? WHERE id = ?`
+    )
+    .run(title, examDate, JSON.stringify(scope), level, targetRetention, dailyMinutes, status, toInt(row.id))
+  recordSyncOp({ entity: 'exam', uid: uidValue, origin, tsUtc: ts, fields })
+  return true
+}
+
+function applyNoteItemOp(f: Record<string, unknown>, ts: number, origin: string): boolean {
+  const noteUidValue = String(f.note_uid ?? '')
+  const itemUidValue = String(f.item_uid ?? '')
+  const noteId = noteIdByUid(noteUidValue)
+  const itemId = itemIdByUid(itemUidValue)
+  if (!noteId || !itemId) return false
+  const uid = noteItemUid(noteUidById(noteId), itemUidById(itemId))
+  const clock = buildClock('noteItem', uid, 0)
+  if (clock.deletedAt > ts || ts <= clock.last) return false
+  const rawLine = (f.raw_line as string | null) ?? null
+  const position = toInt(f.position)
+  getDb()
+    .prepare(
+      `INSERT INTO note_items (note_id, item_id, raw_line, position) VALUES (?, ?, ?, ?)
+       ON CONFLICT(note_id, item_id) DO UPDATE SET raw_line = excluded.raw_line, position = excluded.position`
+    )
+    .run(noteId, itemId, rawLine, position)
+  recordSyncOp({
+    entity: 'noteItem',
+    uid,
+    origin,
+    tsUtc: ts,
+    fields: {
+      note_uid: noteUidById(noteId),
+      item_uid: itemUidById(itemId),
+      raw_line: rawLine,
+      position
+    }
+  })
+  return true
+}
+
+function applyReviewOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
+  const exists = getDb().prepare('SELECT 1 AS ok FROM reviews WHERE uid = ?').get(uidValue)
+  if (exists) return false
+  const cardUid = String(f.card_uid ?? '')
+  const splitAt = cardUid.lastIndexOf(':')
+  if (splitAt <= 0) return false
+  const itemId = itemIdByUid(cardUid.slice(0, splitAt))
+  const direction = cardUid.slice(splitAt + 1)
+  if (!itemId || !isDirection(direction)) return false
+  const cardId = cardIdFor(itemId, direction)
+  getDb()
+    .prepare(
+      `INSERT INTO reviews (uid, card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      uidValue,
+      cardId,
+      String(f.reviewed_at ?? localIso(new Date(ts))),
+      toInt(f.rating),
+      String(f.answer ?? ''),
+      toInt(f.correct),
+      toInt(f.elapsed_ms),
+      String(f.mode ?? 'longterm'),
+      (f.judge_by as string | null) ?? null,
+      examIdByUid(typeof f.exam_uid === 'string' ? f.exam_uid : null)
+    )
+  replayLocalCard(cardId)
+  recordSyncOp({ entity: 'review', uid: uidValue, origin, tsUtc: ts, fields: f })
+  return true
+}
+
+function applyCardFlagOp(
+  f: Record<string, unknown>,
+  uidValue: string,
+  ts: number,
+  origin: string
+): boolean {
+  const splitAt = uidValue.lastIndexOf(':')
+  if (splitAt <= 0) return false
+  const direction = uidValue.slice(splitAt + 1)
+  const itemId = itemIdByUid(uidValue.slice(0, splitAt))
+  if (!itemId || !isDirection(direction)) return false
+  const uid = `${itemUidById(itemId)}:${direction}`
+  const clock = buildClock('cardFlag', uid, 0)
+  if (clock.deletedAt > ts) return false
+  const card = getDb()
+    .prepare('SELECT * FROM cards WHERE item_id = ? AND direction = ?')
+    .get(itemId, direction) as Record<string, unknown> | undefined
+  const current = card
+    ? {
+        suspended: toInt(card.suspended),
+        needs_check: toInt(card.needs_check),
+        learn_mark: toInt(card.learn_mark),
+        buried_until: card.buried_until === null ? null : String(card.buried_until)
+      }
+    : null
+  const fields: Record<string, unknown> = {}
+  const canApply = (field: string, currentValue: unknown, defaultValue: unknown): boolean => {
+    const fieldTs = clock.field(field)
+    if (fieldTs > 0) return ts > fieldTs
+    return sameJson(currentValue, defaultValue)
+  }
+  if (current) {
+    if ('suspended' in f && toInt(f.suspended) !== current.suspended && canApply('suspended', current.suspended, 0)) {
+      fields.suspended = toInt(f.suspended)
+    }
+    if ('needs_check' in f && toInt(f.needs_check) !== current.needs_check && canApply('needs_check', current.needs_check, 0)) {
+      fields.needs_check = toInt(f.needs_check)
+    }
+    if ('learn_mark' in f && toInt(f.learn_mark) !== current.learn_mark && canApply('learn_mark', current.learn_mark, 0)) {
+      fields.learn_mark = toInt(f.learn_mark)
+    }
+    if ('buried_until' in f) {
+      const next = (f.buried_until as string | null) ?? null
+      if (next !== current.buried_until && canApply('buried_until', current.buried_until, null)) {
+        fields.buried_until = next
+      }
+    }
+    if (!Object.keys(fields).length) return false
+  } else {
+    if ('suspended' in f) fields.suspended = toInt(f.suspended)
+    if ('needs_check' in f) fields.needs_check = toInt(f.needs_check)
+    if ('learn_mark' in f) fields.learn_mark = toInt(f.learn_mark)
+    if ('buried_until' in f) fields.buried_until = (f.buried_until as string | null) ?? null
+    if (!Object.keys(fields).length) return false
+  }
+  const cardId = cardIdFor(itemId, direction)
+  getDb()
+    .prepare(
+      'UPDATE cards SET suspended = ?, needs_check = ?, learn_mark = ?, buried_until = ? WHERE id = ?'
+    )
+    .run(
+      (fields.suspended ?? current?.suspended ?? 0) as number,
+      (fields.needs_check ?? current?.needs_check ?? 0) as number,
+      (fields.learn_mark ?? current?.learn_mark ?? 0) as number,
+      (fields.buried_until ?? current?.buried_until ?? null) as string | null,
+      cardId
+    )
+  recordSyncOp({ entity: 'cardFlag', uid, origin, tsUtc: ts, fields })
+  return true
+}
+
+/** 批量应用（引擎按文件里的顺序调它）；返回实际改动的条数 */
+export function applyRemoteOps(ops: RemoteSyncOp[], origin: string): number {
+  let applied = 0
+  for (const op of ops) {
+    if (applyRemoteOp(op, origin)) applied++
+  }
+  return applied
 }
