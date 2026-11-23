@@ -89,16 +89,19 @@ function migrate(database: SqliteDatabase): void {
   database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }
 
-/** 同步要用的四张表：表名 + 回填 uid 时取时间前缀的列（PLAN-SYNC §3.2） */
+/** 同步要用的表：表名 + 回填 uid 时取时间前缀的列（PLAN-SYNC §3.2） */
 const UID_TABLES: { table: string; timeColumn: string }[] = [
   { table: 'notes', timeColumn: 'created_at' },
   { table: 'items', timeColumn: 'created_at' },
   { table: 'reviews', timeColumn: 'reviewed_at' },
-  { table: 'exams', timeColumn: 'created_at' }
+  { table: 'exams', timeColumn: 'created_at' },
+  // decks.uid 从多库那一版就有，但一直没建唯一索引；库现在也进同步了（S1），
+  // 顺手补上回填与索引，避免两台设备出现同一个 deck uid
+  { table: 'decks', timeColumn: 'created_at' }
 ]
 
 /**
- * 稳定 id（PLAN-SYNC §3.2）：四张表各加 `uid`、回填老行、建唯一索引。
+ * 稳定 id（PLAN-SYNC §3.2）：同步用表各加 `uid`、回填老行、建唯一索引。
  *
  * 唯一索引不能放进 SCHEMA：老库还没有这一列时 `CREATE UNIQUE INDEX ... (uid)` 会
  * 直接报 "no such column"（和 ix_notes_deck 是同一个坑）。

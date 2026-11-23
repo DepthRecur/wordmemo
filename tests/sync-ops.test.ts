@@ -120,7 +120,7 @@ describe('sync_ops：写入口契约', () => {
       },
       now
     )
-    const reviewOp = lastOp()
+    const reviewOp = ops().find((op) => op.entity === 'review')!
     expect(reviewOp.entity).toBe('review')
     expect(reviewOp.fields.card_uid).toBe(`${uidOfItem(itemId)}:${card.direction}`)
     expect(reviewOp.fields.rating).toBe(3)
@@ -169,11 +169,13 @@ describe('sync_ops：写入口契约', () => {
 
     clearOps()
     const { noteIds } = copyNotes([noteId], otherDeckId)
-    const copyOp = lastOp()
+    const copyOp = ops().find((op) => op.entity === 'note')!
     expect(copyOp.entity).toBe('note')
     expect(copyOp.uid).not.toBe(uidOfNote(noteId))
     expect(copyOp.uid).toBe(uidOfNote(noteIds[0]))
     expect(copyOp.fields.deck_uid).toBe(deckUidOf(otherDeckId))
+    // 复制出来的笔记的关联也发了 op（S1 的 noteItem 实体）
+    expect(ops().some((op) => op.entity === 'noteItem')).toBe(true)
   })
 
   it('删除笔记与孤儿词条各发一条 delete op', () => {

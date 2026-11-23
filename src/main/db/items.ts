@@ -2,7 +2,7 @@ import type { CardDirection, Example, Item, ItemKind } from '@shared/types'
 import { normalizeEn, mergePosText } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt } from './connection'
 import { deckScope } from './decks'
-import { cardFlagUid, itemUid, withSync } from './sync'
+import { cardFlagUid, itemUid, noteItemUid, noteUid, recordSyncOp, withSync } from './sync'
 import { newUid } from './uid'
 import { newCardSnapshot } from '../fsrs'
 
@@ -230,15 +230,36 @@ export function upsertItem(input: UpsertItemInput): number {
   )
 }
 
-/** 词条写完之后的两件事：补卡片、挂到笔记上（两者都不单独发 op） */
+/** 词条写完之后的两件事：补卡片、挂到笔记上（关联本身也是一个同步实体） */
 function finishItemWrite(itemId: number, input: UpsertItemInput): number {
   ensureCards(itemId, input.listenEnabled)
-  getDb()
-    .prepare(
-      `INSERT INTO note_items (note_id, item_id, raw_line, position) VALUES (?, ?, ?, ?)
-       ON CONFLICT(note_id, item_id) DO UPDATE SET raw_line = excluded.raw_line`
-    )
-    .run(input.noteId, itemId, input.rawLine ?? null, input.position)
+  const d = getDb()
+  const previous = d
+    .prepare('SELECT raw_line FROM note_items WHERE note_id = ? AND item_id = ?')
+    .get(input.noteId, itemId) as { raw_line: string | null } | undefined
+  const rawLine = input.rawLine ?? null
+  d.prepare(
+    `INSERT INTO note_items (note_id, item_id, raw_line, position) VALUES (?, ?, ?, ?)
+     ON CONFLICT(note_id, item_id) DO UPDATE SET raw_line = excluded.raw_line`
+  ).run(input.noteId, itemId, rawLine, input.position)
+
+  // 关联是独立实体（PLAN-SYNC S1）：新建或 raw_line 变了才发；position 只在新建时定
+  const noteUidValue = noteUid(input.noteId)
+  const itemUidValue = itemUid(itemId)
+  if (noteUidValue && itemUidValue && (!previous || previous.raw_line !== rawLine)) {
+    recordSyncOp({
+      entity: 'noteItem',
+      uid: noteItemUid(noteUidValue, itemUidValue),
+      fields: previous
+        ? { note_uid: noteUidValue, item_uid: itemUidValue, raw_line: rawLine }
+        : {
+            note_uid: noteUidValue,
+            item_uid: itemUidValue,
+            raw_line: rawLine,
+            position: input.position
+          }
+    })
+  }
   return itemId
 }
 

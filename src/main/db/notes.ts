@@ -2,7 +2,7 @@ import type { NoteDetail, NoteInput, NoteQuery, NoteSummary } from '@shared/type
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { defaultDeckId, deckExists } from './decks'
 import { itemDirections } from './items'
-import { deckUid, recordSyncOp, withSync } from './sync'
+import { deckUid, noteItemUid, recordSyncOp, withSync } from './sync'
 import { newUid } from './uid'
 
 interface NoteRow {
@@ -309,6 +309,10 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
        SELECT ?, item_id, raw_line, position FROM note_items WHERE note_id = ?`
     )
     const sourceRow = d.prepare('SELECT * FROM notes WHERE id = ?')
+    const copiedLinks = d.prepare(
+      `SELECT ni.raw_line, ni.position, i.uid AS item_uid
+       FROM note_items ni JOIN items i ON i.id = ni.item_id WHERE ni.note_id = ?`
+    )
     const targetUid = deckUid(target)
     const noteIds: number[] = []
     for (const id of existingNoteIds(list)) {
@@ -335,6 +339,24 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
           const res = insert.run(uid, target, now, now, id)
           const noteId = toInt(res.lastInsertRowid)
           link.run(noteId, id)
+          // 复制出来的笔记也要带上关联（S1）：每条关联是一个独立实体
+          const links = copiedLinks.all(id) as unknown as {
+            raw_line: string | null
+            position: number
+            item_uid: string
+          }[]
+          for (const row of links) {
+            recordSyncOp({
+              entity: 'noteItem',
+              uid: noteItemUid(uid, row.item_uid),
+              fields: {
+                note_uid: uid,
+                item_uid: row.item_uid,
+                raw_line: row.raw_line,
+                position: toInt(row.position)
+              }
+            })
+          }
           noteIds.push(noteId)
         }
       )

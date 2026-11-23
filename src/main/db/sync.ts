@@ -1,4 +1,6 @@
+import os from 'node:os'
 import { getDb, parseJson, toInt, tx } from './connection'
+import { newUid } from './uid'
 
 /**
  * 本地变更队列（PLAN-SYNC §3.4）。
@@ -8,12 +10,16 @@ import { getDb, parseJson, toInt, tx } from './connection'
  * **自己那条事务里**顺带追加一条 `sync_ops`。推送端只认这张表，不回头对比数据行。
  */
 
-export type SyncEntity = 'note' | 'item' | 'review' | 'exam' | 'cardFlag'
+export type SyncEntity = 'note' | 'item' | 'review' | 'exam' | 'deck' | 'noteItem' | 'cardFlag'
 export type SyncOpKind = 'upsert' | 'delete'
+
+/** 快照/op 的格式版本：读到更大的一律拒绝（PLAN-SYNC §4），不半懂半不懂地合并 */
+export const SYNC_FORMAT_VERSION = 1
 
 export interface SyncMeta {
   entity: SyncEntity
-  /** 稳定 id：note/item/review/exam 用各自 uid；cardFlag 用 `<item uid>:<direction>` */
+  /** 稳定 id：note/item/review/exam/deck 用各自 uid；noteItem 用 `<note uid>:<item uid>`；
+   *  cardFlag 用 `<item uid>:<direction>` */
   uid: string
   op?: SyncOpKind
   /** 只放变更字段，键用数据库列名；跨设备的引用一律换成 uid（见各写入口） */
@@ -38,14 +44,17 @@ export interface SyncOpRow {
 /**
  * 执行一次写操作，并在**同一条事务**里记下它。
  *
+ * op 先写、再执行 `fn`：仍然是一个事务（`fn` 失败会连 op 一起回滚），但顺序上
+ * 「主体」一定排在依赖它的 op（`noteItem` / `cardFlag`）前面——S2 按 seq 应用时
+ * 不会先遇到指向还不存在的笔记/词条的关联。
+ *
  * `meta = null` 表示这次写没法描述成 op（不该发生，但同步层不该因此挡住用户）：
  * 照样开事务，只是不记队列。
  */
 export function withSync<T>(meta: SyncMeta | null, fn: () => T): T {
   return tx(() => {
-    const result = fn()
     if (meta) recordSyncOp(meta)
-    return result
+    return fn()
   })
 }
 
@@ -73,6 +82,102 @@ export function recordSyncOp(meta: SyncMeta): void {
       meta.origin ?? 'local',
       Math.trunc(meta.tsUtc ?? Date.now())
     )
+  if (op === 'delete') rememberTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now())
+}
+
+/**
+ * 删除的影子（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要能比 ts，
+ * 同一 uid 只保留最新的那次删除。
+ */
+function rememberTombstone(entity: SyncEntity, uid: string, tsUtc: number): void {
+  getDb()
+    .prepare(
+      `INSERT INTO sync_tombstones (entity, uid, ts_utc) VALUES (?, ?, ?)
+       ON CONFLICT(entity, uid) DO UPDATE SET ts_utc = excluded.ts_utc
+       WHERE excluded.ts_utc > sync_tombstones.ts_utc`
+    )
+    .run(entity, uid, Math.trunc(tsUtc))
+}
+
+export interface SyncTombstone {
+  entity: SyncEntity
+  uid: string
+  tsUtc: number
+}
+
+export function listTombstones(): SyncTombstone[] {
+  const rows = getDb()
+    .prepare('SELECT entity, uid, ts_utc FROM sync_tombstones ORDER BY ts_utc ASC')
+    .all() as unknown as { entity: string; uid: string; ts_utc: number }[]
+  return rows.map((row) => ({
+    entity: row.entity as SyncEntity,
+    uid: row.uid,
+    tsUtc: toInt(row.ts_utc)
+  }))
+}
+
+export interface SyncState {
+  formatVersion: number
+  deviceId: string
+  deviceName: string | null
+  lastPushAt: string | null
+  lastPullAt: string | null
+}
+
+/**
+ * 本机同步状态（单行）。第一次用时创建：设备 id 是本机随机 ULID，不上传（§3.9 白名单排除）。
+ * 设备名只用于「设备管理」列表，S2 才会上远端。
+ */
+export function getSyncState(): SyncState {
+  const d = getDb()
+  const row = d.prepare('SELECT * FROM sync_state WHERE id = 1').get() as
+    | {
+        format_version: number
+        device_id: string
+        device_name: string | null
+        last_push_at: string | null
+        last_pull_at: string | null
+      }
+    | undefined
+  if (row) {
+    return {
+      formatVersion: toInt(row.format_version, SYNC_FORMAT_VERSION),
+      deviceId: row.device_id,
+      deviceName: row.device_name,
+      lastPushAt: row.last_push_at,
+      lastPullAt: row.last_pull_at
+    }
+  }
+  const deviceId = newUid()
+  const deviceName = os.hostname() || null
+  d.prepare(
+    `INSERT INTO sync_state (id, format_version, device_id, device_name) VALUES (1, ?, ?, ?)`
+  ).run(SYNC_FORMAT_VERSION, deviceId, deviceName)
+  return {
+    formatVersion: SYNC_FORMAT_VERSION,
+    deviceId,
+    deviceName,
+    lastPushAt: null,
+    lastPullAt: null
+  }
+}
+
+export function updateSyncState(patch: { lastPushAt?: string | null; lastPullAt?: string | null }): void {
+  getSyncState()
+  const sets: string[] = []
+  const params: (string | null)[] = []
+  if (patch.lastPushAt !== undefined) {
+    sets.push('last_push_at = ?')
+    params.push(patch.lastPushAt)
+  }
+  if (patch.lastPullAt !== undefined) {
+    sets.push('last_pull_at = ?')
+    params.push(patch.lastPullAt)
+  }
+  if (!sets.length) return
+  getDb()
+    .prepare(`UPDATE sync_state SET ${sets.join(', ')} WHERE id = 1`)
+    .run(...params)
 }
 
 /** 待推送的本地 op（S1 的推送队列从这里读；S0 只有测试在用它） */
@@ -136,4 +241,12 @@ export function deckUid(deckId?: number | null): string | null {
  */
 export function cardFlagUid(itemUidValue: string, direction: string): string {
   return `${itemUidValue}:${direction}`
+}
+
+/**
+ * noteItem 的稳定 id：一条「笔记 ↔ 词条」关联由两端 uid 唯一确定。
+ * 关联本身没有业务字段（只有 raw_line / position），并集合并即可。
+ */
+export function noteItemUid(noteUidValue: string, itemUidValue: string): string {
+  return `${noteUidValue}:${itemUidValue}`
 }

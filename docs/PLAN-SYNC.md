@@ -515,5 +515,36 @@ npx vitest run tests/real-db-migration.test.ts
 **验收结论**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 207 项全绿 + 1 份手动测试跳过**；
 `npm run build` 通过；**没有新增任何网络代码**（S0 全程不连网、不写远端）。
 
-**S0 完成**。下一步是 S1（本地队列与快照），见 §5；S0 没通过验收之前不要动 S1 的网络部分。
+**S0 完成**。下一步是 S1（本地队列与快照），见 §5；S1 没通过验收之前不要动 S2 的网络部分。
+
+### S1 第一步：deck 与 noteItem 事件（2026-11-23，`feat/sync`）
+
+S1 开工前确认了两个会定死传输格式的决定（2026-11-23）：
+
+1. **decks 纳入同步**。笔记/考试的 op 早就用 `deck_uid` 指库，但库本身不产生 op，别的设备会拿到指不到的库。
+2. **`note_items` 用独立关系事件**（不是塞进 note 字段），两台各加一个词条时并集而不是互相覆盖。
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `decks.ts`：`createDeck` / `updateDeck` / `removeDeck` | 发 `deck` 的 upsert / upsert（只记变更字段）/ delete op |
+| `items.ts`：`finishItemWrite` | 新增或 `raw_line` 变化时发 `noteItem` op（uid = `<note uid>:<item uid>`） |
+| `notes.ts`：`copyNotes` | 复制出来的每条关联各发一条 op（用新笔记的 uid） |
+| `sync.ts` | 实体加 `deck` / `noteItem`；`delete` op 同时写 `sync_tombstones`（同 uid 只留最新 ts）；`getSyncState` / `updateSyncState`（单行，设备 id 只在本机）；`SYNC_FORMAT_VERSION = 1` |
+| `schema.ts` | `SCHEMA_VERSION` 3 → **4**；新表 `sync_tombstones`、`sync_state` |
+| `connection.ts` | `uid` 补列/回填/唯一索引的清单加上 `decks`（老库补 `ux_decks_uid`） |
+
+**两个实现细节**
+
+1. **`withSync` 改成「先记 op、再执行 `fn`」**：仍是同一条事务（`fn` 失败连 op 一起回滚），
+   但保证「主体」排在依赖它的 op 前面——否则 `noteItem` / `cardFlag` 会先于 note/item/review 落队列，
+   S2 按 seq 应用时会先遇到指向不存在实体的关联。
+2. **关联的删除不发 op**：删笔记/删词条时 `note_items` 走外键级联，远端应用 delete 时同样级联，
+   多发的关联 delete 反而是噪声（S3 处理「一条笔记里移除一个词」时再补）。
+
+**测试**：`tests/sync-relations.test.ts`（新，7 项）——deck 三件事、noteItem 的新建/原文变更/原样不发、
+复制笔记的关联 uid、删除影子（含去重）、`sync_state` 稳定性、v3→v4 的 decks.uid 补列与索引。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 214 项通过 + 1 份手动测试跳过**。
 

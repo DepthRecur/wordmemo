@@ -1,5 +1,5 @@
 /** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
-export const SCHEMA_VERSION = 3
+export const SCHEMA_VERSION = 4
 
 /**
  * 「多个库」是从这个版本开始的结构版本。
@@ -148,6 +148,25 @@ CREATE TABLE IF NOT EXISTS sync_ops (
   pushed INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS ix_sync_ops_pending ON sync_ops(origin, pushed, seq);
+
+-- 删除的影子表（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要有 ts 可比，
+-- 顺带给 S3 的「最近 30 天删除可恢复」留底。一次删除一行，同 uid 保留最新的 ts。
+CREATE TABLE IF NOT EXISTS sync_tombstones (
+  entity TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  ts_utc INTEGER NOT NULL,
+  PRIMARY KEY (entity, uid)
+);
+
+-- 本机的同步状态（单行）：设备 id 只在本机，不上传（§3.9 的 settings 白名单排除它）
+CREATE TABLE IF NOT EXISTS sync_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  last_push_at TEXT,
+  last_pull_at TEXT
+);
 
 CREATE TABLE IF NOT EXISTS pronunciations (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -1,7 +1,7 @@
 import type { Deck, DeckPatch, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { scopeForSync } from './exams'
-import { deckUid, recordSyncOp } from './sync'
+import { deckUid, recordSyncOp, withSync } from './sync'
 import { newUid } from './uid'
 import { getSettings, updateSettings } from '../settings'
 
@@ -181,21 +181,28 @@ export function createDeck(input: {
     | { p?: number }
     | undefined
   const position = toInt(row?.p, -1) + 1
-  const res = getDb()
-    .prepare(
-      'INSERT INTO decks (uid, name, color, position, new_per_day, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    .run(
-      newUid(),
-      name,
-      input.color?.trim() || null,
-      position,
-      input.newPerDay === null || input.newPerDay === undefined
-        ? null
-        : Math.max(0, toInt(input.newPerDay)),
-      localIso()
-    )
-  return toInt(res.lastInsertRowid)
+  const color = input.color?.trim() || null
+  const newPerDay =
+    input.newPerDay === null || input.newPerDay === undefined
+      ? null
+      : Math.max(0, toInt(input.newPerDay))
+  const uid = newUid()
+  const createdAt = localIso()
+  return withSync(
+    {
+      entity: 'deck',
+      uid,
+      fields: { name, color, position, new_per_day: newPerDay, created_at: createdAt }
+    },
+    () => {
+      const res = getDb()
+        .prepare(
+          'INSERT INTO decks (uid, name, color, position, new_per_day, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(uid, name, color, position, newPerDay, createdAt)
+      return toInt(res.lastInsertRowid)
+    }
+  )
 }
 
 export function updateDeck(id: number, patch: DeckPatch): void {
@@ -216,9 +223,22 @@ export function updateDeck(id: number, patch: DeckPatch): void {
         : Math.max(0, toInt(patch.newPerDay))
   const position = patch.position === undefined ? toInt(current.position) : toInt(patch.position)
 
-  getDb()
-    .prepare('UPDATE decks SET name = ?, color = ?, position = ?, new_per_day = ? WHERE id = ?')
-    .run(name, color, position, newPerDay, id)
+  const currentNewPerDay =
+    current.new_per_day === null || current.new_per_day === undefined
+      ? null
+      : toInt(current.new_per_day)
+  // 只记真正变了的字段（同 notes/items）
+  const fields: Record<string, unknown> = {}
+  if (name !== String(current.name)) fields.name = name
+  if (color !== (current.color ? String(current.color) : null)) fields.color = color
+  if (position !== toInt(current.position)) fields.position = position
+  if (newPerDay !== currentNewPerDay) fields.new_per_day = newPerDay
+
+  withSync({ entity: 'deck', uid: String(current.uid ?? ''), fields }, () => {
+    getDb()
+      .prepare('UPDATE decks SET name = ?, color = ?, position = ?, new_per_day = ? WHERE id = ?')
+      .run(name, color, position, newPerDay, id)
+  })
 }
 
 /**
@@ -245,6 +265,9 @@ export function removeDeck(
   }
 
   const wasCurrent = getSettings().currentDeckId === id
+  const deckRow = getDb().prepare('SELECT uid FROM decks WHERE id = ?').get(id) as
+    | { uid?: string | null }
+    | undefined
   const result = tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
     // 先取 uid：改完归属要发 note / exam 的 op，别的设备才知道这些行变了
@@ -291,6 +314,7 @@ export function removeDeck(
       }
     }
     getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
+    recordSyncOp({ entity: 'deck', uid: deckRow?.uid ?? '', op: 'delete' })
     return { moved: before, unassigned: moveTo === null ? before : 0 }
   })
   // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。
