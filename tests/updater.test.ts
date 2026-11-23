@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,7 @@ import {
   compareVersions,
   decideUpdate,
   disabledUpdateStatus,
+  downloadZipFile,
   initialUpdaterState,
   isCheckDue,
   isNewerVersion,
@@ -376,5 +378,93 @@ describe('更新源与开关', () => {
     const many = Array.from({ length: 30 }, (_, i) => `0.${i}.0`)
     const status = disabledUpdateStatus('0.4.0', { ...DEFAULT_SETTINGS.updates, skippedVersions: many.slice(-MAX_SKIPPED_VERSIONS) })
     expect(status.skippedVersions).toHaveLength(MAX_SKIPPED_VERSIONS)
+  })
+})
+
+describe('下载：慢速不掐、卡住才断', () => {
+  const encoder = new TextEncoder()
+  const sha = (chunks: Uint8Array[]): string => {
+    const hash = createHash('sha256')
+    for (const chunk of chunks) hash.update(Buffer.from(chunk))
+    return hash.digest('hex')
+  }
+
+  it('正常下载：写完 .part 再改名，sha256 对得上', async () => {
+    const root = tmpDir()
+    const dest = path.join(root, 'pkg.zip')
+    const chunks = [encoder.encode('hello '), encoder.encode('world')]
+    const fetchImpl = (async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(chunk)
+            controller.close()
+          }
+        }),
+        { status: 200, headers: { 'content-length': String(chunks.reduce((n, c) => n + c.length, 0)) } }
+      )) as unknown as typeof fetch
+    await downloadZipFile({ url: 'https://example.com/pkg.zip', destFile: dest, sha256: sha(chunks), fetchImpl })
+    expect(fs.readFileSync(dest, 'utf8')).toBe('hello world')
+    expect(fs.existsSync(`${dest}.part`)).toBe(false)
+  })
+
+  it('一直有数据就不算超时（总量上限拉长后慢速能下完）', async () => {
+    const root = tmpDir()
+    const dest = path.join(root, 'slow.zip')
+    const chunks = [encoder.encode('a'), encoder.encode('b'), encoder.encode('c')]
+    const fetchImpl = (async () =>
+      new Response(
+        new ReadableStream({
+          async start(controller) {
+            // 每 30ms 来一块，总耗时 90ms > 总量上限 60ms，但每块都在上限内
+            for (const chunk of chunks) {
+              await new Promise((r) => setTimeout(r, 30))
+              controller.enqueue(chunk)
+            }
+            controller.close()
+          }
+        }),
+        { status: 200, headers: { 'content-length': String(chunks.reduce((n, c) => n + c.length, 0)) } }
+      )) as unknown as typeof fetch
+    await downloadZipFile({
+      url: 'https://example.com/slow.zip',
+      destFile: dest,
+      sha256: sha(chunks),
+      fetchImpl,
+      timeoutMs: 60,
+      stallTimeoutMs: 200
+    })
+    expect(fs.readFileSync(dest, 'utf8')).toBe('abc')
+  })
+
+  it('卡住 5 分钟（测试里 80ms）没有新数据 → 断开并删掉半截文件', async () => {
+    const root = tmpDir()
+    const dest = path.join(root, 'stall.zip')
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const signal = init?.signal ?? null
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('partial'))
+            signal?.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')))
+          },
+          pull() {
+            return new Promise(() => {})
+          }
+        }),
+        { status: 200, headers: { 'content-length': '100000' } }
+      )
+    }) as unknown as typeof fetch
+    await expect(
+      downloadZipFile({
+        url: 'https://example.com/stall.zip',
+        destFile: dest,
+        sha256: 'd'.repeat(64),
+        fetchImpl,
+        stallTimeoutMs: 80
+      })
+    ).rejects.toThrow(/下载停住了/)
+    expect(fs.existsSync(`${dest}.part`)).toBe(false)
+    expect(fs.existsSync(dest)).toBe(false)
   })
 })

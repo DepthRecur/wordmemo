@@ -45,7 +45,14 @@ export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 export const MAX_BACKOFF_MS = 6 * 60 * 60 * 1000
 export const MIN_RETRY_DELAY_MS = 60_000
 export const CHECK_TIMEOUT_MS = 45_000
-export const DOWNLOAD_TIMEOUT_MS = 30 * 60_000
+/**
+ * 整包下载的总时长上限。150 MB 在 40 KB/s 的线路上要 60 分钟（国内直连 GitHub
+ * 常见这个速度），所以不能像以前那样卡 30 分钟——那会把「慢但没断」的下载掐掉。
+ * 真正该管的是「停住不动」，见 DOWNLOAD_STALL_TIMEOUT_MS。
+ */
+export const DOWNLOAD_TIMEOUT_MS = 3 * 60 * 60_000
+/** 连续这么久没有收到任何新字节才算卡死（慢速但持续的下载不受影响） */
+export const DOWNLOAD_STALL_TIMEOUT_MS = 5 * 60_000
 /** 下载进度推给渲染层的最小间隔 */
 export const PROGRESS_EMIT_MS = 250
 export const MAX_SKIPPED_VERSIONS = 20
@@ -534,13 +541,27 @@ interface DownloadOptions {
   sha256: string
   fetchImpl: typeof fetch
   onProgress?: (received: number, total: number | null) => void
+  /** 单测用：覆盖「总时长上限」与「卡住判定」 */
+  timeoutMs?: number
+  stallTimeoutMs?: number
 }
 
 /** 流式下载到 .part，边下边算 sha256；校验不过 / 中途失败都删掉半截文件 */
 export async function downloadZipFile(opts: DownloadOptions): Promise<void> {
   const tmp = `${opts.destFile}.part`
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
+  const totalTimeout = opts.timeoutMs ?? DOWNLOAD_TIMEOUT_MS
+  const stallTimeout = opts.stallTimeoutMs ?? DOWNLOAD_STALL_TIMEOUT_MS
+  let abortedBy: 'total' | 'stall' | null = null
+  const timer = setTimeout(() => {
+    abortedBy = 'total'
+    controller.abort()
+  }, totalTimeout)
+  // 卡住判定：每收到一块就重置；慢速（每秒都有数据）永远不会触发
+  let stallTimer = setTimeout(() => {
+    abortedBy = 'stall'
+    controller.abort()
+  }, stallTimeout)
   const hash = crypto.createHash('sha256')
   let handle: fs.promises.FileHandle | null = null
   let received = 0
@@ -562,6 +583,11 @@ export async function downloadZipFile(opts: DownloadOptions): Promise<void> {
       received += buffer.length
       hash.update(buffer)
       await handle!.write(buffer)
+      clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => {
+        abortedBy = 'stall'
+        controller.abort()
+      }, stallTimeout)
       opts.onProgress?.(received, total)
     })
     await handle.close()
@@ -579,12 +605,19 @@ export async function downloadZipFile(opts: DownloadOptions): Promise<void> {
     }
     fs.rmSync(tmp, { force: true })
     if (err instanceof UpdateError) throw err
-    if ((err as { name?: string })?.name === 'AbortError') {
+    if (abortedBy === 'stall') {
+      throw new UpdateError(
+        `下载停住了（${Math.round(stallTimeout / 60_000)} 分钟没有新数据），可以稍后重试或手动下载新版`,
+        err
+      )
+    }
+    if (abortedBy === 'total' || (err as { name?: string })?.name === 'AbortError') {
       throw new UpdateError('下载超时，可以稍后重试或手动下载新版', err)
     }
     throw new UpdateError('下载失败，可以稍后重试或手动下载新版', err)
   } finally {
     clearTimeout(timer)
+    clearTimeout(stallTimer)
   }
 }
 
