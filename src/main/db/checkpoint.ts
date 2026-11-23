@@ -5,6 +5,7 @@ import { getDb, localIso, parseJson, toInt, toNum, tx } from './connection'
 import { ensureCards } from './items'
 import { scopeForSync } from './exams'
 import { newCardSnapshot, replayCard } from '../fsrs'
+import { decryptEnvelope, encryptEnvelope, DEFAULT_SCRYPT_WORK_FACTOR } from '../sync/crypto'
 import {
   getSyncState,
   noteItemUid,
@@ -460,6 +461,45 @@ export function validateCheckpoint(raw: unknown): SyncCheckpoint {
 /** 导入一个 `.wmsync` 文件：合并（不覆盖），整份在一个事务里 */
 export function importSnapshot(file: string): { checkpoint: SyncCheckpoint; stats: MergeStats } {
   const checkpoint = readCheckpoint(file)
+  const stats = mergeCheckpoint(checkpoint)
+  return { checkpoint, stats }
+}
+
+/**
+ * 加密的 `.wmsync`（S2）：文件和远端分片同格式——明文魔数 + age 密文，
+ * 路径/类型/格式版本在解密后校验（见 sync/crypto.ts）。
+ */
+export async function exportEncryptedSnapshot(
+  file: string,
+  passphrase: string,
+  workFactor: number = DEFAULT_SCRYPT_WORK_FACTOR
+): Promise<SyncCheckpoint> {
+  const checkpoint = exportCheckpoint('wmsync')
+  const envelope = await encryptEnvelope(
+    {
+      formatVersion: SYNC_FORMAT_VERSION,
+      kind: 'wmsync',
+      path: 'wmsync',
+      deviceId: checkpoint.deviceId,
+      createdAt: checkpoint.createdAt
+    },
+    checkpoint,
+    passphrase,
+    workFactor
+  )
+  fs.writeFileSync(file, envelope)
+  return checkpoint
+}
+
+export async function importEncryptedSnapshot(
+  file: string,
+  passphrase: string
+): Promise<{ checkpoint: SyncCheckpoint; stats: MergeStats }> {
+  const envelope = await decryptEnvelope<unknown>(fs.readFileSync(file), passphrase, {
+    kind: 'wmsync',
+    path: 'wmsync'
+  })
+  const checkpoint = validateCheckpoint(envelope.payload)
   const stats = mergeCheckpoint(checkpoint)
   return { checkpoint, stats }
 }

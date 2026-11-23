@@ -1,4 +1,5 @@
 import os from 'node:os'
+import { SYNC_FORMAT_VERSION } from '@shared/sync'
 import { getDb, parseJson, toInt, tx } from './connection'
 import { newUid } from './uid'
 
@@ -13,8 +14,8 @@ import { newUid } from './uid'
 export type SyncEntity = 'note' | 'item' | 'review' | 'exam' | 'deck' | 'noteItem' | 'cardFlag'
 export type SyncOpKind = 'upsert' | 'delete'
 
-/** 快照/op 的格式版本：读到更大的一律拒绝（PLAN-SYNC §4），不半懂半不懂地合并 */
-export const SYNC_FORMAT_VERSION = 1
+/** 快照/op 的格式版本（定义在 @shared/sync，渲染进程也能读） */
+export { SYNC_FORMAT_VERSION }
 
 export interface SyncMeta {
   entity: SyncEntity
