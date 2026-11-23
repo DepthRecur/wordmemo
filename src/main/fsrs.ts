@@ -28,13 +28,17 @@ export async function initFsrs(options: {
   examRetention: number
   maximumInterval?: number
 }): Promise<void> {
+  // 不要开 fuzz（PLAN-SYNC §3.3）：同步要把「复习记录 → 卡片状态」重放出来，
+  // 一旦间隔带随机抖动，两台设备重放同一串复习会得到不同 due_at，
+  // 于是「cards 是 reviews 的函数」这条前提不成立。关掉只影响间隔的 ±5% 抖动，
+  // 不影响记忆模型本身。
   longTermScheduler = await DefaultScheduler({
     version: 'FSRS-7',
     desiredRetention: options.longTermRetention,
     enableShortTerm: true,
     learningSteps: ['1m', '10m'],
     relearningSteps: ['10m'],
-    enableFuzz: true,
+    enableFuzz: false,
     maximumInterval: options.maximumInterval ?? 365
   })
   examScheduler = await DefaultScheduler({
@@ -142,4 +146,30 @@ export function isNewCard(fsrsJson: string): boolean {
   } catch {
     return false
   }
+}
+
+/** 一条可重放的复习事实（PLAN-SYNC §3.3）：只留重放用得上的字段 */
+export interface ReplayReview {
+  reviewedAt: Date
+  rating: 1 | 2 | 3 | 4
+}
+
+/**
+ * 从复习记录重放出卡片状态：`card = replay(reviews 按时间排序)`。
+ *
+ * 三条约束（改动这里之前先想清楚）：
+ * 1. 只用长期调度器：`applyReview` 今天不看 `mode`，重放必须和它一致；
+ *    等哪天考试模式真的改了调度，两边要一起改，否则重放立刻对不上。
+ * 2. 起点是 `newCard()`，不是库里那张卡——重放只认「这张卡有没有复习过」。
+ * 3. 必须确定性：调度器关掉 fuzz（见 initFsrs），同一串记录重放结果必须一致。
+ */
+export function replayCard(reviews: ReplayReview[], cardId?: string): CardSnapshot {
+  const start = reviews[0]?.reviewedAt ?? new Date()
+  let card = schedulerFor('longterm').newCard({ now: start })
+  // ts-fsrs 的 newCard 每次生成随机 cardId；要逐字段对齐真实卡片就得沿用它的 id
+  if (cardId) card = { ...card, cardId }
+  for (const review of reviews) {
+    card = schedulerFor('longterm').review({ card, grade: review.rating, now: review.reviewedAt }).card
+  }
+  return toSnapshot(card)
 }

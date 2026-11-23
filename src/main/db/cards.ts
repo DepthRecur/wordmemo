@@ -207,10 +207,10 @@ export interface ReviewOutcome {
   state: number
 }
 
-export function applyReview(input: SubmitReview): ReviewOutcome {
+export function applyReview(input: SubmitReview, now: Date = new Date()): ReviewOutcome {
   const row = getCardRow(input.cardId)
   if (!row) throw new Error('卡片不存在')
-  const updated = reviewSnapshot(row.fsrs_json, input.rating, new Date())
+  const updated = reviewSnapshot(row.fsrs_json, input.rating, now)
   const d = getDb()
   d.prepare(
     `UPDATE cards SET due_at = ?, stability = ?, difficulty = ?, reps = ?, lapses = ?, state = ?, last_review = ?, needs_check = 0, fsrs_json = ?
@@ -222,12 +222,12 @@ export function applyReview(input: SubmitReview): ReviewOutcome {
     updated.reps,
     updated.lapses,
     updated.state,
-    localIso(),
+    localIso(now),
     updated.fsrsJson,
     input.cardId
   )
   // Anki 的 sibling bury：一个词条的一张卡复习后，其他方向今天不再出现
-  const today = localIso().slice(0, 10)
+  const today = localIso(now).slice(0, 10)
   d.prepare(
     `UPDATE cards SET buried_until = ? WHERE item_id = ? AND id <> ? AND suspended = 0`
   ).run(today, toInt(row.item_id), input.cardId)
@@ -236,7 +236,7 @@ export function applyReview(input: SubmitReview): ReviewOutcome {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.cardId,
-    localIso(),
+    localIso(now),
     input.rating,
     input.answer ?? '',
     input.correct ? 1 : 0,

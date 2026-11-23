@@ -16,6 +16,7 @@
 - **便携版 U2**（2026-11-21，已并入 master）：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，有新版本自动下载 + 流式 sha256 + 解压到 `update/app-new`，只提示「下次启动生效」；启动器在下一次启动时按七步换目录（`app→app-old` / `app-new→app`），失败回滚 + `update/error.log`。**应用绝不替换自己、不静默重启**。实现记录与验收见 [PLAN-UPDATE §10 U2](PLAN-UPDATE.md)。
 - **便携版 U3**（2026-11-21，`feat/portable-u3`）：`.github/workflows/release.yml`（tag `v*` → typecheck/test/build/dist → 三件套校验 → GitHub Release）+ `release-notes/v<version>.md` 约定 + README 两条更新路径与发版流程。**不改代码，版本仍是 0.4.0**。实现记录见 [PLAN-UPDATE §10 U3](PLAN-UPDATE.md)。
 - **便携版真机验收**（2026-11-21 ~ 23，见 [PLAN-UPDATE §10 真机验收](PLAN-UPDATE.md)）：测试包 `D:\WordMemo-U3-Package` 三份独立指南发 A/B/C。**A 自测 T1–T10 全通过**（报告在包内 `报告-A-20261123.md`，截图 `D:\WordMemo-A-Evidence\`）；C（VM）T1–T4/T9 通过后卡住、B 同现象，根因是**测试指南 T5 第 4 步用错启动方式**（`启动（普通）` 不带 `WORDMEMO_UPDATE_URL` → 打到 private 仓库 404），已修指南并加「常见现象」对照表，**不是代码缺陷**。另修 T7（`app-old` 只在下一次更新时删）与 T6（stale 在第一次启动就清）。B/C 待按新指南复测 T5–T10。
+- **便携版收尾（2026-11-23，完结）**：真机验收 A 自测 T1–T10 全过；**B/C 不再测试**（决定：三台机器行为一致，继续测的边际收益低于成本）；真实发布链路打通——仓库已公开，`v0.5.0` / `v0.5.1` 由 GitHub Actions 自动发 Release，应用真的从 GitHub 取到 `latest.json` 并流式下载 148 MB。0.5.1 修掉「30 分钟总时长上限把慢速但没断的下载掐断」这个真实缺陷（改成 5 分钟无新数据才算卡住 + 3 小时上限）。**自动更新板块到此完结**；更新失败的兜底就是用户自己去 GitHub Release 手动下载 zip（README 已写）。
 - **无 Key 模式**（2026-11-20）：没 Key 是受支持状态；AI 功能不可用，但导入文本、学习、复习、考试、统计、多库全部可用（见 §5.6）。
 
 **3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
@@ -295,10 +296,10 @@ docs/               ← 四份计划 + 调研 + 本文件
 
 ## 6. 后面两个功能各自的"第一步"
 
-| 功能 | 第一步 | 注意 |
+| 功能 | 状态 | 注意 |
 |---|---|---|
-| 便携版 | **U0–U3 全部完成**（0.4.0） | 发版：改版本 + `release-notes/v<version>.md` → tag `v<version>` → CI 出三件套；数据必须留在 `%APPDATA%\WordMemo` |
-| 同步 | S0：`uid` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
+| 便携版 | **完结**（U0–U3 + 真机验收 + 真实 Release，当前 0.5.1） | 发版：改版本 + `release-notes/v<version>.md` → tag `v<version>` → CI 出三件套；数据必须留在 `%APPDATA%\WordMemo`。更新失败的用户自己下 zip |
+| 同步 | **现在开始 S0**：`uid` + `withSync` + `replayCards()` + golden test | **S0 不通过就别往下做**；退路是「以卡为准 + 冲突副本」 |
 
 ---
 
@@ -360,11 +361,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 需要背景时读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）。
 改任何用户可见文案前先读 docs/MESSAGES.md。
 
-当前状态（2026-11-21）：多供应商（冻结）、多个库、便携版 U0–U3 全部完成（0.4.0）。
-typecheck 0 错误、npm test 17 文件 185 项全绿、npm run build 通过。
+当前状态（2026-11-23）：多供应商（冻结）、多个库、便携版 U0–U3 + 真机验收 + 真实发布（0.5.1）全部完结。
+typecheck 0 错误、npm test 17 文件 188 项全绿、npm run build 通过；GitHub 仓库已公开，`v0.5.0`/`v0.5.1` 已发 Release。
+**便携版板块不再改**（B/C 不再测试；更新失败靠用户自己下 zip 兜底）。
 下一步：从 master 开 feat/sync，做同步 S0：加 uid（先备份）、写入口统一 withSync、抽 replayCards()、golden test。
 S0 不通过就别往下做：3 天内做不到「真实库重放 0 差异」就退回「以 cards 为准 + 冲突副本」。
-（U3 的 CI/发版流程已完成，发版见 README「发布（维护者）」；远端仍未 push。）
 
 硬约束（已定，不要再讨论）：
 - MIT 许可证；AGPL/GPL 只读不抄
