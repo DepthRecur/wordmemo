@@ -693,3 +693,16 @@ header = { formatVersion, kind, path, deviceId, createdAt }
 **S2 还差**：`safeStorage` 记住口令、IPC + 界面（连接向导 / 状态面板 / 快照按钮）、
 退避与抖动的调度器、真仓库 e2e。设备移除、checkpoint 压缩/保留、`sync_devices` 游标按计划属于 S3。
 
+### S2 第四步：真仓库 e2e（2026-11-23，通过）
+
+手动测试 `tests/real-sync.test.ts`（默认跳过；本机用 `.data/sync-e2e.ps1` 从 Windows 凭据管理器取
+token 后跑，不会打印 token）。在 **`DepthRecur/wordmemo-sync-test`** 上跑完了完整链路：
+
+- A（临时库）建笔记 + 词条 → `connect()`（仓库私有、PAT 有效）→ 首次同步推 `meta.json` / `info` / `checkpoint`；
+- B（另一个临时库）连接、校验口令、拉 A 的 checkpoint → 数据齐全；
+- B 改标题、推当天 op 分片 → A 再同步拉到并应用 → 标题变成 B 改的版本。
+
+耗时约 41 秒（scrypt + 跨境网络；测试超时设为 180 秒）。仓库里落的是
+`meta.json`（明文，只有 salt/kdfVerifier）与 `devices/<id>/{checkpoint,info,ops}` 的 age 密文。
+这条测试只在手动跑，不进常规 CI。
+
