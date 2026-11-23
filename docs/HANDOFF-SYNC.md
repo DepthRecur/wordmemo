@@ -110,6 +110,8 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 
 ### 待你手动验收（S2）
 
+**完整步骤、预期结果与错误场景见 [TEST-SYNC-S2.md](TEST-SYNC-S2.md)。** 简版：
+
 1. 启动 `npm run dev`（或构建后运行），设置 → 同步：填 `DepthRecur` / `wordmemo-sync-test`、
    一个 PAT（fine-grained，单仓库 + Contents: Read and write）、一个 ≥10 字符的同步密码 → 「测试并首次同步」。
 2. 看仓库里是否出现 `meta.json` 与 `devices/<id>/…`（应是密文）；设置页显示已连接、上次成功时间、待上传 0。
