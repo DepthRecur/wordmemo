@@ -197,7 +197,9 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 ## 9. 新会话开场提示词（直接复制）
 
 ```
-继续 WordMemo（D:\ymh\Code\tools\wordmemo），做同步。先读 docs/HANDOFF-SYNC.md（这一份就够了），
+继续 WordMemo（D:\ymh\Code\tools\wordmemo），做同步。
+先确认分支：git checkout feat/sync（交接文档和 S0 重放代码都在这个分支上，master 没有）。
+然后读 docs/HANDOFF-SYNC.md（这一份就够了），
 再读 docs/PLAN-SYNC.md 的 §3（方案）、§4（数据与接口变更）、§5（S0–S4）、§10（实现记录）。
 
 现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、npm test 18 文件 191 项全绿。
