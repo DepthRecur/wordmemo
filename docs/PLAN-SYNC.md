@@ -651,3 +651,45 @@ header = { formatVersion, kind, path, deviceId, createdAt }
 它**还没被任何测试碰过**——真仓库 e2e 要等 S2 的传输层接上、并且把 PAT 配进应用（或手动脚本）再跑，
 且只在手动执行，不进常规 CI。
 
+### S2 第三步：逐条 op 与传输引擎（2026-11-23，`feat/sync`）
+
+**逐条 op 合并**（`checkpoint.ts` 的 `applyRemoteOp` / `applyRemoteOps`）：快照合并只能整份应用，
+远端增量是一行一行的 op，所以把同一套规则下沉到单条 op：
+
+- 标量字段按 `sync_ops` 推出来的字段时钟做 LWW；items 的数组并集；`learned_at` 取最早；
+- `reviews` 按 uid 只插一次，插完重放卡片；`cardFlag` 沿用「没有时钟的本地非默认值优先」；
+- 删除优先：比 tombstone 更早的 upsert 直接忽略，更晚的 upsert 可以复活；
+- `deck_uid` / `card_uid` 都过 `sync_aliases`；应用后写 `origin: 'remote:<device>'` 的 op（不推送）。
+
+**新本地表**（`CREATE IF NOT EXISTS`，v4 老库打开即补）：
+
+| 表 | 用途 |
+|---|---|
+| `sync_files` | 远端路径 → `sha` / `etag` 缓存：PUT 要 sha，条件 GET 要 etag |
+| `sync_devices` | 见过的其它设备（S3 的游标/移除设备挂在它上面） |
+
+**传输引擎**（`src/main/sync/engine.ts`）：
+
+1. `connect()`：`getUser` + `getRepo`（公开仓库直接拒绝、无 push 权限拒绝）→
+   `meta.json` 不存在就写入 `{ formatVersion, salt, kdfVerifier }`，存在就校验版本与口令。
+2. `syncNow()` 先推后拉：
+   - 推：当天所有本地 op 写成一个 `devices/<id>/ops/YYYYMMDD.jsonl.age`（age 不能追加，所以每次重写当天文件）；
+     **首次同步 / 攒够 200 条 op / checkpoint 超过 7 天**时改推整份 checkpoint，并把本地 op 全部标记已推。
+   - 拉：列 `devices/`，逐个设备**先 checkpoint 再 ops**（op 是 checkpoint 之后的增量），
+     两个路径都吃 `sync_files` 的 etag 缓存（没变就是 304）。
+   - 每次同步更新 `info.json.age`（设备名）与 `sync_state.last_push_at/last_pull_at`。
+3. 错误保持类型：网络/接口是 `SyncApiError`，口令/仓库/格式是 `SyncSetupError`，UI 直接按 code 说话。
+4. 测试用 `workFactor` 把 age 的 scrypt 从 18 降到 12；生产不传。
+
+**顺手修掉的一个真 bug**：客户端 `getFile/putFile/deleteFile/listDir` 的 URL 少了 `/contents`，
+之前的客户端测试断言太松没抓到，引擎一写 `meta.json` 就 404；已改为 `contentsPath()` 并在测试里断言完整 URL。
+
+**测试**：`tests/remote-ops.test.ts`（6 项：五类实体依次落地、旧 op 不改/新 op 改、数组并集、幂等、
+删除优先与复活、批量计数）+ `tests/sync-engine.test.ts`（5 项：两台设备对着**内存里的假仓库**走完
+「A 推 → B 拉 → B 改并推 op 分片 → A 拉并应用 → 再同步 0 变更」，以及口令错、公开仓库拒绝）。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **29 文件 / 260 项通过 + 1 份手动测试跳过**；`npm run build` 通过。
+
+**S2 还差**：`safeStorage` 记住口令、IPC + 界面（连接向导 / 状态面板 / 快照按钮）、
+退避与抖动的调度器、真仓库 e2e。设备移除、checkpoint 压缩/保留、`sync_devices` 游标按计划属于 S3。
+
