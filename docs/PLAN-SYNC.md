@@ -465,5 +465,50 @@ PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == �
 
 **验证**：`npm run typecheck` 0 错误；`npm test` **20 文件 / 204 项全绿**。
 
-**S0 还剩**：`cards` 的 `suspended` / `learn_mark` / `buried_until` / `needs_check` 作为 `cardFlag` 事件。
+### S0 第四步：cardFlag（2026-11-23，`feat/sync`）
+
+`cards.suspended` / `learn_mark` / `buried_until` / `needs_check` 不属于重放（§3.3），
+按 `cardFlag` 事件同步，字段级 LWW。**卡片本身仍然不传**。
+
+**稳定 id**：`<item uid>:<direction>`（`cardFlagUid()`）。`cards` 没有自己的 uid，
+但「词条 uid + 方向」在两台设备上是同一个字符串，落地时再映射成本地 card id。
+
+**三个入口（都是唯一写入口）**
+
+| 入口 | 字段 | 何时发 |
+|---|---|---|
+| `setDirection` | `suspended` | 打开/关闭听写方向；**首次建卡也发一条 `{suspended:0}`**，否则远端不知道这张卡存在 |
+| `markItemLearned` | `needs_check`、`learn_mark` | 学过一个词条，给每张未挂起的卡各发一条（挂起的不发） |
+| `applyReview` | `needs_check: 0`（复习的那张）、`buried_until`（同词条其它方向） | 复习时；只发**值真的变了**的 |
+
+**只记变了的值**：`needs_check` 已经是 0、兄弟卡今天已经 bury 过、`learn_mark` 没变，
+都不发 op。同一天连点两次复习只会多一条 review op。
+
+**没包的地方**：`dedupeItems()` 合并词条时会把标志从旧卡搬到保留卡，但它是启动时的本地修复
+（跑在 uid 回填之前），不产生 op；跨设备的词条归并规则在 S3，届时归并本身会产生新的 `local` op。
+
+**测试**：`tests/card-flag.test.ts`（新，3 项）——suspended 的建卡/挂起、markItemLearned 的
+每卡一条且跳过挂起卡、applyReview 的 needs_check 清零与兄弟卡 bury、重复复习不再发标志、
+以及标志不会混进 review 的字段里。
+
+**真实库副本迁移验收（§3.4）**
+
+手动测试 `tests/real-db-migration.test.ts`（默认跳过，设 `WORDMEMO_REAL_DB_COPY` 指向副本才跑）：
+
+```powershell
+$env:WORDMEMO_REAL_DB_COPY='<副本路径>'
+npx vitest run tests/real-db-migration.test.ts
+```
+
+跑了两份真实库的副本（都含 `-wal` / `-shm`）：
+
+| 副本 | 迁移前 | 结果 |
+|---|---|---|
+| `%APPDATA%\WordMemo\wordmemo.db`（应用里正在用的） | 2 笔记 / 14 词条 / 42 卡 / 0 复习 / 0 考试，`user_version = 2` | 自动生成 `backups/wordmemo-pre-migrate-v2.db`；迁移到 3；五张表行数完全不变；四张表 uid 无 NULL、无重复；`integrity_check = ok`；`sync_ops` 为空 |
+| `.data/wordmemo.db`（开发用的学习库，含 1205 条复习） | 18 笔记 / 300 词条 / 1205 复习 / 646 卡，`user_version = 2` | 同上；复习表回填被真实数据覆盖 |
+
+**验收结论**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 207 项全绿 + 1 份手动测试跳过**；
+`npm run build` 通过；**没有新增任何网络代码**（S0 全程不连网、不写远端）。
+
+**S0 完成**。下一步是 S1（本地队列与快照），见 §5；S0 没通过验收之前不要动 S1 的网络部分。
 

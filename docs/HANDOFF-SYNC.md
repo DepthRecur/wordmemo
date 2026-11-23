@@ -10,12 +10,14 @@
 ## 0. 一句话现状
 
 前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`，GitHub 上有真 Release）。
-同步是最后一个功能，**S0 的第一步（重放）已经做完并验证通过**，接下来接着做 S0 的剩余部分：`uid` + `withSync` + `cardFlag`。
+同步的 **S0（数据模型 + 重放）已全部完成并验收**：重放、`uid` + v2→v3 迁移、`sync_ops` + `withSync`、
+`cardFlag` 事件都在 `feat/sync` 上（**`master` 还没有**，已发布的 0.5.1 不含它们）。
+下一步是 **S1（本地队列与快照）**，见 PLAN-SYNC §5；S1 只在本机用两个数据目录验证合并，**不写网络代码**。
 
 - `npm run typecheck` → 0 错误
-- `npm test` → **18 文件 / 191 项全绿**
+- `npm test` → **21 文件 / 207 项通过 + 1 份手动迁移测试跳过**
 - `npm run build` → 通过
-- 工作区干净；`feat/sync` 已推送。重放的改动（`c44d531` 实现 + golden test、`8ba70a8` 判据记录）**只在 `feat/sync`，`master` 还没有**（已发布的 0.5.1 不含它）
+- 工作区干净；S0 的四步提交都在 `feat/sync`（最新提交以 `git log -1` 为准）
 
 ---
 
@@ -26,7 +28,7 @@ cd D:\ymh\Code\tools\wordmemo
 git checkout feat/sync          # 已经在上面
 npm install                     # 只有删过 node_modules 才需要
 npm run typecheck
-npm test                        # 18 文件 191 项
+npm test                        # 21 文件 207 项通过（+1 份手动迁移测试跳过）
 npm run build
 npm run dev                     # 开发模式（脚本自带 --noSandbox）
 ```
@@ -72,55 +74,29 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 ---
 
-## 3. 下一步：S0 剩余（先做这个，别跳到 S1）
+## 3. S0 已完成，下一步 S1
 
-### 3.1 给同步用表加 `uid`
+S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [PLAN-SYNC.md](PLAN-SYNC.md) §10：
+重放 → uid/v2→v3 迁移 → `sync_ops` + `withSync` → `cardFlag`。三条硬结论：
 
-目标：`notes`、`items`、`reviews`、`exams` 各有 `uid TEXT`（**UNIQUE**）。`decks.uid` 已经有了，照它的样子做。
+1. **`enableFuzz: false`** 是重放成立的前提，别再打开。
+2. **`uid` 已就位**：`notes` / `items` / `reviews` / `exams`，`SCHEMA_VERSION = 3`，迁移前自动备份；
+   新行由各自写入口生成 uid。迁移会回填老行（只加列不回填 = 没有 uid）。
+3. **写这四张表只走写入口**：`sync_ops` 由 `sync.ts` 的 `withSync` / `recordSyncOp` 在写事务里追加；
+   在别处直接 `INSERT`/`UPDATE` 会漏队列。`cards` 的四个标志走 `cardFlag` 事件（`<item uid>:<direction>`）。
 
-现成的东西：
+### 下一步：S1（本地队列与快照）
 
-- `src/main/db/uid.ts` 的 `newUid(time)`：26 位 ULID，`newUid(Date.parse(created_at))` 可以按创建时间回填；
-- `src/main/db/decks.ts:184` 的插入语句就是现成范式（`INSERT INTO decks (uid, …) VALUES (?, …)` 配 `newUid()`）；
-- `connection.ts` 的 `addColumnIfMissing(db, table, column, definition)` 与 `backupBeforeMigrate()`（`src/main/index.ts` 启动时会在 `openDb` 之前调用，迁移前自动备份）。
+按 PLAN-SYNC §5：
 
-要动的位置：
+- `sync_ops` 的读与确认（`pendingSyncOps()` 已有；缺的是「推到哪就标到哪」）；
+- checkpoint 序列化 / tombstone / 合并引擎（规则见 §3.9：并集、字段级 LWW、删除优先）；
+- `.wmsync` 快照导出/导入（复用 checkpoint 的同一套合并代码）。
 
-1. `src/main/db/schema.ts`：四张表的 `CREATE TABLE` 里加 `uid TEXT`；`SCHEMA_VERSION` 2 → **3**；加四个 `CREATE UNIQUE INDEX IF NOT EXISTS ux_<table>_uid ON <table>(uid)`（新库走这里）。
-2. `src/main/db/connection.ts` 的 `migrate()`：老库走 `addColumnIfMissing` + 回填 + 建唯一索引。
-   - 回填 SQL 用「先查 id/created_at，再逐行 `newUid`」或者 SQL 里拼 ULID 都行，**但必须保证非空且唯一**；`ALTER TABLE ... ADD COLUMN uid TEXT` 之后所有老行都是 NULL，SQLite 的唯一索引允许多个 NULL，所以必须回填，不能只加列。
-   - `reviews` 用 `reviewed_at`、其余用 `created_at` 做 ULID 的时间前缀。
-   - 迁移只加不删；`user_version` 单调递增；迁移包在现有的事务里（`migrateDecks` 那种 `BEGIN IMMEDIATE`）。
-3. 新行生成 uid（**每个 INSERT 都要**）：
-   - `notes.ts`：`createNote`、`copyNotes`（`INSERT … SELECT` 那条要逐个生成，不能沿用源行的 uid）；
-   - `items.ts`：`upsertItem` 的新增分支；
-   - `exams.ts`：`createExam`；
-   - `cards.ts`：`applyReview` 里的 `INSERT INTO reviews`；
-   - 其它插入点用 `grep -n "INSERT INTO \(notes\|items\|reviews\|exams\)"` 自己扫一遍，**别漏**。
-4. 测试（新文件 `tests/uid.test.ts`，仿 `tests/replay.test.ts` 的临时库写法）：
-   - 老库迁移：建库后 `ALTER TABLE notes DROP COLUMN uid`（SQLite ≥3.35 支持）+ `PRAGMA user_version = 2`，关库重开 → 每行都有 uid、互不相同、格式是 26 位；
-   - 新行：`createNote` / `upsertItem` / `applyReview` / `createExam` 各造一行，uid 非空且唯一；
-   - `copyNotes` 复制出来的笔记 uid 与源不同。
+验收：造两台「设备」（两个 `WORDMEMO_DATA_DIR`），A 导出 → B 导入 → 双向各改一条 → 再对齐 →
+内容一致；同一批导入 10 次结果不变（幂等）。
 
-### 3.2 写入口统一 `withSync`
-
-按 [PLAN-SYNC.md](PLAN-SYNC.md) §3.4：
-
-- 新表 `sync_ops(seq INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, entity TEXT NOT NULL, op TEXT NOT NULL, fields TEXT NOT NULL DEFAULT '{}', origin TEXT NOT NULL DEFAULT 'local', ts_utc INTEGER NOT NULL, pushed INTEGER NOT NULL DEFAULT 0)`；
-- `withSync(entity, uid, op, fields, fn)`：在**同一条事务**里执行 `fn` 并写一条 op（用现成的 `tx()`；注意别嵌套 `tx`，要么内部复用，要么只在外层开）；
-- `origin != 'local'` 的 op 不推送（防回声）；
-- 改动集中在 §3.1 列出的写函数，别散到各处。
-
-### 3.3 `cardFlag`
-
-`cards` 的 `suspended` / `learn_mark` / `buried_until` / `needs_check` 不是重放得来的，作为 `cardFlag` 事件同步（字段级 LWW），S0 只需把「写这些字段的入口」找出来（`setDirection`、`markItemLearned`、`applyReview` 里的 bury、`updateItem` 相关）并包进 `withSync`。
-
-### 3.4 S0 收尾验收
-
-- `npm run typecheck` 0 错误、`npm test` 全绿（含新的 uid 测试与回归的重放测试）；
-- 拿一台真实库（`%APPDATA%\WordMemo\wordmemo.db` 的副本）跑迁移：备份生成在 `backups/wordmemo-pre-migrate-v2.db`，迁移后每行 uid 齐全、卡片与复习记录数量不变；
-- 不连网、不写远端；
-- 在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 记一笔，`git commit -s`。
+**S1 不碰网络**：GitHub / age 加密 / PAT 都是 S2，S1 之前不要写任何请求代码。
 
 ---
 
@@ -141,17 +117,20 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 | 路径 | 作用 / 这次要动什么 |
 |---|---|
-| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION`；S0 加 uid 列与唯一索引、版本 2→3 |
-| `src/main/db/connection.ts` | `openDb` / `migrate` / `tx` / `localIso` / `addColumnIfMissing` / `backupBeforeMigrate`；S0 迁移与回填 |
+| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 3`；四张表的 `uid`、`sync_ops` 队列 |
+| `src/main/db/connection.ts` | `openDb` / `migrate` / 可重入的 `tx` / `localIso` / `addColumnIfMissing` / `backupBeforeMigrate`；`migrateUids()`（补列 + 回填 + 唯一索引） |
+| `src/main/db/sync.ts` | **同步层入口**：`withSync` / `recordSyncOp` / `pendingSyncOps` / `noteUid|itemUid|examUid|deckUid` / `cardFlagUid`；S1 从这里读队列 |
 | `src/main/db/uid.ts` | `newUid()`（ULID），已有，直接用 |
-| `src/main/db/notes.ts` `items.ts` `exams.ts` `cards.ts` | 写入口；S0 加 uid、包 `withSync` |
-| `src/main/db/decks.ts` | 已有 uid 的范式（照抄） |
-| `src/main/db/dedupe.ts` | 按 `headword_norm` 合并重复词条；**S3 的冲突合并要复用它** |
+| `src/main/db/notes.ts` `items.ts` `exams.ts` `cards.ts` | 写入口；S0 已加 uid、包 `withSync`、卡片标志发 `cardFlag` |
+| `src/main/db/decks.ts` | 已有 uid；`removeDeck` 会连带改笔记归属与考试 scope，也发 op |
+| `src/main/db/dedupe.ts` | 按 `headword_norm` 合并重复词条；**S3 的冲突合并要复用它**（它现在不发 op，是启动修复） |
 | `src/main/fsrs.ts` | `initFsrs` / `reviewSnapshot` / `replayCard`；fuzz 已关，别打开 |
 | `src/main/settings.ts` | 设置读写与 `mergeSettings`；S2 的 `sync` 配置进这里（**不含 PAT/口令**） |
 | `src/shared/types.ts` | `Settings`、`UpdateSettings` 等类型；S2 加 `SyncStatus/Config/Result` |
 | `src/main/ipc.ts` + `src/preload/index.ts` | IPC 注册与暴露（S2 的 `sync:*`） |
 | `tests/replay.test.ts` | 临时库 + 固定时钟的测试写法，新测试照这个抄 |
+| `tests/uid.test.ts` `tests/sync-ops.test.ts` `tests/card-flag.test.ts` | S0 的三组契约测试：迁移回填、写入口队列、卡片标志 |
+| `tests/real-db-migration.test.ts` | 手动迁移验收（默认跳过；设 `WORDMEMO_REAL_DB_COPY` 跑） |
 | `docs/PLAN-SYNC.md` | 方案与实现记录（§3 方案、§5 阶段、§10 记录） |
 
 ---
@@ -168,6 +147,14 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 8. **asar / Electron 的坑**（如果改到便携版相关）：`fs.statSync('app.asar').size` 返回 0；删含 asar 的目录会 EBUSY 并漏句柄——只改名不直接删。同步不需要碰这些，但改启动器时记住。
 9. **`ELECTRON_RUN_AS_NODE`**：本机 shell 里可能是 1，手动起 Electron 前清掉。
 10. **应用单实例**：改完代码要真退出再启动；`npm run dev` 与便携版不要同时开。
+11. **`tx()` 是可重入的**（`connection.ts`）：写入口互相调用（`applyReview` → `addAcceptedZh`）时内层会搭外层事务。
+    在 `withSync` 里不要再手写 `BEGIN`；要加多实体写入用 `recordSyncOp`。
+12. **唯一索引不能写进 `SCHEMA`**：老库还没补 `uid` 列时 `CREATE UNIQUE INDEX` 会直接报错，
+    四个 `ux_<table>_uid` 都由 `migrateUids()` 在补列之后建（和 `ix_notes_deck` 同一个坑）。
+13. **op 里不能有本机整数 id**：`deck_id` / `card_id` / `exam_id` 一律换成 `deck_uid` / `card_uid` / `exam_uid`；
+    `exams.scope.deckId` 换 `scope.deck_uid`。写入口的字段构造就是范例。
+14. **`cardFlag` 的 uid 是 `<item uid>:<direction>`**，不是 card id；卡片没有自己的 uid。
+15. **真实库可能是空表**：本机 `exams`、`reviews` 就可能 0 行，验收脚本别假设每张表都有数据。
 
 ---
 
@@ -198,25 +185,26 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo），做同步。
-先确认分支：git checkout feat/sync（交接文档和 S0 重放代码都在这个分支上，master 没有）。
+先确认分支：git checkout feat/sync（同步的全部代码都在这个分支上，master 没有）。
 然后读 docs/HANDOFF-SYNC.md（这一份就够了），
 再读 docs/PLAN-SYNC.md 的 §3（方案）、§4（数据与接口变更）、§5（S0–S4）、§10（实现记录）。
 
-现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、npm test 18 文件 191 项全绿。
-注意：重放的改动只在 feat/sync，master 上还没有（已发布的 0.5.1 不含它）。
-便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0 的「重放」已经通过：
-replayCard() 在真实写入口造出的轨迹上逐字段等于库里那张卡（tests/replay.test.ts），
-enableFuzz 已必须关（否则重放不收敛），细节见 PLAN-SYNC §10。
+现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、
+npm test 21 文件 207 项通过（+1 份手动迁移测试默认跳过）。
+便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0（数据模型 + 重放）已完成并验收：
+uid + v2→v3 迁移、sync_ops + withSync、cardFlag 事件都已落地；重放成立
+（enableFuzz 必须关），细节见 PLAN-SYNC §10。
 
-接着做 S0 剩余：
-1) notes/items/reviews/exams 加 uid TEXT UNIQUE + 回填 + SCHEMA_VERSION 2→3（迁移前会自动备份）；
-2) 所有写入口统一 withSync + sync_ops 表；
-3) cards 的 suspended/learn_mark/buried_until/needs_check 走 cardFlag 事件。
-验收：typecheck 0 错误、npm test 全绿、真实库副本迁移后 uid 齐全且行数不变、不连网。
-每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
+接着做 S1（本地队列与快照）：
+1) sync_ops 的读与确认（推送到哪就标到哪）；
+2) checkpoint 序列化 / tombstone / 合并引擎（并集、字段级 LWW、删除优先，见 §3.9）；
+3) .wmsync 快照导出/导入（复用同一套合并代码）。
+验收：用两个 WORDMEMO_DATA_DIR 当两台设备，A 导出 → B 导入 → 双向各改一条 → 再对齐内容一致；
+重复导入 10 次结果不变（幂等）。
+S1 不要写任何网络代码（GitHub / age / PAT 都是 S2）。
 
 硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
-S0 没做完不要开始 S1，更不要写任何网络代码。
+每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
 ```
 
 ---
@@ -224,9 +212,11 @@ S0 没做完不要开始 S1，更不要写任何网络代码。
 ## 10. 交接自检（新会话花两分钟确认）
 
 - [ ] `git branch --show-current` → `feat/sync`
-- [ ] `npm test` → 18 文件 191 项全绿
+- [ ] `npm test` → 21 文件 207 项通过（另 1 份手动迁移测试跳过）
 - [ ] `npm run typecheck` → 0 错误
-- [ ] `git log --oneline -4` → 能看到 `docs(sync): hand off the sync block`、`docs(sync): record the S0 replay verdict`、`feat(sync): replay cards from review records`
+- [ ] `git log --oneline -6` → 能看到 `feat(sync): give synced tables a uid`、`feat(sync): record writes in sync_ops`、
+      `feat(sync): sync card flags as events`、`feat(sync): replay cards from review records`
 - [ ] `grep -n "enableFuzz" src/main/fsrs.ts` → 必须是 `false`
-- [ ] `grep -n "replayCard" src/main/fsrs.ts tests/replay.test.ts` → 都在
+- [ ] `grep -n "withSync" src/main/db/sync.ts src/main/db/notes.ts` → 都在
+- [ ] `sqlite3`（或 `node -e` 开库）里 `SELECT COUNT(*) FROM sync_ops` 能查（表存在）
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI），已被 gitignore
