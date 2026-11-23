@@ -1,6 +1,6 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-23（真实发布链路打通：仓库已 push + **公开**，`v0.5.0` / `v0.5.1` 已由 CI 发出 Release）　当前分支：`master`　仓库：`DepthRecur/wordmemo`（public）
+> 最后更新：2026-11-23（便携版完结；同步 S0 重放通过，交接见 [HANDOFF-SYNC.md](HANDOFF-SYNC.md)）　当前分支：`feat/sync`　仓库：`DepthRecur/wordmemo`（public）
 > **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过两次（各约 3 分钟），Release 三件套由 CI 生成。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
@@ -354,6 +354,8 @@ docs/               ← 四份计划 + 调研 + 本文件
 ---
 
 ## 9. 新会话开场提示词（直接复制粘贴）
+
+> **做同步的话，用 [HANDOFF-SYNC.md](HANDOFF-SYNC.md) §9 的提示词**——那份是 2026-11-23 为同步板块专门写的，状态与下一步更准（分支 `feat/sync`、S0 重放已通过）。下面这段是通用版。
 
 ```
 继续 WordMemo（D:\ymh\Code\tools\wordmemo）。先读 docs/HANDOFF.md，
