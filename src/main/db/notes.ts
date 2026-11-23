@@ -2,6 +2,7 @@ import type { NoteDetail, NoteInput, NoteQuery, NoteSummary } from '@shared/type
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { defaultDeckId, deckExists } from './decks'
 import { itemDirections } from './items'
+import { newUid } from './uid'
 
 interface NoteRow {
   id: number
@@ -146,10 +147,11 @@ export function createNote(
   const now = localIso()
   const res = d
     .prepare(
-      `INSERT INTO notes (source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO notes (uid, source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      newUid(),
       input.sourceId ?? null,
       resolveDeckId(input.deckId),
       input.title.trim() || '未命名笔记',
@@ -253,8 +255,8 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
     const d = getDb()
     const now = localIso()
     const insert = d.prepare(
-      `INSERT INTO notes (source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
-       SELECT source_id, ?, title, note_date, tags, raw_markdown, status, ?, ? FROM notes WHERE id = ?`
+      `INSERT INTO notes (uid, source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
+       SELECT ?, source_id, ?, title, note_date, tags, raw_markdown, status, ?, ? FROM notes WHERE id = ?`
     )
     const link = d.prepare(
       `INSERT INTO note_items (note_id, item_id, raw_line, position)
@@ -262,7 +264,8 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
     )
     const noteIds: number[] = []
     for (const id of existingNoteIds(list)) {
-      const res = insert.run(target, now, now, id)
+      // 复制出来的是一份新笔记，uid 必须重新生成（不能沿用源行的）
+      const res = insert.run(newUid(), target, now, now, id)
       const noteId = toInt(res.lastInsertRowid)
       link.run(noteId, id)
       noteIds.push(noteId)

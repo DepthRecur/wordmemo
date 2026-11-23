@@ -396,6 +396,34 @@ PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == �
 
 **还没做的 S0 部分**（下一步直接接着做）
 
-- `notes` / `items` / `reviews` / `exams` 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2 → 3（`backupBeforeMigrate` 会自动备份）。
+- ~~`notes` / `items` / `reviews` / `exams` 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2 → 3~~
+  （2026-11-23 已完成，见下一条）
 - 写入口统一 `withSync(entity, uid, fields, fn)` 与 `sync_ops` 表（§3.4）。
 - `cards` 的手动状态（`suspended` / `learn_mark` / `buried_until` / `needs_check`）作为 `cardFlag` 事件，不参与重放。
+
+### S0 第二步：uid + 迁移（2026-11-23，`feat/sync`）
+
+`notes` / `items` / `reviews` / `exams` 各有 `uid TEXT`（唯一索引 `ux_<table>_uid`），`SCHEMA_VERSION` **2 → 3**。
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `schema.ts` | 四张表的 `CREATE TABLE` 里加 `uid TEXT`；版本号 3 |
+| `connection.ts`：`migrateUids()` | 在原有 `BEGIN IMMEDIATE` 事务里跑：`addColumnIfMissing` → 回填 → 建唯一索引 |
+| `notes.ts` | `createNote` 生成 uid；`copyNotes` 的 `INSERT … SELECT` 也带 uid（**每份复制重新生成**，不沿用源行） |
+| `items.ts` / `exams.ts` / `cards.ts` | `upsertItem` 新增分支、`createExam`、`applyReview` 的 reviews 插入各生成 uid |
+| `tests/uid.test.ts`（新，4 项） | 用真实写入口造数据 → 退回 v2（DROP COLUMN + `user_version = 2`）→ 重开迁移 |
+
+**三个实现要点**
+
+1. **唯一索引不能写进 `SCHEMA`**：老库还没有 `uid` 列时 `CREATE UNIQUE INDEX … (uid)` 会直接
+   `no such column`（和 `ix_notes_deck` 是同一个坑）。索引统一由 `migrateUids()` 在补列之后建。
+2. **必须回填**：SQLite 唯一索引允许多个 NULL，老行全是 NULL 就等于没有 uid。回填用
+   `newUid(Date.parse(<时间列>))`：`reviews` 取 `reviewed_at`，其余取 `created_at`。
+3. **重复 uid 兜底**：若库里已有重复（手工改库 / 早期实验版本），保留 id 最小的那行、其余重新生成，
+   否则建唯一索引会失败 → 应用起不来。这一条也写进了迁移，代价只有一次全表扫描。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **19 文件 / 195 项全绿**。测试断言的是
+「迁移后行数不变、每行 26 位 uid、集合内无重复、唯一索引真的拦重复」。
+

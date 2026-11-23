@@ -2,6 +2,7 @@ import type { CardDirection, Example, Item, ItemKind } from '@shared/types'
 import { normalizeEn, mergePosText } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt } from './connection'
 import { deckScope } from './decks'
+import { newUid } from './uid'
 import { newCardSnapshot } from '../fsrs'
 
 interface ItemRow {
@@ -168,10 +169,11 @@ export function upsertItem(input: UpsertItemInput): number {
   } else {
     const res = d
       .prepare(
-        `INSERT INTO items (kind, headword, headword_norm, pos, phonetic, meanings, collocations, examples, extra, accepted_zh, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`
+        `INSERT INTO items (uid, kind, headword, headword_norm, pos, phonetic, meanings, collocations, examples, extra, accepted_zh, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`
       )
       .run(
+        newUid(),
         kind,
         headword,
         norm,

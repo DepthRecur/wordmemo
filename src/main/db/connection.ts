@@ -75,6 +75,7 @@ function migrate(database: SqliteDatabase): void {
   database.exec('BEGIN IMMEDIATE')
   try {
     migrateDecks(database, fromVersion < DECKS_SCHEMA_VERSION)
+    migrateUids(database)
     database.exec('COMMIT')
   } catch (err) {
     try {
@@ -85,6 +86,68 @@ function migrate(database: SqliteDatabase): void {
     throw err
   }
   database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+}
+
+/** 同步要用的四张表：表名 + 回填 uid 时取时间前缀的列（PLAN-SYNC §3.2） */
+const UID_TABLES: { table: string; timeColumn: string }[] = [
+  { table: 'notes', timeColumn: 'created_at' },
+  { table: 'items', timeColumn: 'created_at' },
+  { table: 'reviews', timeColumn: 'reviewed_at' },
+  { table: 'exams', timeColumn: 'created_at' }
+]
+
+/**
+ * 稳定 id（PLAN-SYNC §3.2）：四张表各加 `uid`、回填老行、建唯一索引。
+ *
+ * 唯一索引不能放进 SCHEMA：老库还没有这一列时 `CREATE UNIQUE INDEX ... (uid)` 会
+ * 直接报 "no such column"（和 ix_notes_deck 是同一个坑）。
+ *
+ * 回填必须做，不能只加列：SQLite 的唯一索引允许多个 NULL，老行全是 NULL 就等于没有 uid。
+ */
+function migrateUids(database: SqliteDatabase): void {
+  for (const { table, timeColumn } of UID_TABLES) {
+    addColumnIfMissing(database, table, 'uid', 'TEXT')
+    fillMissingUids(database, table, timeColumn)
+    repairDuplicateUids(database, table, timeColumn)
+    database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_${table}_uid ON ${table}(uid)`)
+  }
+}
+
+/** 拔掉 NULL / 空串的 uid；时间前缀取行自己的创建时间，让 uid 仍然「时间有序」 */
+function fillMissingUids(database: SqliteDatabase, table: string, timeColumn: string): void {
+  const rows = database
+    .prepare(`SELECT id, ${timeColumn} AS at FROM ${table} WHERE uid IS NULL OR uid = ''`)
+    .all() as unknown as { id: number; at: string | null }[]
+  if (!rows.length) return
+  const update = database.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`)
+  for (const row of rows) {
+    update.run(uidForTime(row.at), toInt(row.id))
+  }
+}
+
+/**
+ * 极端情况兜底：库里已有重复 uid（手工改过库、或早期的实验版本写过）。
+ * 保留 id 最小的那行，其余重新生成——否则建唯一索引会失败，整个应用起不来。
+ */
+function repairDuplicateUids(database: SqliteDatabase, table: string, timeColumn: string): void {
+  const dupes = database
+    .prepare(
+      `SELECT uid FROM ${table} WHERE uid IS NOT NULL AND uid <> ''
+       GROUP BY uid HAVING COUNT(*) > 1`
+    )
+    .all() as unknown as { uid: string }[]
+  for (const dupe of dupes) {
+    const rows = database
+      .prepare(`SELECT id, ${timeColumn} AS at FROM ${table} WHERE uid = ? ORDER BY id ASC`)
+      .all(dupe.uid) as unknown as { id: number; at: string | null }[]
+    const update = database.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`)
+    for (const row of rows.slice(1)) update.run(uidForTime(row.at), toInt(row.id))
+  }
+}
+
+function uidForTime(at: string | null): string {
+  const time = at ? Date.parse(at) : NaN
+  return newUid(Number.isFinite(time) ? time : undefined)
 }
 
 /**

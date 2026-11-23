@@ -1,5 +1,5 @@
 /** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 /**
  * 「多个库」是从这个版本开始的结构版本。
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS sources (
 
 CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 同步用的稳定 id（PLAN-SYNC §3.2）。唯一索引由 migrateUids 建：老库还没补上
+  -- 这一列时，SCHEMA 里的 CREATE UNIQUE INDEX 会直接报错（和 ix_notes_deck 同一个坑）
+  uid TEXT,
   source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
   -- 不写 REFERENCES：老库只能用 ALTER ADD COLUMN 带 DEFAULT 补列，
   -- 而 SQLite 不允许「REFERENCES + 非 NULL DEFAULT」，为了新老库结构一致就不加外键
@@ -52,6 +55,7 @@ CREATE INDEX IF NOT EXISTS ix_notes_created ON notes(created_at);
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   kind TEXT NOT NULL DEFAULT 'word',
   headword TEXT NOT NULL,
   headword_norm TEXT NOT NULL,
@@ -99,6 +103,7 @@ CREATE INDEX IF NOT EXISTS ix_cards_item ON cards(item_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
   reviewed_at TEXT NOT NULL,
   rating INTEGER NOT NULL,
@@ -114,6 +119,7 @@ CREATE INDEX IF NOT EXISTS ix_reviews_time ON reviews(reviewed_at);
 
 CREATE TABLE IF NOT EXISTS exams (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   title TEXT NOT NULL,
   exam_date TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT '{}',

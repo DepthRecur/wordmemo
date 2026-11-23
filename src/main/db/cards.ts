@@ -2,6 +2,7 @@ import type { Card, CardDirection, DailyPlan, QueueCard, ReviewMode, SubmitRevie
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
 import { getItem, addAcceptedZh, learnQueue, learnedTodayCount } from './items'
 import { deckInClause, deckNewPerDay, deckScope } from './decks'
+import { newUid } from './uid'
 import { getSettings } from '../settings'
 import { retrievabilityNow, reviewSnapshot } from '../fsrs'
 
@@ -232,9 +233,10 @@ export function applyReview(input: SubmitReview, now: Date = new Date()): Review
     `UPDATE cards SET buried_until = ? WHERE item_id = ? AND id <> ? AND suspended = 0`
   ).run(today, toInt(row.item_id), input.cardId)
   d.prepare(
-    `INSERT INTO reviews (card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO reviews (uid, card_id, reviewed_at, rating, answer, correct, elapsed_ms, mode, judge_by, exam_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
+    newUid(),
     input.cardId,
     localIso(now),
     input.rating,

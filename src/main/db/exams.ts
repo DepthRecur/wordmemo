@@ -1,5 +1,6 @@
 import type { Exam, ExamInput, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
+import { newUid } from './uid'
 
 interface ExamRow {
   id: number
@@ -42,10 +43,11 @@ export function getExam(id: number): Exam | null {
 export function createExam(input: ExamInput): number {
   const res = getDb()
     .prepare(
-      `INSERT INTO exams (title, exam_date, scope, level, target_retention, daily_minutes, status, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'active', ?)`
+      `INSERT INTO exams (uid, title, exam_date, scope, level, target_retention, daily_minutes, status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?)`
     )
     .run(
+      newUid(),
       input.title.trim() || '英语听写',
       input.examDate,
       JSON.stringify(input.scope ?? {}),
