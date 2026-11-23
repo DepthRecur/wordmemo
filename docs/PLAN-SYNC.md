@@ -744,3 +744,40 @@ CDP 打开「设置 → 同步」→ 表单渲染完整、控制台 0 错误（�
 **手动验收准备**：`DepthRecur/wordmemo-sync-test` 已清空（原有 e2e 数据用的是固定测试口令），
 你可以在设置页自选同步密码；两台设备用同一仓库、同一密码即可。
 
+### S3：冲突与设备管理（2026-11-24，`feat/sync`）
+
+并发规则在 S1/S2 的合并引擎里已经落地（字段级 LWW、数组并集、`learned_at` 取最早、
+tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**设备级**能力：
+
+| 能力 | 实现 |
+|---|---|
+| 设备列表 | `engine.listDevices()`：本机 + 远端 `devices/*`；名字从加密的 `info.json.age` 解出，解不开退回 `sync_devices` |
+| 移除设备 | `removeDevice(id)`：写 `meta.revokedDevices` → 删远端设备目录（checkpoint/info/ops）→ 清本地缓存与 `sync_devices` |
+| 被移除的设备 | 每次同步前重新读 `meta.json`；本机 id 在 `revokedDevices` 里 → `SyncSetupError('device_revoked')` |
+| 换密码 | `changePassphrase(new)`：新口令重写本机 checkpoint → 更新 meta（新 salt/kdfVerifier）→ 删其它设备目录（旧密文）→ 本机密钥换新 |
+| 压缩 | checkpoint 覆盖全部历史后，删掉本机所有 op 分片（`pruneOwnOps`） |
+| 远端目录被删后的自愈 | 每次推送前探测自己的 checkpoint 是否还在；不在就整份重推（`remoteExists`） |
+| 过期 sha | `putFileSafe`：PUT 冲突/404 时丢掉缓存 sha 重建一次 |
+| 仓库体积 | `getRepo()` 返回 `size`（KB），状态里带给界面 |
+| 同步日志 | 新表 `sync_runs`，每次同步记时间/耗时/上下行/结果码，保留最近 20 条 |
+
+**换密码的顺序**（重要）：先推用新口令加密的 checkpoint → 再改 `meta.json` → 最后删其它设备。
+这样即使中途失败，也不会出现「meta 已经是新密码、唯一的 checkpoint 却还是旧密码」的不可解状态。
+
+**测试**：`tests/sync-engine.test.ts` 增到 9 项（新增：设备列表、换密码后压缩与删对端、
+旧密码拒绝/新密码重新加入、移除设备后对端被拒）；`tests/github-client.test.ts` 覆盖 `size`。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **32 文件 / 274 项通过 + 2 份手动测试跳过**。
+
+### S4：文档与发布准备（2026-11-24，`feat/sync`）
+
+- README 新增「同步」章节：需要什么、**会泄露什么/不会泄露什么**（表）、忘记密码、
+  设备与换密码、`.wmsync` 快照、错误对照表、200 MB 体积提醒。
+- 设置页同步面板补齐：设备列表与移除、更换同步密码（危险操作二次确认）、最近同步日志、
+  仓库 >200 MB 的黄色提醒。
+- 版本 `0.5.1 → 0.6.0`；`release-notes/v0.6.0.md` 三行（数据迁移 / 不可逆 / 改了什么）。
+- 手动测试指南更新到 S2+S3：[TEST-SYNC-S2.md](TEST-SYNC-S2.md)。
+
+**发布前剩下的**：用户手动验收（两台设备、VM、PAT 撤销、断网恢复）→ 修 bug →
+`npm run dist` 冒烟 → 合回 `master` → tag → CI 发布。代码部分到此为止。
+

@@ -10,17 +10,17 @@
 ## 0. 一句话现状
 
 前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`）。
-同步的 **S0 / S1 已完成**（uid 迁移 v2→v4、`sync_ops` + `withSync`、`cardFlag`、`deck`/`noteItem`、
-checkpoint 与合并引擎）；**S2 实现完成**：age 加密、GitHub 客户端、逐条 op 合并、传输引擎、
-真仓库 e2e、`safeStorage`、调度、设置页同步面板与 `.wmsync` 导出/导入都已完成，
-**等待你手动验收**（两台设备 / 真仓库）。全部在 `feat/sync`（`master` 还没有）。
+同步的 **S0–S4 代码全部完成**：uid 迁移、`sync_ops` + `withSync`、`cardFlag`、`deck`/`noteItem`、
+checkpoint 与合并引擎、age 加密、GitHub 客户端、传输引擎、`safeStorage`、调度、设置页同步面板、
+设备管理与换密码、日志与体积提醒、README 与发布准备。**等待你手动验收**（两台设备 / VM / 真仓库），
+验收与修 bug 之后再合回 `master` 发 0.6.0。全部在 `feat/sync`（`master` 还没有）。
 
 - `npm run typecheck` → 0 错误
-- `npm test` → **32 文件 / 270 项通过 + 2 份手动测试跳过**（真实库迁移、真仓库同步）
+- `npm test` → **32 文件 / 274 项通过 + 2 份手动测试跳过**（真实库迁移、真仓库同步）
 - `npm run build` → 通过
 - 工作区干净；最新提交以 `git log -1` 为准
 
-**下一步**：手动验收 S2；通过后进 S3（冲突与设备管理）。
+**下一步**：手动验收 → 修 bug → `npm run dist` 冒烟 → 合 master / tag 0.6.0 / CI 发布。
 
 ---
 
@@ -92,43 +92,36 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 5. **同名库 / 同词不同 uid 走 `sync_aliases`**：两台设备各自的「默认库」uid 必然不同，
    没有这张表笔记会掉进「未归类」。
 
-### S2 进展（2026-11-23）
+### S2–S4 完成情况（2026-11-23 ~ 24）
 
 | 块 | 位置 | 状态 |
 |---|---|---|
 | age 加密边界、口令强度、`kdfVerifier` | `src/main/sync/crypto.ts`、`db/checkpoint.ts` | 完成 |
-| GitHub 客户端（条件请求 / Contents / Git Data / 错误归一） | `src/main/sync/github.ts` | 完成 |
+| GitHub 客户端（条件请求 / Contents / Git Data / 错误归一 / size） | `src/main/sync/github.ts` | 完成 |
 | 逐条 op 合并（远端增量） | `db/checkpoint.ts` 的 `applyRemoteOp` | 完成 |
-| 传输引擎（meta / checkpoint / 当天 op 分片 / 拉取顺序 / etag 缓存） | `src/main/sync/engine.ts` | 完成 |
+| 传输引擎（meta / checkpoint / op 分片 / 拉取顺序 / etag / 体积） | `src/main/sync/engine.ts` | 完成 |
 | 真仓库 e2e（`DepthRecur/wordmemo-sync-test`） | `tests/real-sync.test.ts` + `.data/sync-e2e.ps1` | 通过（约 41 秒） |
-| `safeStorage` 密钥文件 | `src/main/sync/secretStore.ts` | 完成（3 项测试） |
-| 调度（启动/防抖/定时/退避/抖动） | `src/main/sync/scheduler.ts` | 完成（7 项假定时器测试） |
-| 管理器 + IPC + 设置页同步面板 + 快照按钮 | `manager.ts`、`ipc.ts`、`preload`、`SyncPanel.tsx` | 完成，冒烟通过 |
+| `safeStorage` 密钥文件 / 调度 / 管理器 / 设置页面板 | `secretStore.ts`、`scheduler.ts`、`manager.ts`、`SyncPanel.tsx` | 完成 |
+| 设备列表、移除设备、换密码、checkpoint 压缩、自愈重推 | `engine.ts` + `sync_runs` 日志 | 完成（9 项引擎测试） |
+| README 同步章节、错误对照表、0.6.0 发布准备 | `README.md`、`release-notes/v0.6.0.md` | 完成 |
 
-已确认：**可以新增依赖**（已加 `age-encryption`）；**测试仓库**用 `DepthRecur/wordmemo-sync-test`
-（已清空，等你手动验收时自选密码）。
+### 待你手动验收（S2–S3）
 
-### 待你手动验收（S2）
-
-**完整步骤、预期结果与错误场景见 [TEST-SYNC-S2.md](TEST-SYNC-S2.md)。** 简版：
-
-1. 启动 `npm run dev`（或构建后运行），设置 → 同步：填 `DepthRecur` / `wordmemo-sync-test`、
-   一个 PAT（fine-grained，单仓库 + Contents: Read and write）、一个 ≥10 字符的同步密码 → 「测试并首次同步」。
-2. 看仓库里是否出现 `meta.json` 与 `devices/<id>/…`（应是密文）；设置页显示已连接、上次成功时间、待上传 0。
-3. 改一条笔记 → 等 30 秒（或点「立即同步」）→ 仓库里的 op 分片更新。
-4. 「导出加密快照」→ 存一个 `.wmsync`；换一个空数据目录（或第二台机器）启动 → 「导入加密快照」→ 数据出现。
-5. 可选：另一台设备连同一仓库同一密码 → 双向各改一条 → 两边自动/手动同步后内容一致。
-6. 故意输错密码 / 撤销 PAT：应报「同步密码不对」/「PAT 失效」，而不是静默失败。
+**完整步骤、预期结果与错误场景见 [TEST-SYNC-S2.md](TEST-SYNC-S2.md)。** 覆盖：
+连接与首次同步、改数据推送、`.wmsync` 导出/导入、单机双实例 / VM 双设备、设备列表与移除、
+换密码（旧密码拒绝、新密码重新加入）、错误场景（密码错/PAT 失效/文件损坏/公开仓库/被移除）。
 
 VM 可以作为第二台设备；你用 VM 测时告诉我结果即可，我这边不需要操控 VMware。
 
-### 验收通过后：S3（冲突与设备管理）
+### 验收通过后：发布 0.6.0
 
-- 同一词条两台各加一个释义 → 两个都在；一台改释义一台改音标 → 都保留；一台删一台改 → 按 ts 判定；
-- `sync_devices` 游标、移除其它设备、换密码（全量重推）、checkpoint 压缩/保留。
+1. 修完验收发现的 bug；
+2. `npm run typecheck && npm test && npm run build && npm run dist`，解压 `release/WordMemo-0.6.0-portable.zip` 冒烟；
+3. 合回 `master` → `git tag v0.6.0` → push tag（CI 会自动发布）；
+4. 核对 Release 的三件套（zip / sha256 / latest.json）。
 
 界面文案按 [MESSAGES.md](MESSAGES.md) 定级：未连接是正常状态；PAT 失效、口令错、
-文件损坏、格式版本不符都是**错误**（功能不可用）；「上次同步成功时间」这类是提示。
+文件损坏、格式版本不符、设备被移除都是**错误**（功能不可用）；「上次同步成功时间」这类是提示。
 
 ---
 
@@ -255,27 +248,27 @@ VM 可以作为第二台设备；你用 VM 测时告诉我结果即可，我这�
 ## 9. 新会话开场提示词（直接复制）
 
 ```
-继续 WordMemo（D:\ymh\Code\tools\wordmemo），做同步。
+继续 WordMemo（D:\ymh\Code\tools\wordmemo），同步已进入收尾。
 先确认分支：git checkout feat/sync（同步的全部代码都在这个分支上，master 没有）。
-然后读 docs/HANDOFF-SYNC.md（这一份就够了），
-再读 docs/PLAN-SYNC.md 的 §3（方案）、§4（数据与接口变更）、§5（S0–S4）、§10（实现记录）。
-先看 HANDOFF-SYNC §3 的「待你手动验收（S2）」：如果还没验收，先等/协助验收；已通过则开始 S3。
+然后读 docs/HANDOFF-SYNC.md（这一份就够了），再读 docs/PLAN-SYNC.md §10（实现记录）。
+先看 HANDOFF-SYNC §3 的「待你手动验收（S2–S3）」：按用户反馈修 bug，然后发 0.6.0。
 
-现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、
-npm test 32 文件 270 项通过（+2 份手动测试默认跳过：真实库迁移、真仓库同步）。
-便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0、S1 已完成，S2 实现完成：
-uid + v2→v4 迁移、sync_ops + withSync、cardFlag、deck/noteItem、快照合并、age 加密、
-GitHub 客户端、逐条 op 合并、传输引擎、真仓库 e2e、safeStorage、调度、设置页同步面板与快照按钮。
+现状：分支 feat/sync，typecheck 0 错误、npm test 32 文件 274 项通过
+（+2 份手动测试默认跳过：真实库迁移、真仓库同步）。
+S0–S4 代码全部完成：uid 迁移、sync_ops + withSync、cardFlag、deck/noteItem、快照合并、
+age 加密、GitHub 客户端、传输引擎、真仓库 e2e、safeStorage、调度、设置页同步面板、
+设备管理/移除设备、换密码、checkpoint 压缩、同步日志与体积提醒、README 与发布准备。
+版本已改成 0.6.0，release-notes/v0.6.0.md 已写。
 
-接着做 S3（冲突与设备管理）：
-1) 并集 / 字段级 LWW / tombstone 全规则落地（含同词不同 uid 的 dedupe 归并 + uid 映射）；
-2) sync_devices 游标（增量拉取不再整份重放）、移除其它设备；
-3) 换密码（全量重新加密并重推）；
-4) checkpoint 压缩与保留（最近 2 份 / 月度）。
-验收：同一词条两台各加一个释义 → 两个都在；一台改释义一台改音标 → 都保留；
-一台删一台改 → 按 ts 判定且可解释。
+发版步骤：
+1) 按用户验收反馈修 bug，补回归测试；
+2) npm run typecheck && npm test && npm run build && npm run dist，
+   解压 release/WordMemo-0.6.0-portable.zip 冒烟；
+3) 合回 master（先确认 master 与 feat/sync 的差异），git tag v0.6.0；
+4) push master 与 tag，CI 自动发布；核对 Release 三件套（zip / sha256 / latest.json）。
+注意：这台机器到 github.com:443 时通时断，push 用 .data/push-retry.ps1。
 
-硬约束见 HANDOFF-SYNC §8。
+硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
 每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
 ```
 
@@ -284,16 +277,17 @@ GitHub 客户端、逐条 op 合并、传输引擎、真仓库 e2e、safeStorage
 ## 10. 交接自检（新会话花两分钟确认）
 
 - [ ] `git branch --show-current` → `feat/sync`
-- [ ] `npm test` → 32 文件 270 项通过（另 2 份手动测试跳过）
+- [ ] `npm test` → 32 文件 274 项通过（另 2 份手动测试跳过）
 - [ ] `npm run typecheck` → 0 错误
-- [ ] `git log --oneline -8` → 能看到 `feat(sync): add the sync settings panel`、
-      `feat(sync): schedule sync runs`、`feat(sync): keep sync secrets in safeStorage`、
-      `feat(sync): push and pull between two devices`
+- [ ] `git log --oneline -8` → 能看到 `feat(sync): manage sync devices`、
+      `feat(sync): add the sync settings panel`、`feat(sync): schedule sync runs`、
+      `feat(sync): keep sync secrets in safeStorage`、`feat(sync): push and pull between two devices`
 - [ ] `grep -n "enableFuzz" src/main/fsrs.ts` → 必须是 `false`
 - [ ] `grep -n "withSync" src/main/db/sync.ts src/main/db/notes.ts` → 都在
 - [ ] `grep -n "mergeCheckpoint\|applyRemoteOp" src/main/db/checkpoint.ts` → 都在
 - [ ] `grep -n "class SyncEngine" src/main/sync/engine.ts` → 在
-- [ ] `grep -n "class SyncScheduler" src/main/sync/scheduler.ts` → 在
-- [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` / `sync_files` / `sync_devices`
-- [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`）
+- [ ] `grep -n "changePassphrase\|removeDevice" src/main/sync/engine.ts` → 都在
+- [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` / `sync_files` / `sync_devices` / `sync_runs`
+- [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码
+- [ ] `package.json` 版本是 `0.6.0`，`release-notes/v0.6.0.md` 存在
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`、`sync-ui-smoke.mjs`），已被 gitignore
