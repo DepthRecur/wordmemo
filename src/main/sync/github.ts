@@ -110,6 +110,11 @@ export class GitHubClient {
     }`
   }
 
+  /** Contents API 的路径：/repos/{owner}/{repo}/contents/{path} */
+  private contentsPath(path = ''): string {
+    return this.repoPath(`contents${path ? `/${path}` : ''}`)
+  }
+
   private async request<T>(path: string, init: RequestInitLite = {}): Promise<{ data: T; headers: Headers }> {
     const headers: Record<string, string> = {
       Accept: 'application/vnd.github+json',
@@ -212,7 +217,7 @@ export class GitHubClient {
       sha: string
       content?: string
       encoding?: string
-    } | null>(this.repoPath(path), { headers, allow304: true })
+    } | null>(this.contentsPath(path), { headers, allow304: true })
     if (!data) {
       return { status: 304, sha: null, content: null, etag: responseHeaders.get('etag') }
     }
@@ -237,7 +242,7 @@ export class GitHubClient {
     }
     if (sha) body.sha = sha
     if (branch) body.branch = branch
-    const { data } = await this.request<{ content?: { sha?: string } }>(this.repoPath(path), {
+    const { data } = await this.request<{ content?: { sha?: string } }>(this.contentsPath(path), {
       method: 'PUT',
       body
     })
@@ -249,13 +254,13 @@ export class GitHubClient {
   async deleteFile(path: string, sha: string, message: string, branch?: string): Promise<void> {
     const body: Record<string, unknown> = { message, sha }
     if (branch) body.branch = branch
-    await this.request(this.repoPath(path), { method: 'DELETE', body })
+    await this.request(this.contentsPath(path), { method: 'DELETE', body })
   }
 
   /** 列目录（远端 devices/ 下有哪些设备） */
   async listDir(path: string): Promise<DirEntry[]> {
     const { data } = await this.request<DirEntry[] | { name: string; path: string; sha: string; type: string }>(
-      this.repoPath(path)
+      this.contentsPath(path)
     )
     if (!Array.isArray(data)) throw new SyncApiError('not_found', 404, '远端目录不存在')
     return data.map((entry) => ({

@@ -96,6 +96,9 @@ describe('GitHubClient：读', () => {
     }
     const gh = client()
     const first = await gh.getFile('devices/dev1/checkpoint.json.age')
+    expect(recorded[0].url).toBe(
+      '/repos/DepthRecur/wordmemo-sync-test/contents/devices/dev1/checkpoint.json.age'
+    )
     expect(first.status).toBe(200)
     expect(first.sha).toBe('sha1')
     expect(first.content?.toString('utf8')).toBe('hello world')
@@ -135,6 +138,9 @@ describe('GitHubClient：写', () => {
     expect(result.sha).toBe('new-sha')
     const request = recorded[0]
     expect(request.method).toBe('PUT')
+    expect(request.url).toBe(
+      '/repos/DepthRecur/wordmemo-sync-test/contents/devices/dev1/info.json.age'
+    )
     const body = JSON.parse(request.body)
     expect(body).toMatchObject({ message: 'sync: dev1', sha: 'old-sha', branch: 'main' })
     expect(Buffer.from(body.content, 'base64').toString('utf8')).toBe('abc')
