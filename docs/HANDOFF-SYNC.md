@@ -61,7 +61,7 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 验证结果：`due_at / state / reps / lapses / stability / difficulty / fsrs_json` 全部相等；连跑三次逐字节一致。
 
-**三个必须记住的结论**：
+**四条必须记住的结论**：
 
 1. **`enableFuzz` 必须关**。开着时间隔有 ±5% 随机抖动，两台设备重放同一串复习会得到不同 `due_at`，「cards = f(reviews)」直接不成立。关掉只影响间隔抖动，不动记忆模型。
 2. **`newCard()` 每次生成随机 `cardId`**（ts-fsrs 内部 uuid），它会写进 `fsrs_json`。重放要么传原卡的 `cardId`，要么比较时忽略它。
