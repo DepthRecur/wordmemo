@@ -9,15 +9,16 @@
 
 ## 0. 一句话现状
 
-前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`，GitHub 上有真 Release）。
-同步的 **S0（数据模型 + 重放）已全部完成并验收**：重放、`uid` + v2→v3 迁移、`sync_ops` + `withSync`、
-`cardFlag` 事件都在 `feat/sync` 上（**`master` 还没有**，已发布的 0.5.1 不含它们）。
-下一步是 **S1（本地队列与快照）**，见 PLAN-SYNC §5；S1 只在本机用两个数据目录验证合并，**不写网络代码**。
+前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`）。
+同步的 **S0（数据模型 + 重放）和 S1（本地队列 + 快照）都已做完并验收**：uid 迁移（v2→v4）、
+`sync_ops` + `withSync`、`cardFlag`、`deck` / `noteItem` 事件、checkpoint 与合并引擎（tombstone、别表、重放）
+都在 `feat/sync`（**`master` 还没有**，已发布的 0.5.1 不含它们）。
+下一步是 **S2（加密与传输）**——第一个会连网、会出现在界面上的阶段；开工前先看 §3 末尾的待确认项。
 
 - `npm run typecheck` → 0 错误
-- `npm test` → **21 文件 / 207 项通过 + 1 份手动迁移测试跳过**
+- `npm test` → **24 文件 / 222 项通过 + 1 份手动迁移测试跳过**
 - `npm run build` → 通过
-- 工作区干净；S0 的四步提交都在 `feat/sync`（最新提交以 `git log -1` 为准）
+- 工作区干净；S0/S1 的提交都在 `feat/sync`（最新提交以 `git log -1` 为准）
 
 ---
 
@@ -28,7 +29,7 @@ cd D:\ymh\Code\tools\wordmemo
 git checkout feat/sync          # 已经在上面
 npm install                     # 只有删过 node_modules 才需要
 npm run typecheck
-npm test                        # 21 文件 207 项通过（+1 份手动迁移测试跳过）
+npm test                        # 24 文件 222 项通过（+1 份手动迁移测试跳过）
 npm run build
 npm run dev                     # 开发模式（脚本自带 --noSandbox）
 ```
@@ -74,42 +75,49 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 ---
 
-## 3. S0 已完成，下一步 S1
+## 3. S1 已完成，下一步 S2
 
-S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [PLAN-SYNC.md](PLAN-SYNC.md) §10：
-重放 → uid/v2→v3 迁移 → `sync_ops` + `withSync` → `cardFlag`。三条硬结论：
+S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验收**，记录在 [PLAN-SYNC.md](PLAN-SYNC.md) §10。
+必须记住的结论：
 
 1. **`enableFuzz: false`** 是重放成立的前提，别再打开。
-2. **`uid` 已就位**：`notes` / `items` / `reviews` / `exams`，`SCHEMA_VERSION = 3`，迁移前自动备份；
+2. **`uid` 已就位**：`notes` / `items` / `reviews` / `exams` / `decks`，`SCHEMA_VERSION = 4`，迁移前自动备份；
    新行由各自写入口生成 uid。迁移会回填老行（只加列不回填 = 没有 uid）。
-3. **写这四张表只走写入口**：`sync_ops` 由 `sync.ts` 的 `withSync` / `recordSyncOp` 在写事务里追加；
+3. **写数据只走写入口**：`sync_ops` 由 `sync.ts` 的 `withSync` / `recordSyncOp` 在写事务里追加；
    在别处直接 `INSERT`/`UPDATE` 会漏队列。`cards` 的四个标志走 `cardFlag` 事件（`<item uid>:<direction>`）。
+4. **快照合并的时钟来自 `sync_ops`**：标量字段级 LWW、数组并集、`reviews` 并集后重放卡片；
+   删除靠 `sync_tombstones`。同一份快照导入 10 次不变（字段时钟挡住）。
+5. **同名库 / 同词不同 uid 走 `sync_aliases`**：两台设备各自的「默认库」uid 必然不同，
+   没有这张表笔记会掉进「未归类」。
 
-### 下一步：S1（本地队列与快照）
+### 下一步：S2（加密与传输）
 
-按 PLAN-SYNC §5：
+按 PLAN-SYNC §5 / §3.5–§3.8：
 
-- `sync_ops` 的读与确认（`pendingSyncOps()` 已有；缺的是「推到哪就标到哪」）；
-- checkpoint 序列化 / tombstone / 合并引擎（规则见 §3.9：并集、字段级 LWW、删除优先）；
-- `.wmsync` 快照导出/导入（复用 checkpoint 的同一套合并代码）。
-- **先定 `decks` 怎么同步**：库本身还没有 op（见 PLAN-SYNC §10「明确没做的事」），
-  但笔记/考试的 op 已经用 `deck_uid` 指库；不定的话另一台设备会拿到指不到的库。
+- 口令强度 + `kdfVerifier` + `safeStorage`；age 加密（`age-encryption` 包）加在 `checkpoint.ts` 的读写边界上；
+- GitHub 客户端：条件请求、Contents / Git Data 两条路径、PAT 校验、错误归一；
+- 连接向导 + 状态面板 + 退避与抖动；`.wmsync` 导出/导入的界面（库函数已经能用了）；
+- 远端增量：逐条 op 的合并入口（S1 只做了「快照记录」粒度）。
 
-验收：造两台「设备」（两个 `WORDMEMO_DATA_DIR`），A 导出 → B 导入 → 双向各改一条 → 再对齐 →
-内容一致；同一批导入 10 次结果不变（幂等）。
+### S2 开工前必须先确认
 
-**S1 不碰网络**：GitHub / age 加密 / PAT 都是 S2，S1 之前不要写任何请求代码。
+1. **加密库**：PLAN 定的是 `age-encryption`（typage，BSD-3），要新增依赖；确认可以加。
+2. **测试仓库**：真仓库 e2e 用哪个私有仓库 / PAT（只手动跑，不进 CI）。
+3. **界面范围**：S2 是否一次做完「连接向导 + 状态面板 + 快照按钮」，还是先做设置页里的一块。
+
+**S2 之前不要写任何请求代码**：先把加密往返、口令校验和错误归一在本机测通。
 
 ---
 
-## 4. 更后面（S1–S4 摘要，别提前做）
+## 4. 更后面（S2–S4 摘要，别提前做）
 
 | 阶段 | 做什么 | 验收 |
 |---|---|---|
-| **S1** 本地队列与快照 | `sync_ops` 写读、checkpoint 序列化、tombstone、合并引擎；`.wmsync` 快照导出/导入 | 用两个 `WORDMEMO_DATA_DIR` 当两台设备：A 导出 → B 导入 → 双向各改一条 → 再对齐 → 内容一致；重复导入 10 次结果不变（幂等） |
 | **S2** 加密与传输 | 口令强度 + `kdfVerifier` + `safeStorage`；GitHub 客户端（条件请求、Contents/Git Data、PAT 校验、错误归一）；连接向导 + 状态面板 + 退避 | 真私有仓库两台设备自动同步；改坏仓库文件 → 报「文件损坏」；PAT 撤销 → 报「PAT 失效」；断网 10 分钟恢复后自动补上 |
 | **S3** 冲突与设备管理 | 并集/LWW/tombstone 全规则、`sync_devices` 游标、移除设备、换密码全量重推 | 同一词条两台各加一个释义 → 两个都在；一台改释义一台改音标 → 都保留；一台删一台改 → 按 ts 判定且可解释 |
 | **S4** 打磨与文档 | README「同步」章节（会泄露什么/不会泄露什么）、丢密码说明、错误对照表、体积提示 | 没看过代码的人照文档 10 分钟连上 |
+
+**S2 之前不要写任何网络代码**：先把加密往返、口令校验和错误归一在本机跑通，成本最低。
 
 **S1 之前不要写任何网络代码**：先在本机用两个数据目录把合并跑通，成本最低。
 
@@ -119,12 +127,13 @@ S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [
 
 | 路径 | 作用 / 这次要动什么 |
 |---|---|
-| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 3`；四张表的 `uid`、`sync_ops` 队列 |
+| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 4`；各表 uid、`sync_ops` / `sync_tombstones` / `sync_state` / `sync_aliases` |
 | `src/main/db/connection.ts` | `openDb` / `migrate` / 可重入的 `tx` / `localIso` / `addColumnIfMissing` / `backupBeforeMigrate`；`migrateUids()`（补列 + 回填 + 唯一索引） |
-| `src/main/db/sync.ts` | **同步层入口**：`withSync` / `recordSyncOp` / `pendingSyncOps` / `noteUid|itemUid|examUid|deckUid` / `cardFlagUid`；S1 从这里读队列 |
+| `src/main/db/sync.ts` | **同步层入口**：`withSync` / `recordSyncOp` / `pendingSyncOps` / `recordTombstone` / `getSyncState` / uid 映射 / `cardFlagUid` / `noteItemUid` |
+| `src/main/db/checkpoint.ts` | **S1 的快照与合并引擎**：`exportCheckpoint` / `exportSnapshot` / `readCheckpoint` / `importSnapshot` / `mergeCheckpoint`；S2 的 age 加在它的读写边界上 |
 | `src/main/db/uid.ts` | `newUid()`（ULID），已有，直接用 |
-| `src/main/db/notes.ts` `items.ts` `exams.ts` `cards.ts` | 写入口；S0 已加 uid、包 `withSync`、卡片标志发 `cardFlag` |
-| `src/main/db/decks.ts` | 已有 uid；`removeDeck` 会连带改笔记归属与考试 scope，也发 op |
+| `src/main/db/notes.ts` `items.ts` `exams.ts` `cards.ts` | 写入口；uid、`withSync`、卡片标志 `cardFlag`、笔记↔词条 `noteItem` |
+| `src/main/db/decks.ts` | 库也进同步：建/改名/删发 `deck` op；`removeDeck` 连带改笔记归属与考试 scope |
 | `src/main/db/dedupe.ts` | 按 `headword_norm` 合并重复词条；**S3 的冲突合并要复用它**（它现在不发 op，是启动修复） |
 | `src/main/fsrs.ts` | `initFsrs` / `reviewSnapshot` / `replayCard`；fuzz 已关，别打开 |
 | `src/main/settings.ts` | 设置读写与 `mergeSettings`；S2 的 `sync` 配置进这里（**不含 PAT/口令**） |
@@ -132,6 +141,8 @@ S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [
 | `src/main/ipc.ts` + `src/preload/index.ts` | IPC 注册与暴露（S2 的 `sync:*`） |
 | `tests/replay.test.ts` | 临时库 + 固定时钟的测试写法，新测试照这个抄 |
 | `tests/uid.test.ts` `tests/sync-ops.test.ts` `tests/card-flag.test.ts` | S0 的三组契约测试：迁移回填、写入口队列、卡片标志 |
+| `tests/sync-relations.test.ts` | S1：deck / noteItem 事件、删除影子、`sync_state`、decks.uid 迁移 |
+| `tests/snapshot.test.ts` | S1 验收：两台「设备」（两个库文件）导出→导入→双向改→对齐、幂等、删除传播、格式版本拒绝 |
 | `tests/real-db-migration.test.ts` | 手动迁移验收（默认跳过；设 `WORDMEMO_REAL_DB_COPY` 跑） |
 | `docs/PLAN-SYNC.md` | 方案与实现记录（§3 方案、§5 阶段、§10 记录） |
 
@@ -157,6 +168,14 @@ S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [
     `exams.scope.deckId` 换 `scope.deck_uid`。写入口的字段构造就是范例。
 14. **`cardFlag` 的 uid 是 `<item uid>:<direction>`**，不是 card id；卡片没有自己的 uid。
 15. **真实库可能是空表**：本机 `exams`、`reviews` 就可能 0 行，验收脚本别假设每张表都有数据。
+16. **合并的字段时钟来自 `sync_ops`**：没写过 op 的老行退回 `created_at` / `updated_at`。
+   所以「绕过写入口直接改库」会让字段时钟失真——新增写路径必须包 `withSync`。
+17. **`sync_aliases` 不能删也不能清**：同名库、同词不同 uid 的笔记/复习引用靠它解析成本机 id。
+18. **快照整份一个 `createdAtMs`**：合并时整份按这个时间算 LWW；不要给单条记录另编时间，
+   否则两台设备会对「谁更新」得出不同结论。
+19. **合并顺序是先 tombstone 再记录**：删除优先，但快照里同 uid 的记录比删除新时允许复活。
+20. **`origin: 'remote:*'` 的 op 绝不推送**：`pendingSyncOps()` 已经过滤；别把合并写回当成新变更推回去。
+21. **S1 没做的三件**：逐条 op 的合并入口、`markPushed`、导出/导入的 IPC 与界面——都在 S2。
 
 ---
 
@@ -192,18 +211,21 @@ S0（数据模型与重放）**全部做完并验收**，每一步的记录在 [
 再读 docs/PLAN-SYNC.md 的 §3（方案）、§4（数据与接口变更）、§5（S0–S4）、§10（实现记录）。
 
 现状：分支 feat/sync（最新提交以 git log -1 为准），typecheck 0 错误、
-npm test 21 文件 207 项通过（+1 份手动迁移测试默认跳过）。
-便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0（数据模型 + 重放）已完成并验收：
-uid + v2→v3 迁移、sync_ops + withSync、cardFlag 事件都已落地；重放成立
-（enableFuzz 必须关），细节见 PLAN-SYNC §10。
+npm test 24 文件 222 项通过（+1 份手动迁移测试默认跳过）。
+便携版/自动更新已完结（0.5.1 已发 Release，不要再改）；同步 S0 和 S1 都已完成并验收：
+uid + v2→v4 迁移、sync_ops + withSync、cardFlag、deck/noteItem 事件、checkpoint 与合并引擎
+（tombstone / 别名 / reviews 重放 / 字段级 LWW）都已落地；重放成立（enableFuzz 必须关），
+细节见 PLAN-SYNC §10。
 
-接着做 S1（本地队列与快照）：
-1) sync_ops 的读与确认（推送到哪就标到哪）；
-2) checkpoint 序列化 / tombstone / 合并引擎（并集、字段级 LWW、删除优先，见 §3.9）；
-3) .wmsync 快照导出/导入（复用同一套合并代码）。
-验收：用两个 WORDMEMO_DATA_DIR 当两台设备，A 导出 → B 导入 → 双向各改一条 → 再对齐内容一致；
-重复导入 10 次结果不变（幂等）。
-S1 不要写任何网络代码（GitHub / age / PAT 都是 S2）。
+接着做 S2（加密与传输）。开工前先确认三件事（见 HANDOFF-SYNC §3）：
+1) 加密库用 age-encryption（typage，BSD-3），新增依赖；
+2) 真仓库 e2e 用哪个私有仓库 / PAT；
+3) 界面范围：连接向导 + 状态面板 + 快照按钮一次做完还是先做设置页一块。
+
+S2 的内容：口令强度 + kdfVerifier + safeStorage；age 加密加在 checkpoint 的读写边界；
+GitHub 客户端（条件请求、Contents/Git Data、PAT 校验、错误归一）；连接向导 + 状态面板 + 退避；
+逐条 op 的合并入口。验收：真私有仓库两台设备自动同步；仓库文件改坏 → 报「文件损坏」；
+PAT 撤销 → 报「PAT 失效」；断网 10 分钟恢复后自动补上。
 
 硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
 每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
@@ -214,11 +236,13 @@ S1 不要写任何网络代码（GitHub / age / PAT 都是 S2）。
 ## 10. 交接自检（新会话花两分钟确认）
 
 - [ ] `git branch --show-current` → `feat/sync`
-- [ ] `npm test` → 21 文件 207 项通过（另 1 份手动迁移测试跳过）
+- [ ] `npm test` → 24 文件 222 项通过（另 1 份手动迁移测试跳过）
 - [ ] `npm run typecheck` → 0 错误
-- [ ] `git log --oneline -6` → 能看到 `feat(sync): give synced tables a uid`、`feat(sync): record writes in sync_ops`、
-      `feat(sync): sync card flags as events`、`feat(sync): replay cards from review records`
+- [ ] `git log --oneline -8` → 能看到 `feat(sync): export and merge snapshots`、
+      `feat(sync): sync decks and note-item links`、`feat(sync): sync card flags as events`、
+      `feat(sync): record writes in sync_ops`、`feat(sync): give synced tables a uid`
 - [ ] `grep -n "enableFuzz" src/main/fsrs.ts` → 必须是 `false`
 - [ ] `grep -n "withSync" src/main/db/sync.ts src/main/db/notes.ts` → 都在
-- [ ] `sqlite3`（或 `node -e` 开库）里 `SELECT COUNT(*) FROM sync_ops` 能查（表存在）
+- [ ] `grep -n "mergeCheckpoint" src/main/db/checkpoint.ts` → 在（S1 的合并入口）
+- [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` 四张表
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI），已被 gitignore
