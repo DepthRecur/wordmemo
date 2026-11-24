@@ -107,7 +107,10 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 
 ### 待你手动验收（S2–S3）
 
-**完整步骤、预期结果与错误场景见 [TEST-SYNC-S2.md](TEST-SYNC-S2.md)。** 覆盖：
+**测试包：`test-package/`**（README + 可勾选清单 + 本机双实例脚本 + 一键自检 + 便携版），
+打包产物在 `release/WordMemo-sync-test-package-0.6.0.zip`（约 143 MB，含便携版）。
+
+**完整步骤、预期结果与错误场景见 [TEST-SYNC.md](TEST-SYNC.md)。** 覆盖：
 连接与首次同步、改数据推送、`.wmsync` 导出/导入、单机双实例 / VM 双设备、设备列表与移除、
 换密码（旧密码拒绝、新密码重新加入）、错误场景（密码错/PAT 失效/文件损坏/公开仓库/被移除）。
 
@@ -171,6 +174,7 @@ VM 可以作为第二台设备；你用 VM 测时告诉我结果即可，我这�
 | `tests/sync-engine.test.ts` | S2 引擎：两台设备对着内存假仓库同步 |
 | `tests/real-sync.test.ts` | 真仓库 e2e（默认跳过；设 `WORDMEMO_SYNC_E2E_TOKEN` 或跑 `.data/sync-e2e.ps1`） |
 | `tests/sync-scheduler.test.ts` `tests/sync-secrets.test.ts` | S2 调度（假定时器）与密钥文件 |
+| `test-package/` | 交付给测试者的自包含测试包（说明/清单/双实例脚本/一键自检）；`build-package.ps1` 组装 zip |
 | `tests/real-db-migration.test.ts` | 手动迁移验收（默认跳过；设 `WORDMEMO_REAL_DB_COPY` 跑） |
 | `docs/PLAN-SYNC.md` | 方案与实现记录（§3 方案、§5 阶段、§10 记录） |
 

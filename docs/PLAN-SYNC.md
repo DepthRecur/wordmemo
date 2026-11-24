@@ -776,7 +776,9 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 - 设置页同步面板补齐：设备列表与移除、更换同步密码（危险操作二次确认）、最近同步日志、
   仓库 >200 MB 的黄色提醒。
 - 版本 `0.5.1 → 0.6.0`；`release-notes/v0.6.0.md` 三行（数据迁移 / 不可逆 / 改了什么）。
-- 手动测试指南更新到 S2+S3：[TEST-SYNC-S2.md](TEST-SYNC-S2.md)。
+- 手动测试指南更新到 S2+S3：[TEST-SYNC.md](TEST-SYNC.md)。
+- 自包含测试包 `test-package/`：说明、可勾选清单、问题报告模板、本机双实例脚本、一键自检脚本；
+  `build-package.ps1` 把说明与便携版 zip 组装成 `release/WordMemo-sync-test-package-0.6.0.zip`。
 
 **发布前剩下的**：用户手动验收（两台设备、VM、PAT 撤销、断网恢复）→ 修 bug →
 `npm run dist` 冒烟 → 合回 `master` → tag → CI 发布。代码部分到此为止。
