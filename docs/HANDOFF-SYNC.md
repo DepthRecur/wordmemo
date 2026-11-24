@@ -1,7 +1,7 @@
-﻿# 交接文档：同步（Sync）板块
+# 交接文档：同步（Sync）板块
 
 > 写给**新会话**：读这一份就能直接开工，不用重读旧对话。
-> 生成时间：2026-11-23　分支：`feat/sync`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
+> 生成时间：2026-11-24（同步验收完成）　分支：`feat/sync`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
 > 前置阅读（按顺序）：本文 → [PLAN-SYNC.md](PLAN-SYNC.md) §1–§5 与 §10 → [HANDOFF.md](HANDOFF.md) §1（命令）/§8（坑）/§10（纪律）。
 > 文案规则：[MESSAGES.md](MESSAGES.md)。同步里任何用户可见的字都按它定级。
 
@@ -9,18 +9,28 @@
 
 ## 0. 一句话现状
 
-前三个功能（多供应商、多个库、便携版 + 自动更新）**全部完结并已发版**（当前 `0.5.1`）。
-同步的 **S0–S4 代码全部完成**：uid 迁移、`sync_ops` + `withSync`、`cardFlag`、`deck`/`noteItem`、
-checkpoint 与合并引擎、age 加密、GitHub 客户端、传输引擎、`safeStorage`、调度、设置页同步面板、
-设备管理与换密码、日志与体积提醒、README 与发布准备。**等待你手动验收**（两台设备 / VM / 真仓库），
-验收与修 bug 之后再合回 `master` 发 0.6.0。全部在 `feat/sync`（`master` 还没有）。
+**同步 0.6.0 的代码和验收都已完成，只差发版。** S0–S4 全部实现，自动化 e2e（引擎层 / 双实例界面 /
+快照 / 界面刷新）全过，你的 VM 手动验收（真便携版 + 真 PAT + 真仓库，6 个检查）也全过。
+接下来是：合 `master` → 跑一遍检查 → tag `v0.6.0` → push tag 让 CI 发布 → 核对 Release。
 
-- `npm run typecheck` → 0 错误
-- `npm test` → **32 文件 / 274 项通过 + 2 份手动测试跳过**（真实库迁移、真仓库同步）
-- `npm run build` → 通过
-- 工作区干净；最新提交以 `git log -1` 为准
+- 分支 `feat/sync`；`master` 目前还是 0.5.1，**没有**同步代码
+- `npm run typecheck` → 0 错误；`npm test` → **32 文件 / 274 项通过 + 2 份手动测试跳过**；`build` / `dist` 通过
+- 验收期间一共修了 **5 个真 bug**（清单在 §3）
+- 测试仓库 `DepthRecur/wordmemo-sync-test` 现在是「本机 A + 你的 VM」两台设备的正常状态，
+  密码 `wordmemo-vm-test-parrot`；不用再清
 
-**下一步**：手动验收 → 修 bug → `npm run dist` 冒烟 → 合 master / tag 0.6.0 / CI 发布。
+**下一步**：§3 的「发布 0.6.0」照着做即可。
+
+**新会话三步**：① `git log -1` 确认在 `feat/sync`、工作区干净 → ② 按 §3 跑检查、合 `master` →
+③ `git tag v0.6.0` + push tag + 核对 Release 三件套。中间不需要再动同步代码。
+
+**当前环境（接手时看一眼）**
+
+- 本机 A 测试实例：数据目录 `%TEMP%\wordmemo-test\host`，已连测试仓库（口令 `wordmemo-vm-test-parrot`）。
+  没开着也不是问题，发版用不到；要复现验收就
+  `powershell -ExecutionPolicy Bypass -File test-package\start-host-device.ps1`。
+- 用户的 VM 那台已经关掉，不影响发版；测试仓库保持现状（两台设备）即可。
+- `release/` 下的 zip / latest.json 是 gitignore，CI 发布会重新构建，本地只需要 `npm run dist` 冒烟。
 
 ---
 
@@ -31,7 +41,7 @@ cd D:\ymh\Code\tools\wordmemo
 git checkout feat/sync          # 已经在上面
 npm install                     # 只有删过 node_modules 才需要
 npm run typecheck
-npm test                        # 30 文件 260 项通过（+2 份手动测试跳过）
+npm test                        # 32 文件 274 项通过（+2 份手动测试跳过）
 npm run build
 npm run dev                     # 开发模式（脚本自带 --noSandbox）
 ```
@@ -105,30 +115,69 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 | 设备列表、移除设备、换密码、checkpoint 压缩、自愈重推 | `engine.ts` + `sync_runs` 日志 | 完成（9 项引擎测试） |
 | README 同步章节、错误对照表、0.6.0 发布准备 | `README.md`、`release-notes/v0.6.0.md` | 完成 |
 
-### 验收现状（S2–S3）
+### 验收结论（已完成，2026-11-24）
 
-**本机那半已经自动化跑完**（两台真实实例 + 真仓库），不用人点：
-
-| 跑什么 | 命令 | 结果 |
+| 验收项 | 怎么验的 | 结果 |
 |---|---|---|
-| 单测 / 构建 | `test-package\run-checks.ps1` | 通过 |
-| 引擎层真仓库 e2e（10 项） | `.data\sync-e2e.ps1` | 通过 |
-| 两个真实实例 + 界面（24 项） | `.data\sync-local-e2e.ps1` | 通过 |
+| 引擎层真仓库 e2e | `.data\sync-e2e.ps1`（10 项） | 全过 |
+| 两个真实实例 + 真界面点击 | `.data\sync-local-e2e.ps1`（24 项） | 全过 |
+| 快照导出/导入（真原生对话框） | `.data\snapshot-ui-e2e.mjs`（8 项） | 全过 |
+| 同步后界面自动刷新 | `.data\deck-refresh-e2e.mjs`（6 项） | 全过 |
+| 单测 / 类型 / 构建 | `test-package\run-checks.ps1` | 全过 |
+| **VM 手动验收（用户）** | 真便携版 + 真 PAT + 真仓库，6 个检查（双向同步、建库、设备列表、重启） | **全过** |
 
-**只剩 VM 那半要人做**：干净机器上装便携版、输 PAT/密码、和本机双向同步一次。
-单一说明文件：[test-package/README.md](../test-package/README.md)（§3 是 VM 步骤，§4 是本机结果）。
-测试包：`release/WordMemo-sync-test-package-0.6.0.zip`（含便携版）。
+验收期间修掉的 5 个真 bug（细节见 [PLAN-SYNC.md](PLAN-SYNC.md) §10 S4.1）：
 
-本轮自动化查出并修掉 3 个真 bug（同名库合并崩溃、空同步重传、跨天漏推），记在 PLAN-SYNC §10。
+1. 两台设备各自建同名库 → `decks.name` 唯一索引冲突，同步直接崩；
+2. 每次同步都重传当天增量（空 commit、仓库白长、「上传 N 条」虚高）；
+3. 断网跨天 → 前一天的 op 永远推不上去；
+4. **同步下来的库/笔记不在界面刷新**（用户 VM 试用时发现，数据其实已进库）；
+5. **未连接的机器不能导入快照**（导入/导出按钮原来只在已连接时显示）。
 
-VM 作为第二台设备；你用 VM 测时告诉我结果即可，我这边不需要操控 VMware。
+测试说明就只有一份：[test-package/README.md](../test-package/README.md)；
+包在 `release/WordMemo-sync-test-package-0.6.0.zip`（含便携版）。
 
-### 验收通过后：发布 0.6.0
+### 为什么 `.data` 里的脚本不在仓库里
 
-1. 修完验收发现的 bug；
-2. `npm run typecheck && npm test && npm run build && npm run dist`，解压 `release/WordMemo-0.6.0-portable.zip` 冒烟；
-3. 合回 `master` → `git tag v0.6.0` → push tag（CI 会自动发布）；
-4. 核对 Release 的三件套（zip / sha256 / latest.json）。
+`sync-e2e.ps1` / `sync-local-e2e.ps1` / `snapshot-ui-e2e.mjs` / `deck-refresh-e2e.mjs` /
+`stage-host.ps1` 都在 `.data/`（gitignore），因为它们要用 Windows 凭据管理器里的 GitHub token 和
+本机固定数据目录，不适合进仓库。**它们是本机可重复运行的验收脚本，别删**；新会话要复跑直接调用。
+如果 `.data` 被清了，`tests/real-sync.test.ts` 仍在仓库里，可以自己设
+`WORDMEMO_SYNC_E2E_TOKEN` + `WORDMEMO_SYNC_E2E_REPO` 跑引擎层那套。
+
+### 发布 0.6.0（新会话从这里开始）
+
+0. 前置：工作区干净、在 `feat/sync`、`git log -1` 是 `e2303a2` 或之后；本地有 GitHub 凭据
+   （`git push` 走 https 会用到；网络不稳时用 `.data\push-retry.ps1 -Ref feat/sync`）。
+1. 跑一遍：
+   ```powershell
+   npm run typecheck
+   npm test
+   npm run build
+   npm run dist          # 重新出 release\WordMemo-0.6.0-portable.zip + latest.json
+   ```
+2. 冒烟：解压 `release\WordMemo-0.6.0-portable.zip`，双击 `WordMemo.exe`，看一眼
+   设置 → 同步 面板能正常渲染（**别连真仓库**，用临时数据目录或看完就退）。
+3. 合回 `master`：
+   ```powershell
+   git checkout master
+   git pull
+   git merge --no-ff feat/sync -m "merge: sync 0.6.0"
+   npm test              # merge 后再跑一次
+   ```
+   冲突重点：`package.json` / `package-lock.json`（0.6.0 的版本号）——**别整份替换 lockfile**，
+   只改根包版本（之前踩过，见 HANDOFF.md §8）。
+4. 打 tag + 推：
+   ```powershell
+   git tag v0.6.0
+   git push origin master
+   git push origin v0.6.0     # 推 tag 触发 GitHub Actions 发布
+   ```
+5. 核对 Release：`WordMemo-0.6.0-portable.zip`、`*.sha256`、`latest.json` 三件套齐全，
+   `latest.json` 里的版本与 sha 对得上。
+6. 可选：用 0.5.1 的旧便携版放一个临时目录，验证「检查更新 → 下载 → 下次启动生效」。
+7. 收尾：`docs/PLAN-SYNC.md` 顶部状态改成「已发布」；`release-notes/v0.6.0.md` 已有三行，
+   核对与 README 的「会泄露/不会泄露」表一致。
 
 界面文案按 [MESSAGES.md](MESSAGES.md) 定级：未连接是正常状态；PAT 失效、口令错、
 文件损坏、格式版本不符、设备被移除都是**错误**（功能不可用）；「上次同步成功时间」这类是提示。
@@ -215,12 +264,12 @@ VM 作为第二台设备；你用 VM 测时告诉我结果即可，我这边不�
 19. **合并顺序是先 tombstone 再记录**：删除优先，但快照里同 uid 的记录比删除新时允许复活。
 20. **`origin: 'remote:*'` 的 op 绝不推送**：`pendingSyncOps()` 已经过滤；别把合并写回当成新变更推回去。
 21. **S1 没做的三件**：逐条 op 的合并入口、`markPushed`、导出/导入的 IPC 与界面——S2 已补前两件，
-    界面仍是下一步。
+    界面在 S3 补齐（按钮常显，未连接时先问一次密码）。
 22. **GitHub Contents 路径必须带 `/contents`**：客户端曾经漏了这一段，`meta.json` 一写就 404；
     `tests/github-client.test.ts` 现在断言完整 URL。
 23. **远端写文件带 `sha`（新建除外）**：sha 从 `sync_files` 缓存拿，不要每次重新 GET；缓存丢了就重新读一次。
-24. **当天 op 分片每次推送都重写**（age 不能追加）：内容取「当天所有本地 op」，不是「未推送的 op」，
-    否则会丢掉当天更早、已经推送过的那批。
+24. **op 分片只在有待推数据时写**（age 不能追加）：内容 = 当天所有本地 op + 还没推上去的（含跨天），
+    按 seq 去重。没有待推就一个字都不写，否则每次空同步都会多一个 commit。
 25. **age 的 work factor**：生产 18、测试 12；它只影响加密时的 KDF，解密从文件头读参数。
 26. **`meta.json` 的 salt 与 `kdfVerifier` 必须用同一份盐**：`ensureMeta()` 里一次生成、一次派生。
 27. **密钥只进 `sync-secrets.bin`**：`settings.json` 的 `sync` 段只有仓库与节奏；别把 PAT/口令
@@ -228,8 +277,9 @@ VM 作为第二台设备；你用 VM 测时告诉我结果即可，我这边不�
 28. **连接顺序**：先校验 PAT/仓库/口令，成功后才落盘设置与密钥；首次同步失败不回滚连接
     （设置和密码已经存好，稍后重试即可）。
 29. **`before-quit` 只 `preventDefault()` 一次**：`syncFlushDone` 挡住第二次，否则 `app.quit()` 会死循环。
-30. **测试仓库已清空**：`DepthRecur/wordmemo-sync-test` 里现在没有文件；手动测试自选密码后，
-    里面会有 `meta.json` + `devices/`。真仓库 e2e 用的是固定测试口令，两者别混用。
+30. **测试仓库现在有数据**：`DepthRecur/wordmemo-sync-test` 是本机 A + 用户的 VM 两台设备，
+    口令 `wordmemo-vm-test-parrot`。真仓库 e2e（`.data\sync-e2e.ps1` / `.data\sync-local-e2e.ps1`）
+    会用固定测试口令并**清空仓库**，跑完要重新 `.data\stage-host.ps1` 布置本机 A。
 
 ---
 
@@ -302,5 +352,7 @@ age 加密、GitHub 客户端、传输引擎、真仓库 e2e、safeStorage、调
 - [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码
 - [ ] `package.json` 版本是 `0.6.0`，`release-notes/v0.6.0.md` 存在
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`、`sync-ui-smoke.mjs`），已被 gitignore
+
+
 
 
