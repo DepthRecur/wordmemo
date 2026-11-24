@@ -1,7 +1,14 @@
 import { app, safeStorage } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import type { AiProviderId, AiSettings, Settings, SettingsPatch, UpdateSettings } from '@shared/types'
+import type {
+  AiProviderId,
+  AiSettings,
+  Settings,
+  SettingsPatch,
+  SyncSettings,
+  UpdateSettings
+} from '@shared/types'
 import { DEFAULT_SETTINGS } from '@shared/types'
 import { resolveProviderModel } from '@shared/aiModel'
 
@@ -155,6 +162,21 @@ function mergeUpdates(raw: Partial<UpdateSettings> | null | undefined): UpdateSe
   }
 }
 
+function mergeSync(raw: Partial<SyncSettings> | null | undefined): SyncSettings {
+  const base = DEFAULT_SETTINGS.sync
+  const interval = Number(raw?.intervalMin)
+  return {
+    enabled: raw?.enabled === true,
+    owner: typeof raw?.owner === 'string' ? raw.owner.trim() : base.owner,
+    repo: typeof raw?.repo === 'string' ? raw.repo.trim() : base.repo,
+    apiBase:
+      typeof raw?.apiBase === 'string' && raw.apiBase.trim()
+        ? raw.apiBase.trim().replace(/\/+$/, '')
+        : base.apiBase,
+    intervalMin: [0, 5, 10, 30, 60].includes(interval) ? interval : base.intervalMin
+  }
+}
+
 function merge(raw: Partial<Settings> | null): Settings {
   const merged: Settings = { ...DEFAULT_SETTINGS, ...(raw ?? {}) }
   merged.quietHours = { ...DEFAULT_SETTINGS.quietHours, ...(raw?.quietHours ?? {}) }
@@ -166,6 +188,8 @@ function merge(raw: Partial<Settings> | null): Settings {
   merged.ai = mergeAi(raw?.ai)
   // U2 更新记账：老配置没有这一段；坏字段（手改过）一律归位，别让节流/跳过状态失控
   merged.updates = mergeUpdates(raw?.updates)
+  // 同步配置：老配置没有这一段；owner/repo 为空 = 未连接
+  merged.sync = mergeSync(raw?.sync)
   // 当前库：文件被手改/删库后可能留下不存在的 id，先归一化成合法数字。
   // 0 = 一个库都没有（2026-11-20 起允许删光所有库），不能把它改回 1（1 可能不存在）
   const deckId = Number((raw as { currentDeckId?: unknown } | null)?.currentDeckId)

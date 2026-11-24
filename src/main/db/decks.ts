@@ -1,5 +1,7 @@
 import type { Deck, DeckPatch, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
+import { scopeForSync } from './exams'
+import { deckUid, recordSyncOp, withSync } from './sync'
 import { newUid } from './uid'
 import { getSettings, updateSettings } from '../settings'
 
@@ -179,21 +181,28 @@ export function createDeck(input: {
     | { p?: number }
     | undefined
   const position = toInt(row?.p, -1) + 1
-  const res = getDb()
-    .prepare(
-      'INSERT INTO decks (uid, name, color, position, new_per_day, created_at) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    .run(
-      newUid(),
-      name,
-      input.color?.trim() || null,
-      position,
-      input.newPerDay === null || input.newPerDay === undefined
-        ? null
-        : Math.max(0, toInt(input.newPerDay)),
-      localIso()
-    )
-  return toInt(res.lastInsertRowid)
+  const color = input.color?.trim() || null
+  const newPerDay =
+    input.newPerDay === null || input.newPerDay === undefined
+      ? null
+      : Math.max(0, toInt(input.newPerDay))
+  const uid = newUid()
+  const createdAt = localIso()
+  return withSync(
+    {
+      entity: 'deck',
+      uid,
+      fields: { name, color, position, new_per_day: newPerDay, created_at: createdAt }
+    },
+    () => {
+      const res = getDb()
+        .prepare(
+          'INSERT INTO decks (uid, name, color, position, new_per_day, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        )
+        .run(uid, name, color, position, newPerDay, createdAt)
+      return toInt(res.lastInsertRowid)
+    }
+  )
 }
 
 export function updateDeck(id: number, patch: DeckPatch): void {
@@ -214,9 +223,22 @@ export function updateDeck(id: number, patch: DeckPatch): void {
         : Math.max(0, toInt(patch.newPerDay))
   const position = patch.position === undefined ? toInt(current.position) : toInt(patch.position)
 
-  getDb()
-    .prepare('UPDATE decks SET name = ?, color = ?, position = ?, new_per_day = ? WHERE id = ?')
-    .run(name, color, position, newPerDay, id)
+  const currentNewPerDay =
+    current.new_per_day === null || current.new_per_day === undefined
+      ? null
+      : toInt(current.new_per_day)
+  // 只记真正变了的字段（同 notes/items）
+  const fields: Record<string, unknown> = {}
+  if (name !== String(current.name)) fields.name = name
+  if (color !== (current.color ? String(current.color) : null)) fields.color = color
+  if (position !== toInt(current.position)) fields.position = position
+  if (newPerDay !== currentNewPerDay) fields.new_per_day = newPerDay
+
+  withSync({ entity: 'deck', uid: String(current.uid ?? ''), fields }, () => {
+    getDb()
+      .prepare('UPDATE decks SET name = ?, color = ?, position = ?, new_per_day = ? WHERE id = ?')
+      .run(name, color, position, newPerDay, id)
+  })
 }
 
 /**
@@ -243,8 +265,16 @@ export function removeDeck(
   }
 
   const wasCurrent = getSettings().currentDeckId === id
+  const deckRow = getDb().prepare('SELECT uid FROM decks WHERE id = ?').get(id) as
+    | { uid?: string | null }
+    | undefined
   const result = tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
+    // 先取 uid：改完归属要发 note / exam 的 op，别的设备才知道这些行变了
+    const noteRows = getDb()
+      .prepare('SELECT id, uid FROM notes WHERE deck_id = ?')
+      .all(id) as unknown as { id: number; uid: string | null }[]
+    const targetUid = moveTo === null ? null : deckUid(moveTo)
     if (moveTo === null) {
       getDb()
         .prepare('UPDATE notes SET deck_id = 0, updated_at = ? WHERE deck_id = ?')
@@ -257,11 +287,15 @@ export function removeDeck(
         .run(moveTo, localIso(), id)
       getDb().prepare('UPDATE import_drafts SET deck_id = ? WHERE deck_id = ?').run(moveTo, id)
     }
+    for (const note of noteRows) {
+      recordSyncOp({ entity: 'note', uid: note.uid ?? '', fields: { deck_uid: targetUid } })
+    }
     // 考试范围是 JSON，没有外键：不同步就会留下永远查不到卡的悬空 deckId（D-01）。
     // 用 JS 解析/写回，避免依赖 SQLite JSON1；moveTo = null（删最后一个库）时
     // 删掉 deckId = 退回「全部库」，不要写 0（0 在 deckInClause 里是「未归类」）。
-    const examRows = getDb().prepare('SELECT id, scope FROM exams').all() as {
+    const examRows = getDb().prepare('SELECT id, uid, scope FROM exams').all() as {
       id: number
+      uid: string | null
       scope: string
     }[]
     if (examRows.length) {
@@ -272,9 +306,15 @@ export function removeDeck(
         if (moveTo === null) delete scope.deckId
         else scope.deckId = moveTo
         updateScope.run(JSON.stringify(scope), toInt(exam.id))
+        recordSyncOp({
+          entity: 'exam',
+          uid: exam.uid ?? '',
+          fields: { scope: scopeForSync(scope) }
+        })
       }
     }
     getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
+    recordSyncOp({ entity: 'deck', uid: deckRow?.uid ?? '', op: 'delete' })
     return { moved: before, unassigned: moveTo === null ? before : 0 }
   })
   // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。

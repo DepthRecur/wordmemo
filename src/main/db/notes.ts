@@ -2,9 +2,12 @@ import type { NoteDetail, NoteInput, NoteQuery, NoteSummary } from '@shared/type
 import { getDb, localIso, parseJson, toInt, tx } from './connection'
 import { defaultDeckId, deckExists } from './decks'
 import { itemDirections } from './items'
+import { deckUid, noteItemUid, recordSyncOp, withSync } from './sync'
+import { newUid } from './uid'
 
 interface NoteRow {
   id: number
+  uid: string | null
   source_id: number | null
   deck_id: number
   title: string
@@ -144,23 +147,47 @@ export function createNote(
 ): number {
   const d = getDb()
   const now = localIso()
-  const res = d
-    .prepare(
-      `INSERT INTO notes (source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      input.sourceId ?? null,
-      resolveDeckId(input.deckId),
-      input.title.trim() || '未命名笔记',
-      input.noteDate ?? null,
-      JSON.stringify(input.tags ?? []),
-      input.rawMarkdown ?? '',
-      input.status ?? 'validated',
-      now,
-      now
-    )
-  return toInt(res.lastInsertRowid)
+  const uid = newUid()
+  const deckId = resolveDeckId(input.deckId)
+  const title = input.title.trim() || '未命名笔记'
+  const tags = input.tags ?? []
+  const status = input.status ?? 'validated'
+  return withSync(
+    {
+      entity: 'note',
+      uid,
+      fields: {
+        deck_uid: deckUid(deckId),
+        title,
+        note_date: input.noteDate ?? null,
+        tags,
+        raw_markdown: input.rawMarkdown ?? '',
+        status,
+        created_at: now,
+        updated_at: now
+      }
+    },
+    () => {
+      const res = d
+        .prepare(
+          `INSERT INTO notes (uid, source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          uid,
+          input.sourceId ?? null,
+          deckId,
+          title,
+          input.noteDate ?? null,
+          JSON.stringify(tags),
+          input.rawMarkdown ?? '',
+          status,
+          now,
+          now
+        )
+      return toInt(res.lastInsertRowid)
+    }
+  )
 }
 
 export function updateNote(
@@ -173,18 +200,36 @@ export function updateNote(
   // 单选移动：词条与卡片不动，只改归属
   const deckId =
     patch.deckId === undefined ? toInt(current.deck_id) : resolveDeckId(patch.deckId)
-  d.prepare(
-    `UPDATE notes SET title = ?, note_date = ?, tags = ?, raw_markdown = ?, status = ?, deck_id = ?, updated_at = ? WHERE id = ?`
-  ).run(
-    patch.title?.trim() || current.title,
-    patch.noteDate === undefined ? current.note_date : patch.noteDate,
-    JSON.stringify(patch.tags ?? parseJson<string[]>(current.tags, [])),
-    patch.rawMarkdown ?? current.raw_markdown,
-    patch.status ?? current.status,
-    deckId,
-    localIso(),
-    id
-  )
+  const next = {
+    title: patch.title?.trim() || current.title,
+    note_date: patch.noteDate === undefined ? current.note_date : patch.noteDate,
+    tags: JSON.stringify(patch.tags ?? parseJson<string[]>(current.tags, [])),
+    raw_markdown: patch.rawMarkdown ?? current.raw_markdown,
+    status: patch.status ?? current.status,
+    deck_id: deckId
+  }
+  // 只记真正变了的字段：两条 op 合并时按字段做 LWW，全量重写会把别人改的字段盖回去
+  const fields: Record<string, unknown> = {}
+  if (next.title !== current.title) fields.title = next.title
+  if (next.note_date !== current.note_date) fields.note_date = next.note_date
+  if (next.tags !== current.tags) fields.tags = parseJson<string[]>(next.tags, [])
+  if (next.raw_markdown !== current.raw_markdown) fields.raw_markdown = next.raw_markdown
+  if (next.status !== current.status) fields.status = next.status
+  if (next.deck_id !== toInt(current.deck_id)) fields.deck_uid = deckUid(next.deck_id)
+  withSync({ entity: 'note', uid: current.uid ?? '', fields }, () => {
+    d.prepare(
+      `UPDATE notes SET title = ?, note_date = ?, tags = ?, raw_markdown = ?, status = ?, deck_id = ?, updated_at = ? WHERE id = ?`
+    ).run(
+      next.title,
+      next.note_date,
+      next.tags,
+      next.raw_markdown,
+      next.status,
+      next.deck_id,
+      localIso(),
+      id
+    )
+  })
 }
 
 /** 批量操作一次最多处理这么多份：防止 3500 份全选把界面和主进程拖死 */
@@ -229,15 +274,18 @@ export function moveNotes(ids: unknown, deckId: number): { moved: number } {
     const rows = existing.length
       ? (d
           .prepare(
-            `SELECT id FROM notes WHERE deck_id <> ? AND id IN (${existing.map(() => '?').join(',')})`
+            `SELECT id, uid FROM notes WHERE deck_id <> ? AND id IN (${existing.map(() => '?').join(',')})`
           )
-          .all(target, ...existing) as unknown as { id: number }[])
+          .all(target, ...existing) as unknown as { id: number; uid: string | null }[])
       : []
     const now = localIso()
+    const targetUid = deckUid(target)
     const stmt = d.prepare('UPDATE notes SET deck_id = ?, updated_at = ? WHERE id = ?')
     let moved = 0
     for (const row of rows) {
-      moved += Number(stmt.run(target, now, toInt(row.id)).changes ?? 0)
+      withSync({ entity: 'note', uid: row.uid ?? '', fields: { deck_uid: targetUid } }, () => {
+        moved += Number(stmt.run(target, now, toInt(row.id)).changes ?? 0)
+      })
     }
     return { moved }
   })
@@ -253,19 +301,65 @@ export function copyNotes(ids: unknown, deckId: number): { copied: number; noteI
     const d = getDb()
     const now = localIso()
     const insert = d.prepare(
-      `INSERT INTO notes (source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
-       SELECT source_id, ?, title, note_date, tags, raw_markdown, status, ?, ? FROM notes WHERE id = ?`
+      `INSERT INTO notes (uid, source_id, deck_id, title, note_date, tags, raw_markdown, status, created_at, updated_at)
+       SELECT ?, source_id, ?, title, note_date, tags, raw_markdown, status, ?, ? FROM notes WHERE id = ?`
     )
     const link = d.prepare(
       `INSERT INTO note_items (note_id, item_id, raw_line, position)
        SELECT ?, item_id, raw_line, position FROM note_items WHERE note_id = ?`
     )
+    const sourceRow = d.prepare('SELECT * FROM notes WHERE id = ?')
+    const copiedLinks = d.prepare(
+      `SELECT ni.raw_line, ni.position, i.uid AS item_uid
+       FROM note_items ni JOIN items i ON i.id = ni.item_id WHERE ni.note_id = ?`
+    )
+    const targetUid = deckUid(target)
     const noteIds: number[] = []
     for (const id of existingNoteIds(list)) {
-      const res = insert.run(target, now, now, id)
-      const noteId = toInt(res.lastInsertRowid)
-      link.run(noteId, id)
-      noteIds.push(noteId)
+      const src = sourceRow.get(id) as NoteRow | undefined
+      if (!src) continue
+      // 复制出来的是一份新笔记，uid 必须重新生成（不能沿用源行的）
+      const uid = newUid()
+      withSync(
+        {
+          entity: 'note',
+          uid,
+          fields: {
+            deck_uid: targetUid,
+            title: src.title,
+            note_date: src.note_date,
+            tags: parseJson<string[]>(src.tags, []),
+            raw_markdown: src.raw_markdown,
+            status: src.status,
+            created_at: now,
+            updated_at: now
+          }
+        },
+        () => {
+          const res = insert.run(uid, target, now, now, id)
+          const noteId = toInt(res.lastInsertRowid)
+          link.run(noteId, id)
+          // 复制出来的笔记也要带上关联（S1）：每条关联是一个独立实体
+          const links = copiedLinks.all(id) as unknown as {
+            raw_line: string | null
+            position: number
+            item_uid: string
+          }[]
+          for (const row of links) {
+            recordSyncOp({
+              entity: 'noteItem',
+              uid: noteItemUid(uid, row.item_uid),
+              fields: {
+                note_uid: uid,
+                item_uid: row.item_uid,
+                raw_line: row.raw_line,
+                position: toInt(row.position)
+              }
+            })
+          }
+          noteIds.push(noteId)
+        }
+      )
     }
     return { copied: noteIds.length, noteIds }
   })
@@ -277,11 +371,23 @@ export function deleteNotes(ids: unknown): { removed: number } {
   if (!list.length) return { removed: 0 }
   return tx(() => {
     const d = getDb()
+    // 先捞出 uid：删完就查不到了，而其他设备要靠 delete op 才知道该删哪条
+    const targets = d
+      .prepare(`SELECT id, uid FROM notes WHERE id IN (${list.map(() => '?').join(',')})`)
+      .all(...list) as unknown as { id: number; uid: string | null }[]
     const stmt = d.prepare('DELETE FROM notes WHERE id = ?')
     let removed = 0
     for (const id of list) removed += Number(stmt.run(id).changes ?? 0)
-    // 清掉不再被任何笔记引用的词条，卡片会级联删除，避免词库留下孤儿
+    // 清掉不再被任何笔记引用的词条，卡片会级联删除，避免词库留下孤儿。
+    // 这些词条也要发 delete op，否则别的设备上会永远留着它们。
+    const orphans = d
+      .prepare('SELECT uid FROM items WHERE id NOT IN (SELECT item_id FROM note_items)')
+      .all() as unknown as { uid: string | null }[]
     d.prepare('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items)').run()
+    for (const note of targets) recordSyncOp({ entity: 'note', uid: note.uid ?? '', op: 'delete' })
+    for (const item of orphans) {
+      recordSyncOp({ entity: 'item', uid: item.uid ?? '', op: 'delete' })
+    }
     return { removed }
   })
 }

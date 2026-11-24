@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+﻿import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
@@ -13,7 +13,8 @@ import type {
   ReviewMode,
   ReviewSession,
   SettingsPatch,
-  SubmitReview
+  SubmitReview,
+  SyncConnectInput
 } from '@shared/types'
 import {
   createNote,
@@ -65,6 +66,18 @@ import {
 } from './db/importDrafts'
 import { storedFileAbs } from './storage'
 import { requestTrayRefresh } from './tray-bridge'
+import {
+  buildStatus as syncStatus,
+  changeSyncPassphrase,
+  connectSync,
+  disconnectSync,
+  exportSnapshotTo,
+  getSyncLog,
+  importSnapshotFrom,
+  listSyncDevices,
+  removeSyncDevice,
+  syncNow
+} from './sync/manager'
 
 function dataDir(): string {
   const dir = app.getPath('userData')
@@ -412,4 +425,39 @@ export function registerIpc(): void {
   ipcMain.handle('system:quit', () => {
     app.exit(0)
   })
+
+  /* ------------------------------ 同步（S2） ------------------------------ */
+  ipcMain.handle('sync:status', () => syncStatus())
+  ipcMain.handle('sync:connect', (_e, input: SyncConnectInput) => connectSync(input))
+  ipcMain.handle('sync:disconnect', () => disconnectSync())
+  ipcMain.handle('sync:now', () => syncNow())
+  ipcMain.handle('sync:devices', () => listSyncDevices())
+  ipcMain.handle('sync:removeDevice', (_e, deviceId: string) => removeSyncDevice(deviceId))
+  ipcMain.handle('sync:changePassphrase', (_e, passphrase: string) =>
+    changeSyncPassphrase(passphrase)
+  )
+  ipcMain.handle('sync:log', () => getSyncLog())
+  ipcMain.handle('sync:export', async (_e, passphrase?: string) => {
+    const picked = await dialog.showSaveDialog({
+      title: '导出加密快照',
+      defaultPath: 'wordmemo-同步快照.wmsync',
+      filters: [{ name: 'WordMemo 同步快照', extensions: ['wmsync'] }]
+    })
+    if (picked.canceled || !picked.filePath) {
+      return { ok: true, status: syncStatus(), path: null }
+    }
+    return exportSnapshotTo(picked.filePath, passphrase)
+  })
+  ipcMain.handle('sync:import', async (_e, passphrase?: string) => {
+    const picked = await dialog.showOpenDialog({
+      title: '导入加密快照',
+      properties: ['openFile'],
+      filters: [{ name: 'WordMemo 同步快照', extensions: ['wmsync'] }]
+    })
+    if (picked.canceled || !picked.filePaths[0]) {
+      return { ok: false, status: syncStatus(), errorCode: 'canceled', message: '已取消' }
+    }
+    return importSnapshotFrom(picked.filePaths[0], passphrase)
+  })
 }
+

@@ -367,3 +367,447 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 - 不做 Gitee / 自建 Git 托管（结构上支持，但配置项先只暴露 GitHub；`apiBase` 已留口子）。
 - **不做附件同步——永久不做**（图片/docx 原件、TTS 缓存、AI 缓存都不传；`import_drafts` 也不传）。
 - 不做"云端备份托管"（那是服务器，违背前提）。
+
+---
+
+## 10. 实现记录
+
+> 交接专用文档：[HANDOFF-SYNC.md](HANDOFF-SYNC.md)（现状、下一步、代码地图、坑、开场提示词）。本节只记“做过什么、结论是什么”。
+
+### S0 第一步：重放（2026-11-23，`feat/sync`，**判据通过**）
+
+PLAN-SYNC §5 的 S0 退路写在前面：如果三天内做不到「重放 == 真实卡片」，就退回「以 cards 为准 + 冲突副本」。**这一步现在有结论了：重放成立。**
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `src/main/fsrs.ts`：`replayCard(reviews, cardId?)` | 从复习记录重放卡片状态；只用长期调度器（因为 `applyReview` 今天不看 `mode`） |
+| `src/main/fsrs.ts`：`enableFuzz: false` | **这条是前提**：开 fuzz 时间隔带 ±5% 随机抖动，两台设备重放同一串复习会得出不同 `due_at`，「cards 是 reviews 的函数」不成立 |
+| `src/main/db/cards.ts`：`applyReview(input, now = new Date())` | 可选时钟，测试用来钉时间；生产不传，行为不变 |
+| `tests/replay.test.ts`（新，3 项） | 走真实写入口（`createNote` → `upsertItem` → `applyReview`）造轨迹，再和库里那张卡逐字段比 |
+
+**golden test 覆盖的轨迹**：学习步骤（3 → 3，间隔 10 分钟）→ 隔天忘了（2）→ 重来（3）→ 考试模式（4，这里验证「mode 不影响调度」）→ 两周后完全忘（1）→ 当天重学（3）。结果：`due_at` / `state` / `reps` / `lapses` / `stability` / `difficulty` / `fsrs_json` **全部相等**；连跑三次逐字节一致。
+
+**两个必须记住的坑**
+
+1. `newCard()` 每次生成随机 `cardId`（ts-fsrs 内部的 uuid），它会出现在 `fsrs_json` 里。重放时要么沿用原卡的 `cardId`（`replayCard(reviews, cardId)`），要么比较时忽略该字段——否则「只差一个 uuid」会被当成重放不成立。
+2. `reviews.reviewed_at` 只存到秒（`localIso`），而生产时钟带毫秒。早复习（还没到期就点）时这点差别会放大到几秒，所以**合并后本地那张卡的 `due_at` 会挪动几秒**。收敛性不受影响（每台设备从同一批记录重放得出同一结果），`due_at` 也只用于排序/到期判断，接受。
+
+### S0 第二步：uid + 迁移（2026-11-23，`feat/sync`）
+
+`notes` / `items` / `reviews` / `exams` 各有 `uid TEXT`（唯一索引 `ux_<table>_uid`），`SCHEMA_VERSION` **2 → 3**。
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `schema.ts` | 四张表的 `CREATE TABLE` 里加 `uid TEXT`；版本号 3 |
+| `connection.ts`：`migrateUids()` | 在原有 `BEGIN IMMEDIATE` 事务里跑：`addColumnIfMissing` → 回填 → 建唯一索引 |
+| `notes.ts` | `createNote` 生成 uid；`copyNotes` 的 `INSERT … SELECT` 也带 uid（**每份复制重新生成**，不沿用源行） |
+| `items.ts` / `exams.ts` / `cards.ts` | `upsertItem` 新增分支、`createExam`、`applyReview` 的 reviews 插入各生成 uid |
+| `tests/uid.test.ts`（新，4 项） | 用真实写入口造数据 → 退回 v2（DROP COLUMN + `user_version = 2`）→ 重开迁移 |
+
+**三个实现要点**
+
+1. **唯一索引不能写进 `SCHEMA`**：老库还没有 `uid` 列时 `CREATE UNIQUE INDEX … (uid)` 会直接
+   `no such column`（和 `ix_notes_deck` 是同一个坑）。索引统一由 `migrateUids()` 在补列之后建。
+2. **必须回填**：SQLite 唯一索引允许多个 NULL，老行全是 NULL 就等于没有 uid。回填用
+   `newUid(Date.parse(<时间列>))`：`reviews` 取 `reviewed_at`，其余取 `created_at`。
+3. **重复 uid 兜底**：若库里已有重复（手工改库 / 早期实验版本），保留 id 最小的那行、其余重新生成，
+   否则建唯一索引会失败 → 应用起不来。这一条也写进了迁移，代价只有一次全表扫描。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **19 文件 / 195 项全绿**。测试断言的是
+「迁移后行数不变、每行 26 位 uid、集合内无重复、唯一索引真的拦重复」。
+
+### S0 第三步：`sync_ops` + `withSync`（2026-11-23，`feat/sync`）
+
+所有对 `notes` / `items` / `reviews` / `exams` 的写入口，现在都在**自己那条事务里**追加一条
+`sync_ops`（§3.4）。`cards` 只同步标志位，留到下一步。
+
+**新文件 `src/main/db/sync.ts`**
+
+| 导出 | 作用 |
+|---|---|
+| `withSync(meta, fn)` | 开事务 → 执行 `fn` → 同事务写 op；`meta = null` 时只开事务 |
+| `recordSyncOp(meta)` | 已在事务里追加一条 op（多实体写入用，如删笔记连带删孤儿词条） |
+| `pendingSyncOps(limit)` | `origin = 'local' AND pushed = 0` 的待推送队列（S1 从这里读） |
+| `noteUid/itemUid/examUid/deckUid` | 本机 id → 同步 uid |
+| `cardFlagUid(itemUid, direction)` | cardFlag 的稳定 id：`<item uid>:<direction>`（卡片没有自己的 uid） |
+
+**op 的形状（定了，S1 直接照这个合并）**
+
+- `uid`：note/item/review/exam 用各自 uid；cardFlag 用 `<item uid>:<direction>`。
+- `fields`：键用数据库列名，**不含任何本机整数 id**。跨设备引用一律换 uid：
+  `notes.deck_id → deck_uid`、`reviews.card_id → card_uid`、`reviews.exam_id → exam_uid`、
+  `exams.scope.deckId → scope.deck_uid`。
+- **只记真正变了的字段**（`updateNote` / `updateItem` / `updateExam` / `upsertItem` 的已存在分支）。
+  一个字段都没变的 upsert 不写 op（重复入库、原地保存不会刷出一堆噪声）。
+- `ts_utc`：事件时间。复习 / 卡片标志用复习发生的时刻（`applyReview` 的可选时钟），其余取写入时刻。
+- `origin` 默认 `local`；`remote:<device>` 的 op 照常落库但**不进推送队列**（防回声）。
+
+**四处必须改的东西**
+
+1. **`tx()` 改成可重入**（`connection.ts`）。同步要求「写 + op 同一条事务」，而写入口会互相调用
+   （`applyReview` → `addAcceptedZh`、`copyNotes` → 每条 withSync、导入入库 → `createNote` + `upsertItem`）。
+   内层直接搭外层事务，只有最外层 COMMIT/ROLLBACK；否则嵌套会报
+   `cannot start a transaction within a transaction`。
+2. **`removeDeck` 也发 op**：删库时笔记要改 `deck_id`、考试 scope 里的 `deckId` 要改，
+   不发 op 别的设备会永远停在旧库。
+3. **草稿入库不动**：`importDrafts` 的入库走 `createNote` + `upsertItem`，自动被覆盖；
+   `note_items`（笔记↔词条关联）和 `validation_issues` 仍不同步，属于 S1 的传输格式。
+4. **`dedupeItems` 不包**：它是启动时的本地修复（老库合并重复词条），跑在 uid 回填之前，
+   真正的跨设备归并规则在 S3，届时它会产生新的 `local` op。
+
+**明确没做的事（S1 已接手）**：`decks` 本身不在 S0 的同步范围里（S1 第一步已把它补上：建/改名/删
+都发 `deck` op，见下）。`note_items` 也在 S1 补成了独立事件；S0 结束时它还没进传输格式。
+
+**测试**：`tests/sync-ops.test.ts`（新，9 项）——四个写入口的 op 形状与「不含本机 id」、
+只记变更字段、移动/复制/删除、删库连带、`origin` 过滤、嵌套写入口，
+以及**写失败整体回滚（不留半条数据也不留 op）**。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **20 文件 / 204 项全绿**。
+
+### S0 第四步：cardFlag（2026-11-23，`feat/sync`）
+
+`cards.suspended` / `learn_mark` / `buried_until` / `needs_check` 不属于重放（§3.3），
+按 `cardFlag` 事件同步，字段级 LWW。**卡片本身仍然不传**。
+
+**稳定 id**：`<item uid>:<direction>`（`cardFlagUid()`）。`cards` 没有自己的 uid，
+但「词条 uid + 方向」在两台设备上是同一个字符串，落地时再映射成本地 card id。
+
+**三个入口（都是唯一写入口）**
+
+| 入口 | 字段 | 何时发 |
+|---|---|---|
+| `setDirection` | `suspended` | 打开/关闭听写方向；**首次建卡也发一条 `{suspended:0}`**，否则远端不知道这张卡存在 |
+| `markItemLearned` | `needs_check`、`learn_mark` | 学过一个词条，给每张未挂起的卡各发一条（挂起的不发） |
+| `applyReview` | `needs_check: 0`（复习的那张）、`buried_until`（同词条其它方向） | 复习时；只发**值真的变了**的 |
+
+**只记变了的值**：`needs_check` 已经是 0、兄弟卡今天已经 bury 过、`learn_mark` 没变，
+都不发 op。同一天连点两次复习只会多一条 review op。
+
+**没包的地方**：`dedupeItems()` 合并词条时会把标志从旧卡搬到保留卡，但它是启动时的本地修复
+（跑在 uid 回填之前），不产生 op；跨设备的词条归并规则在 S3，届时归并本身会产生新的 `local` op。
+
+**测试**：`tests/card-flag.test.ts`（新，3 项）——suspended 的建卡/挂起、markItemLearned 的
+每卡一条且跳过挂起卡、applyReview 的 needs_check 清零与兄弟卡 bury、重复复习不再发标志、
+以及标志不会混进 review 的字段里。
+
+**真实库副本迁移验收（§3.4）**
+
+手动测试 `tests/real-db-migration.test.ts`（默认跳过，设 `WORDMEMO_REAL_DB_COPY` 指向副本才跑）：
+
+```powershell
+$env:WORDMEMO_REAL_DB_COPY='<副本路径>'
+npx vitest run tests/real-db-migration.test.ts
+```
+
+跑了两份真实库的副本（都含 `-wal` / `-shm`）：
+
+| 副本 | 迁移前 | 结果 |
+|---|---|---|
+| `%APPDATA%\WordMemo\wordmemo.db`（应用里正在用的） | 2 笔记 / 14 词条 / 42 卡 / 0 复习 / 0 考试，`user_version = 2` | 自动生成 `backups/wordmemo-pre-migrate-v2.db`；迁移到 3；五张表行数完全不变；四张表 uid 无 NULL、无重复；`integrity_check = ok`；`sync_ops` 为空 |
+| `.data/wordmemo.db`（开发用的学习库，含 1205 条复习） | 18 笔记 / 300 词条 / 1205 复习 / 646 卡，`user_version = 2` | 同上；复习表回填被真实数据覆盖 |
+
+**验收结论**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 207 项全绿 + 1 份手动测试跳过**；
+`npm run build` 通过；**没有新增任何网络代码**（S0 全程不连网、不写远端）。
+
+**S0 完成**。下一步是 S1（本地队列与快照），见 §5；S1 没通过验收之前不要动 S2 的网络部分。
+
+### S1 第一步：deck 与 noteItem 事件（2026-11-23，`feat/sync`）
+
+S1 开工前确认了两个会定死传输格式的决定（2026-11-23）：
+
+1. **decks 纳入同步**。笔记/考试的 op 早就用 `deck_uid` 指库，但库本身不产生 op，别的设备会拿到指不到的库。
+2. **`note_items` 用独立关系事件**（不是塞进 note 字段），两台各加一个词条时并集而不是互相覆盖。
+
+**做了什么**
+
+| 改动 | 说明 |
+|---|---|
+| `decks.ts`：`createDeck` / `updateDeck` / `removeDeck` | 发 `deck` 的 upsert / upsert（只记变更字段）/ delete op |
+| `items.ts`：`finishItemWrite` | 新增或 `raw_line` 变化时发 `noteItem` op（uid = `<note uid>:<item uid>`） |
+| `notes.ts`：`copyNotes` | 复制出来的每条关联各发一条 op（用新笔记的 uid） |
+| `sync.ts` | 实体加 `deck` / `noteItem`；`delete` op 同时写 `sync_tombstones`（同 uid 只留最新 ts）；`getSyncState` / `updateSyncState`（单行，设备 id 只在本机）；`SYNC_FORMAT_VERSION = 1` |
+| `schema.ts` | `SCHEMA_VERSION` 3 → **4**；新表 `sync_tombstones`、`sync_state` |
+| `connection.ts` | `uid` 补列/回填/唯一索引的清单加上 `decks`（老库补 `ux_decks_uid`） |
+
+**两个实现细节**
+
+1. **`withSync` 改成「先记 op、再执行 `fn`」**：仍是同一条事务（`fn` 失败连 op 一起回滚），
+   但保证「主体」排在依赖它的 op 前面——否则 `noteItem` / `cardFlag` 会先于 note/item/review 落队列，
+   S2 按 seq 应用时会先遇到指向不存在实体的关联。
+2. **关联的删除不发 op**：删笔记/删词条时 `note_items` 走外键级联，远端应用 delete 时同样级联，
+   多发的关联 delete 反而是噪声（S3 处理「一条笔记里移除一个词」时再补）。
+
+**测试**：`tests/sync-relations.test.ts`（新，7 项）——deck 三件事、noteItem 的新建/原文变更/原样不发、
+复制笔记的关联 uid、删除影子（含去重）、`sync_state` 稳定性、v3→v4 的 decks.uid 补列与索引。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **22 文件 / 214 项通过 + 1 份手动测试跳过**。
+
+### S1 第二步：快照与合并引擎（2026-11-23，`feat/sync`）
+
+新文件 `src/main/db/checkpoint.ts`：导出全量快照、校验、合并（`.wmsync` 的读写边界就在这里；
+S2 只在这条边界上加 age，合并逻辑不动）。
+
+**快照格式（formatVersion = 1）**
+
+```json
+{
+  "formatVersion": 1, "kind": "wmsync", "createdAt": "...", "createdAtMs": 1763...,
+  "deviceId": "ULID", "deviceName": "…", "counts": {...},
+  "tombstones": [...],
+  "decks": [...], "notes": [...], "items": [...], "reviews": [...],
+  "exams": [...], "noteItems": [...], "cardFlags": [...]
+}
+```
+
+- 整份快照共用一个 `createdAtMs` 作为**合并时间**；跨设备的引用全是 uid（`deckUid` / `cardUid` / `noteUid+itemUid`）。
+- `cardFlags` 导出所有卡片（包括四个字段都是默认值的）：全量快照里「没带」和「是 0」必须能区分，
+  否则一台取消挂起、另一台导入时清不掉。
+- `tombstones` 一起导出，删除才能随快照传播。
+
+**合并规则**
+
+| 数据 | 规则 |
+|---|---|
+| 标量字段（notes/items/exams/decks/cardFlags） | **字段级 LWW**。每个字段的最后修改时间从 `sync_ops` 推出来（`clockFor`），没有 op 的老行退回 `created_at` / `updated_at` |
+| items 的 `meanings` / `collocations` / `examples` / `accepted_zh` | **并集**（§3.9），不按时间覆盖 |
+| `items.learned_at` | 取最早的非空值 |
+| `reviews` | 按 uid 并集（不可变）；合并后**重放**受影响卡片（`replayCard`） |
+| `noteItems` | 按（note uid, item uid）并集，doc 位置/原文取更新的 |
+| `cardFlags` | 字段级 LWW；本机缺这张卡时先建卡（听写方向不会被 `ensureCards` 建出来）。**没有字段时钟的本地非默认值优先**：S0 之前设置过、之后没改过的挂起/标志，不会被一次导入悄悄清掉 |
+| 删除 | `tombstones`：删除比更早的 upsert 优先；快照里同 uid 的记录比删除更新 → 复活 |
+| 同名库 / 同词不同 uid | 唯一键只允许一条 → 合并进本机那条，并在 `sync_aliases` 记「远端 uid → 本机 uid」（S3 再做真正的词条归并） |
+
+**两条关键设计**
+
+1. **合并回来的 op 标 `origin: 'remote:<deviceId>'`**：不进推送队列（防回声），但会成为
+   **下一次合并的字段时钟**——所以同一份快照导入 10 次，第 2 次开始不再产生任何变化（幂等）。
+2. **`sync_aliases` 不是 S3 才需要**：两台设备各自建过「默认库」，uid 必然不同；没有别名表，
+   A 的笔记导进 B 会掉进「未归类」。表用 `CREATE TABLE IF NOT EXISTS`，老库打开时自动补上。
+
+**测试**：`tests/snapshot.test.ts`（新，8 项）——两台「设备」（两个库文件）走完整验收：
+A 造数据（库/笔记/词条/复习/听写方向/考试）→ 导出 → B 导入（含别名、关联、重放、建听写卡）→
+B 改标题/补释义/标记已学/再复习 → 导出 → A 导入（字段 LWW、数组并集、复习并集、reps=2）→
+**重复导入 10 次指纹与队列长度都不变** → A 删笔记导出 → B 导入后笔记/词条/复习/卡片全清 →
+S0 之前的旧卡片标志不被快照默认值清掉 → 格式版本错误与坏文件明确拒绝且不动库。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **24 文件 / 222 项通过 + 1 份手动测试跳过**；
+两份真实库副本重新跑 v4 迁移仍然通过（`SCHEMA_VERSION` 已在 S1 第一步升到 4）。
+
+**S1 明确没做**（都归 S2/S3，别误以为漏了）
+
+- **逐条 op 的合并**：S1 的合并单位是「快照里的记录」；S2 拿到远端增量后，把 op 当单字段更新喂给同一套时钟即可，但入口还没写。
+- **推送队列的确认**（`markPushed`）：没有推送就没有「推到哪」，等 S2 的传输层。
+- **IPC / 界面**：`sync:export` / `sync:import` 的按钮和文案在 S2；S1 只有库函数与测试。
+
+### S2 第一步：加密边界（2026-11-23，`feat/sync`）
+
+新增依赖 **`age-encryption@0.3.1`**（typage，BSD-3，只依赖 `@noble/*`）——已确认可以加。
+
+**文件格式**（`.wmsync` 与远端分片共用）：
+
+```
+WORDMEMO-SYNC 1\n          ← 明文魔数，只用来快速识别「是不是我们的文件」
+<age 密文>                  ← 密文里是 { header, payload }
+header = { formatVersion, kind, path, deviceId, createdAt }
+```
+
+- **路径/类型/版本都放在密文里**：age 没有 AAD，解密后必须校验 `path` 与 `kind` 与预期一致，
+  所以「把 A 的文件改名成 B」会被拒绝（`sync/crypto.ts`）。
+- 口令错与文件损坏在 age 层无法区分，统一报「同步密码不对，或者文件已经损坏」。
+- **`kdfVerifier`**：`scrypt(passphrase, salt)` 的前 16 字节（N=2^15），常量时间比较；
+  salt 16 字节随机 hex。`meta.json`（明文）只放 `{ formatVersion, salt, kdfVerifier, createdAt }`。
+- **口令规则**：至少 10 字符、常见弱口令表直接拒绝、强度分 0–4；「帮我生成」= 5 个词（约 130 词表）。
+- **work factor**：生产默认 18；测试传 12 加速。加密参数写在 age 文件头里，解密不需要知道 work factor。
+- `checkpoint.ts` 增加 `exportEncryptedSnapshot` / `importEncryptedSnapshot`（S1 的合并逻辑原样复用）。
+
+**测试**：`tests/crypto.test.ts`（11 项：加解密往返、口令错、密文被改、路径/类型/版本不符、
+空口令、强度与生成、`kdfVerifier`）+ `tests/snapshot-crypto.test.ts`（1 项：加密导出 → 另一台设备导入、
+**明文里不含标题/单词**、口令错拒绝且不动库、重复导入幂等）。
+
+### S2 第二步：GitHub 客户端（2026-11-23，`feat/sync`）
+
+`src/main/sync/github.ts`：只做「这个仓库里读写文件」，不碰同步语义。
+
+| 能力 | 说明 |
+|---|---|
+| `getRepo` / `getUser` | 连接校验：仓库存在、`private === true`、有 push 权限、PAT 属于谁 |
+| `getFile(path, etag)` | 条件请求（`If-None-Match`），304 不占配额、返回 `status: 304` |
+| `putFile` / `deleteFile` | Contents API；带 `sha` 表示更新 |
+| `putLargeFile` | >1 MB 走 Git Data：blob → tree（`base_tree`）→ commit → 移动 ref；空仓库自动建首个 ref |
+| `listDir` | `devices/` 下列设备 |
+| 错误归一 | 401→`pat_invalid`、403（配额 0）→`rate_limited`、403→`forbidden`、404→`not_found`、409/422→`conflict`、429→`rate_limited`、5xx→`server_error`、网络/超时单独分 |
+| 配额 | 记录 `x-ratelimit-remaining` / `reset`（S3 的降级策略会用） |
+
+**安全**：token 只在 `Authorization` 头里，不进错误信息、不进日志（测试专门断言错误文案里没有 token）。
+
+**测试**：`tests/github-client.test.ts`（15 项，本地 `http.createServer` mock，不连真网）——
+认证头、base64 解码、304、PUT/DELETE、Git Data 全链路、八种错误码、连接失败与超时。
+
+**真仓库**：已按用户授权在 `DepthRecur` 账号下建好 **`DepthRecur/wordmemo-sync-test`**（private、空仓库）。
+它**还没被任何测试碰过**——真仓库 e2e 要等 S2 的传输层接上、并且把 PAT 配进应用（或手动脚本）再跑，
+且只在手动执行，不进常规 CI。
+
+### S2 第三步：逐条 op 与传输引擎（2026-11-23，`feat/sync`）
+
+**逐条 op 合并**（`checkpoint.ts` 的 `applyRemoteOp` / `applyRemoteOps`）：快照合并只能整份应用，
+远端增量是一行一行的 op，所以把同一套规则下沉到单条 op：
+
+- 标量字段按 `sync_ops` 推出来的字段时钟做 LWW；items 的数组并集；`learned_at` 取最早；
+- `reviews` 按 uid 只插一次，插完重放卡片；`cardFlag` 沿用「没有时钟的本地非默认值优先」；
+- 删除优先：比 tombstone 更早的 upsert 直接忽略，更晚的 upsert 可以复活；
+- `deck_uid` / `card_uid` 都过 `sync_aliases`；应用后写 `origin: 'remote:<device>'` 的 op（不推送）。
+
+**新本地表**（`CREATE IF NOT EXISTS`，v4 老库打开即补）：
+
+| 表 | 用途 |
+|---|---|
+| `sync_files` | 远端路径 → `sha` / `etag` 缓存：PUT 要 sha，条件 GET 要 etag |
+| `sync_devices` | 见过的其它设备（S3 的游标/移除设备挂在它上面） |
+
+**传输引擎**（`src/main/sync/engine.ts`）：
+
+1. `connect()`：`getUser` + `getRepo`（公开仓库直接拒绝、无 push 权限拒绝）→
+   `meta.json` 不存在就写入 `{ formatVersion, salt, kdfVerifier }`，存在就校验版本与口令。
+2. `syncNow()` 先推后拉：
+   - 推：当天所有本地 op 写成一个 `devices/<id>/ops/YYYYMMDD.jsonl.age`（age 不能追加，所以每次重写当天文件）；
+     **首次同步 / 攒够 200 条 op / checkpoint 超过 7 天**时改推整份 checkpoint，并把本地 op 全部标记已推。
+   - 拉：列 `devices/`，逐个设备**先 checkpoint 再 ops**（op 是 checkpoint 之后的增量），
+     两个路径都吃 `sync_files` 的 etag 缓存（没变就是 304）。
+   - 每次同步更新 `info.json.age`（设备名）与 `sync_state.last_push_at/last_pull_at`。
+3. 错误保持类型：网络/接口是 `SyncApiError`，口令/仓库/格式是 `SyncSetupError`，UI 直接按 code 说话。
+4. 测试用 `workFactor` 把 age 的 scrypt 从 18 降到 12；生产不传。
+
+**顺手修掉的一个真 bug**：客户端 `getFile/putFile/deleteFile/listDir` 的 URL 少了 `/contents`，
+之前的客户端测试断言太松没抓到，引擎一写 `meta.json` 就 404；已改为 `contentsPath()` 并在测试里断言完整 URL。
+
+**测试**：`tests/remote-ops.test.ts`（6 项：五类实体依次落地、旧 op 不改/新 op 改、数组并集、幂等、
+删除优先与复活、批量计数）+ `tests/sync-engine.test.ts`（5 项：两台设备对着**内存里的假仓库**走完
+「A 推 → B 拉 → B 改并推 op 分片 → A 拉并应用 → 再同步 0 变更」，以及口令错、公开仓库拒绝）。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **29 文件 / 260 项通过 + 1 份手动测试跳过**；`npm run build` 通过。
+
+**S2 还差**：`safeStorage` 记住口令、IPC + 界面（连接向导 / 状态面板 / 快照按钮）、
+退避与抖动的调度器、真仓库 e2e。设备移除、checkpoint 压缩/保留、`sync_devices` 游标按计划属于 S3。
+
+### S2 第四步：真仓库 e2e（2026-11-23，通过）
+
+手动测试 `tests/real-sync.test.ts`（默认跳过；本机用 `.data/sync-e2e.ps1` 从 Windows 凭据管理器取
+token 后跑，不会打印 token）。在 **`DepthRecur/wordmemo-sync-test`** 上跑完了完整链路：
+
+- A（临时库）建笔记 + 词条 → `connect()`（仓库私有、PAT 有效）→ 首次同步推 `meta.json` / `info` / `checkpoint`；
+- B（另一个临时库）连接、校验口令、拉 A 的 checkpoint → 数据齐全；
+- B 改标题、推当天 op 分片 → A 再同步拉到并应用 → 标题变成 B 改的版本。
+
+耗时约 41 秒（scrypt + 跨境网络；测试超时设为 180 秒）。仓库里落的是
+`meta.json`（明文，只有 salt/kdfVerifier）与 `devices/<id>/{checkpoint,info,ops}` 的 age 密文。
+这条测试只在手动跑，不进常规 CI。
+
+### S2 第五步：safeStorage、调度与界面（2026-11-23，待手动验收）
+
+**密钥存储**（`src/main/sync/secretStore.ts`）：PAT 与同步口令只写
+`<userData>/sync-secrets.bin`（整份 `safeStorage` 加密；不可用时与 AI Key 一样退化为 base64）。
+`settings.json` 的 `sync` 只有 `{ enabled, owner, repo, apiBase, intervalMin }`，**没有任何密钥**。
+
+**调度**（`src/main/sync/scheduler.ts`，7 项假定时器测试）：
+
+- 启动 60 秒后拉一次；写操作 debounce 30 秒；两次自动同步至少隔 60 秒；
+- 成功后按 `intervalMin`（0/5/10/30/60，0 = 只手动）；失败退避 1→5→15→60 分钟封顶；
+- 所有自动触发 ±20% 抖动；`dispose()` 停掉；手动「立即同步」不受限。
+
+**管理器**（`src/main/sync/manager.ts`）：
+
+- `connect`：校验 PAT/仓库/口令 → 保存密钥与设置 → 立即首次同步（首同步失败不回滚连接）；
+- 状态：`disconnected / idle / syncing / error`，带上次成功、待上传条数、设备 id/名称、错误码；
+- 退出前 `flushBeforeQuit(3000)` 尽力推一次（`before-quit` 只拦一次，防死循环）；
+- `onSyncOpWritten`：本地写入触发 `markDirty()`；合并写回的 remote op 不触发。
+
+**界面**（设置页新增「同步」一节，`src/renderer/src/components/SyncPanel.tsx`）：
+
+- 未连接：仓库（owner/repo）、PAT、同步密码（强度条 + 「帮我生成」）、自动同步间隔、「测试并首次同步」；
+- 已连接：仓库/状态/上次成功/待上传/设备、立即同步、导出加密快照、导入加密快照（合并）、断开连接；
+- 文案级别按 MESSAGES：未连接与「已取消」是提示；PAT 失效、口令错、文件损坏、格式不符、连接失败是错误；
+  「上次同步失败」用红色，不弹窗；密码页明确写「忘了这串密码，云上的数据谁也解不开」。
+
+**IPC / preload**：`sync:status|connect|disconnect|now|export|import`，事件 `sync:event`；
+导出/导入用系统文件对话框。
+
+**冒烟**：用临时 `WORDMEMO_DATA_DIR` 启动构建后的应用 → 托盘正常、`diagnostics.log` 无错误；
+CDP 打开「设置 → 同步」→ 表单渲染完整、控制台 0 错误（截图 `.data/shots/sync-panel.png`）。
+
+**测试**：`tests/sync-scheduler.test.ts`（7 项）、`tests/sync-secrets.test.ts`（3 项）；
+`npm test` **32 文件 / 270 项通过 + 2 份手动测试跳过**；`npm run build` 通过。
+
+**手动验收准备**：`DepthRecur/wordmemo-sync-test` 已清空（原有 e2e 数据用的是固定测试口令），
+你可以在设置页自选同步密码；两台设备用同一仓库、同一密码即可。
+
+### S3：冲突与设备管理（2026-11-24，`feat/sync`）
+
+并发规则在 S1/S2 的合并引擎里已经落地（字段级 LWW、数组并集、`learned_at` 取最早、
+tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**设备级**能力：
+
+| 能力 | 实现 |
+|---|---|
+| 设备列表 | `engine.listDevices()`：本机 + 远端 `devices/*`；名字从加密的 `info.json.age` 解出，解不开退回 `sync_devices` |
+| 移除设备 | `removeDevice(id)`：写 `meta.revokedDevices` → 删远端设备目录（checkpoint/info/ops）→ 清本地缓存与 `sync_devices` |
+| 被移除的设备 | 每次同步前重新读 `meta.json`；本机 id 在 `revokedDevices` 里 → `SyncSetupError('device_revoked')` |
+| 换密码 | `changePassphrase(new)`：新口令重写本机 checkpoint → 更新 meta（新 salt/kdfVerifier）→ 删其它设备目录（旧密文）→ 本机密钥换新 |
+| 压缩 | checkpoint 覆盖全部历史后，删掉本机所有 op 分片（`pruneOwnOps`） |
+| 远端目录被删后的自愈 | 每次推送前探测自己的 checkpoint 是否还在；不在就整份重推（`remoteExists`） |
+| 过期 sha | `putFileSafe`：PUT 冲突/404 时丢掉缓存 sha 重建一次 |
+| 仓库体积 | `getRepo()` 返回 `size`（KB），状态里带给界面 |
+| 同步日志 | 新表 `sync_runs`，每次同步记时间/耗时/上下行/结果码，保留最近 20 条 |
+
+**换密码的顺序**（重要）：先推用新口令加密的 checkpoint → 再改 `meta.json` → 最后删其它设备。
+这样即使中途失败，也不会出现「meta 已经是新密码、唯一的 checkpoint 却还是旧密码」的不可解状态。
+
+**测试**：`tests/sync-engine.test.ts` 增到 9 项（新增：设备列表、换密码后压缩与删对端、
+旧密码拒绝/新密码重新加入、移除设备后对端被拒）；`tests/github-client.test.ts` 覆盖 `size`。
+
+**验证**：`npm run typecheck` 0 错误；`npm test` **32 文件 / 274 项通过 + 2 份手动测试跳过**。
+
+### S4：文档与发布准备（2026-11-24，`feat/sync`）
+
+- README 新增「同步」章节：需要什么、**会泄露什么/不会泄露什么**（表）、忘记密码、
+  设备与换密码、`.wmsync` 快照、错误对照表、200 MB 体积提醒。
+- 设置页同步面板补齐：设备列表与移除、更换同步密码（危险操作二次确认）、最近同步日志、
+  仓库 >200 MB 的黄色提醒。
+- 版本 `0.5.1 → 0.6.0`；`release-notes/v0.6.0.md` 三行（数据迁移 / 不可逆 / 改了什么）。
+- 手动测试指南收敛成**一个文件**：[test-package/README.md](../test-package/README.md)
+  （原来拆成 README / TEST-SYNC / checklist / report-template 四份，翻起来麻烦，已合并删除）。
+- 自包含测试包 `test-package/`：单一说明、本机双实例/单实例启动器、一键自检脚本；
+  `build-package.ps1` 把说明与便携版 zip 组装成 `release/WordMemo-sync-test-package-0.6.0.zip`。
+
+### S4.1：本机验收自动化（2026-11-24）
+
+本机那半不靠人点：两套 e2e 直接打真仓库（`DepthRecur/wordmemo-sync-test`），跑完自动清空。
+
+- `tests/real-sync.test.ts` 扩到 10 项：首次上传与密文检查、双设备合并、字段级 LWW、
+  同名库合并（alias）、删除不复活、设备列表、换密码（旧密码拒绝/新密码重连）、
+  移除设备（被移除方被拒）、断网补推、重启（不重推 checkpoint）、加密快照导入幂等。
+- `.data/sync-local-e2e.mjs`（`.ps1` 取凭据）：起两个真实实例（各自 `WORDMEMO_DATA_DIR`），
+  用 CDP 点设置页真实表单——连接、双向推送、设备列表、点「移除」、换密码、重启后仍在。
+- 跑出并修掉 3 个真 bug：
+  1. **同名库合并崩溃**：`applyDeckOp` 直接 INSERT，撞 `decks.name` 唯一索引。
+     现在和 `mergeDecks` 一样先按名字找本机同名库、记 alias 再合并。
+  2. **空同步重传**：`push` 只要「今天有 op」就重写当天分片（新 nonce → 新 commit），
+     `pushedOps` 也报成当天总条数。现在没有待推数据直接返回，计数用待推条数。
+  3. **跨天漏推**：只推当天 op，断网跨过午夜后前一天的 op 永远推不上去。
+     现在把待推（含跨天）和当天分片合并写。
+- 顺带把 `info.json.age` 改成「有东西推上去/还没有 info」时才写，避免每次空同步一个 commit。
+- 远端偶尔返回「不是 WordMemo 的同步文件」的内容（中转缓存/连接被重置时见过）：`readRemoteEnvelope` 绕过本地 ETag 重拿一次，两次都不对才失败；这轮 GUI e2e 里由此避免了两次误报。
+- **同步后界面不刷新**（用户 VM 验收时发现）：数据已经进库，但库列表/笔记列表要重启才看得到，看起来像「应用了 1 条却没动静」。`SyncStatus` 增加 `lastSyncChanges`，渲染进程在「新的成功时间 + 有改动」时重读库/统计并 bump `libraryVersion`（`App.tsx`）。用 `.data/deck-refresh-e2e.mjs` 验证：A 停在笔记库不动，另一台建库+建笔记，A 同步一次后页面直接出现（6 项）。
+- **没连接的设备不能导入快照**：导入/导出按钮原来只在已连接时渲染，等于「换机搬数据」走不通。现在按钮常显，未连接时先问一次同步密码（`sync.export/import` 支持可选 `passphrase`，`manager` 在无密钥时用它）。用 `.data/snapshot-ui-e2e.mjs` 走真界面 + 原生对话框验证（8 项：导出密文、无明文、未连接先问密码、导入出现、重复导入不重复）。
+
+**验收完成（2026-11-24）**：用户 VM 手动验收 6/6 通过（双向同步、建库、设备列表、重启），
+本机自动化 e2e 全部通过，进入发版。
+
+**发布前剩下的**：`npm run dist` 冒烟 → 合回 `master` → tag `v0.6.0` → CI 发布；同步代码不再改动。
+
+
+
+
+

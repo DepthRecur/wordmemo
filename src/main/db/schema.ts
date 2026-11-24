@@ -1,5 +1,5 @@
 /** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 4
 
 /**
  * 「多个库」是从这个版本开始的结构版本。
@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS sources (
 
 CREATE TABLE IF NOT EXISTS notes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 同步用的稳定 id（PLAN-SYNC §3.2）。唯一索引由 migrateUids 建：老库还没补上
+  -- 这一列时，SCHEMA 里的 CREATE UNIQUE INDEX 会直接报错（和 ix_notes_deck 同一个坑）
+  uid TEXT,
   source_id INTEGER REFERENCES sources(id) ON DELETE SET NULL,
   -- 不写 REFERENCES：老库只能用 ALTER ADD COLUMN 带 DEFAULT 补列，
   -- 而 SQLite 不允许「REFERENCES + 非 NULL DEFAULT」，为了新老库结构一致就不加外键
@@ -52,6 +55,7 @@ CREATE INDEX IF NOT EXISTS ix_notes_created ON notes(created_at);
 
 CREATE TABLE IF NOT EXISTS items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   kind TEXT NOT NULL DEFAULT 'word',
   headword TEXT NOT NULL,
   headword_norm TEXT NOT NULL,
@@ -99,6 +103,7 @@ CREATE INDEX IF NOT EXISTS ix_cards_item ON cards(item_id);
 
 CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   card_id INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
   reviewed_at TEXT NOT NULL,
   rating INTEGER NOT NULL,
@@ -114,6 +119,7 @@ CREATE INDEX IF NOT EXISTS ix_reviews_time ON reviews(reviewed_at);
 
 CREATE TABLE IF NOT EXISTS exams (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
+  uid TEXT,
   title TEXT NOT NULL,
   exam_date TEXT NOT NULL,
   scope TEXT NOT NULL DEFAULT '{}',
@@ -122,6 +128,85 @@ CREATE TABLE IF NOT EXISTS exams (
   daily_minutes INTEGER NOT NULL DEFAULT 20,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL
+);
+
+-- 本地变更队列（PLAN-SYNC §3.4）：每个写入口在**自己那条事务里**追加一行，
+-- 推送端只认这里。新表用 CREATE TABLE IF NOT EXISTS 就够，老库打开时自动补上，
+-- 不需要为它单独提 user_version。
+CREATE TABLE IF NOT EXISTS sync_ops (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 稳定 id：note/item/review/exam 用各自 uid；cardFlag 用「item uid:direction」
+  uid TEXT NOT NULL,
+  entity TEXT NOT NULL,
+  op TEXT NOT NULL,
+  -- JSON：只放变更字段，键用数据库列名，跨设备引用一律换成 uid
+  fields TEXT NOT NULL DEFAULT '{}',
+  -- local = 本机产生（要推送）；remote:<device> = 合并来的（不推回，防回声）
+  origin TEXT NOT NULL DEFAULT 'local',
+  -- epoch ms；跨设备排序/冲突判定只用它，不用本地的 localIso 字符串
+  ts_utc INTEGER NOT NULL,
+  pushed INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS ix_sync_ops_pending ON sync_ops(origin, pushed, seq);
+
+-- 删除的影子表（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要有 ts 可比，
+-- 顺带给 S3 的「最近 30 天删除可恢复」留底。一次删除一行，同 uid 保留最新的 ts。
+CREATE TABLE IF NOT EXISTS sync_tombstones (
+  entity TEXT NOT NULL,
+  uid TEXT NOT NULL,
+  ts_utc INTEGER NOT NULL,
+  PRIMARY KEY (entity, uid)
+);
+
+-- 同一条数据在两台设备上可能 uid 不同（同名库、同词不同 uid）：记住「远端 uid → 本机 uid」。
+-- 没有它，另一台设备的笔记/复习会指向本机不存在的 uid（PLAN-SYNC §3.2 的映射表）。
+CREATE TABLE IF NOT EXISTS sync_aliases (
+  entity TEXT NOT NULL,
+  remote_uid TEXT NOT NULL,
+  local_uid TEXT NOT NULL,
+  PRIMARY KEY (entity, remote_uid)
+);
+
+-- 本机的同步状态（单行）：设备 id 只在本机，不上传（§3.9 的 settings 白名单排除它）
+CREATE TABLE IF NOT EXISTS sync_state (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  format_version INTEGER NOT NULL DEFAULT 1,
+  device_id TEXT NOT NULL,
+  device_name TEXT,
+  last_push_at TEXT,
+  last_pull_at TEXT
+);
+
+-- 远端文件的本地缓存（S2）：路径 → sha/etag。PUT 更新要 sha，GET 条件请求要 etag，
+-- 都不该每次重新拉一遍文件。
+CREATE TABLE IF NOT EXISTS sync_files (
+  path TEXT PRIMARY KEY,
+  sha TEXT,
+  etag TEXT,
+  updated_at TEXT NOT NULL
+);
+
+-- 见过的其它设备（S2 只用于状态展示；S3 的游标/移除设备也挂在这张表上）
+CREATE TABLE IF NOT EXISTS sync_devices (
+  device_id TEXT PRIMARY KEY,
+  name TEXT,
+  last_seen_at TEXT,
+  last_checkpoint_at TEXT
+);
+
+-- 同步日志（S3/S4）：最近 20 次，设置页展示；不记录任何内容明文
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  at TEXT NOT NULL,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  pushed_ops INTEGER NOT NULL DEFAULT 0,
+  pushed_checkpoint INTEGER NOT NULL DEFAULT 0,
+  peers INTEGER NOT NULL DEFAULT 0,
+  pulled_checkpoints INTEGER NOT NULL DEFAULT 0,
+  pulled_ops_files INTEGER NOT NULL DEFAULT 0,
+  applied_ops INTEGER NOT NULL DEFAULT 0,
+  ok INTEGER NOT NULL DEFAULT 0,
+  error_code TEXT
 );
 
 CREATE TABLE IF NOT EXISTS pronunciations (

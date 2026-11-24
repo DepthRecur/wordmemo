@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiBudgetNotice,
   DeckInput,
@@ -12,6 +12,7 @@ import type {
   ReviewSession,
   SettingsPatch,
   SubmitReview,
+  SyncStatus,
   UpdateStatus,
   WordmemoApi
 } from '@shared/types'
@@ -121,6 +122,19 @@ const api: WordmemoApi = {
     skipVersion: (version?: string) => ipcRenderer.invoke('updates:skipVersion', version),
     setAutoCheck: (enabled: boolean) => ipcRenderer.invoke('updates:setAutoCheck', enabled)
   },
+  sync: {
+    status: () => ipcRenderer.invoke('sync:status'),
+    connect: (input) => ipcRenderer.invoke('sync:connect', input),
+    disconnect: () => ipcRenderer.invoke('sync:disconnect'),
+    now: () => ipcRenderer.invoke('sync:now'),
+    export: (passphrase?: string) => ipcRenderer.invoke('sync:export', passphrase),
+    import: (passphrase?: string) => ipcRenderer.invoke('sync:import', passphrase),
+    devices: () => ipcRenderer.invoke('sync:devices'),
+    removeDevice: (deviceId: string) => ipcRenderer.invoke('sync:removeDevice', deviceId),
+    changePassphrase: (passphrase: string) =>
+      ipcRenderer.invoke('sync:changePassphrase', passphrase),
+    log: () => ipcRenderer.invoke('sync:log')
+  },
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),
     backup: () => ipcRenderer.invoke('system:backup'),
@@ -150,8 +164,14 @@ const api: WordmemoApi = {
       const listener = (_e: unknown, status: UpdateStatus) => cb(status)
       ipcRenderer.on('updates:event', listener)
       return () => ipcRenderer.removeListener('updates:event', listener)
+    },
+    onSyncStatus: (cb: (status: SyncStatus) => void) => {
+      const listener = (_e: unknown, status: SyncStatus) => cb(status)
+      ipcRenderer.on('sync:event', listener)
+      return () => ipcRenderer.removeListener('sync:event', listener)
     }
   }
 }
 
 contextBridge.exposeInMainWorld('api', api)
+

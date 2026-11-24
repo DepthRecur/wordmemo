@@ -1,4 +1,4 @@
-export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
+﻿export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
 export type CardDirection = 'en2zh' | 'zh2en' | 'listen2en'
 export type JudgeSource = 'exact' | 'variant' | 'local' | 'ai' | 'manual' | 'giveup'
 export type ReviewMode = 'longterm' | 'exam' | 'learn'
@@ -425,6 +425,91 @@ export interface AiBudgetNotice {
   month: string
 }
 
+/** 同步配置（不含任何密钥：PAT/口令在加密的 secrets 文件里） */
+export interface SyncSettings {
+  /** false = 用户没连过（或已断开）；true 才有 owner/repo 的意义 */
+  enabled: boolean
+  owner: string
+  repo: string
+  /** 自建/代理用；默认 https://api.github.com */
+  apiBase: string
+  /** 定时同步间隔（分钟）；0 = 只手动 */
+  intervalMin: number
+}
+
+export type SyncUiState = 'disconnected' | 'idle' | 'syncing' | 'error'
+
+/** 设置页同步面板的一份完整状态（不含 token/口令） */
+export interface SyncStatus {
+  configured: boolean
+  enabled: boolean
+  state: SyncUiState
+  owner: string
+  repo: string
+  apiBase: string
+  intervalMin: number
+  deviceId: string
+  deviceName: string | null
+  lastSuccessAt: string | null
+  /** 上一次成功同步实际应用/合并的改动条数（>0 时界面要把库/笔记/统计重新读一遍） */
+  lastSyncChanges: number
+  lastErrorCode: string | null
+  lastErrorMessage: string | null
+  pendingOps: number
+  lastPushAt: string | null
+  lastPullAt: string | null
+  rateLimitRemaining: number | null
+  /** 远端仓库体积（KB；GitHub 的 size 字段），超过 200 MB 时界面提醒 */
+  repoSizeKb: number | null
+}
+
+/** 设备列表的一项（本机 + 远端见过的设备） */
+export interface SyncDeviceInfo {
+  id: string
+  name: string | null
+  lastSeenAt: string | null
+  isCurrent: boolean
+  /** 已被移除：不再拉取，它自己下次同步会被拒绝 */
+  revoked: boolean
+}
+
+/** 同步日志一项（不含任何内容明文） */
+export interface SyncLogEntry {
+  at: string
+  durationMs: number
+  pushedOps: number
+  pushedCheckpoint: boolean
+  peers: number
+  pulledCheckpoints: number
+  pulledOpsFiles: number
+  appliedOps: number
+  ok: boolean
+  errorCode: string | null
+}
+
+export interface SyncConnectInput {
+  owner: string
+  repo: string
+  pat: string
+  passphrase: string
+  apiBase?: string
+  intervalMin?: number
+}
+
+export interface SyncActionResult {
+  ok: boolean
+  status: SyncStatus
+  errorCode?: string
+  message?: string
+}
+
+export interface SyncImportResult extends SyncActionResult {
+  applied?: number
+  notes?: number
+  items?: number
+  reviews?: number
+}
+
 export interface Settings {
   /** 派生：默认角色那家是否已有 Key（不落盘） */
   apiKeySet: boolean
@@ -455,6 +540,8 @@ export interface Settings {
   currentDeckId: number
   /** 自更新（U2）：自动检查开关、跳过版本、节流记账 */
   updates: UpdateSettings
+  /** 同步（S2）：仓库与节奏；PAT/口令不在这里 */
+  sync: SyncSettings
 }
 
 export interface SettingsPatch extends Partial<Omit<Settings, 'apiKeySet' | 'modelSet' | 'aiReady'>> {}
@@ -774,6 +861,26 @@ export interface WordmemoApi {
     /** 自动检查开关；关掉后本次运行不再自动检查 */
     setAutoCheck(enabled: boolean): Promise<UpdateStatus>
   }
+  sync: {
+    status(): Promise<SyncStatus>
+    /** 校验 PAT/仓库/口令并保存连接（成功后立即首次同步） */
+    connect(input: SyncConnectInput): Promise<SyncActionResult>
+    disconnect(): Promise<SyncStatus>
+    /** 立即同步（手动永远可用） */
+    now(): Promise<SyncActionResult>
+    /** 导出加密快照到用户选的位置；取消返回 path=null */
+    export(passphrase?: string): Promise<SyncActionResult & { path: string | null }>
+    /** 导入加密快照（合并，不覆盖） */
+    import(passphrase?: string): Promise<SyncImportResult>
+    /** 设备列表（本机 + 远端见过的设备） */
+    devices(): Promise<SyncDeviceInfo[]>
+    /** 移除其它设备：远端目录删掉，并把它列进 meta.revokedDevices */
+    removeDevice(deviceId: string): Promise<SyncActionResult>
+    /** 更换同步密码：本机重新加密并重推，其它设备需要用新密码重新连接 */
+    changePassphrase(passphrase: string): Promise<SyncActionResult>
+    /** 最近 20 次同步记录 */
+    log(): Promise<SyncLogEntry[]>
+  }
   system: {
     openDataDir(): Promise<void>
     backup(): Promise<string>
@@ -792,6 +899,8 @@ export interface WordmemoApi {
     onBudgetExhausted(cb: (info: AiBudgetNotice) => void): () => void
     /** 更新状态每次变化推一份完整快照（检查/下载进度/就绪/失败） */
     onUpdateStatus(cb: (status: UpdateStatus) => void): () => void
+    /** 同步状态每次变化推一份完整快照（不含 token/口令） */
+    onSyncStatus(cb: (status: SyncStatus) => void): () => void
   }
 }
 
@@ -829,6 +938,13 @@ export const DEFAULT_SETTINGS: Settings = {
     lastCheckAt: null,
     failStreak: 0,
     pendingVersion: null
+  },
+  sync: {
+    enabled: false,
+    owner: '',
+    repo: '',
+    apiBase: 'https://api.github.com',
+    intervalMin: 10
   }
 }
 
@@ -844,3 +960,4 @@ export const KIND_LABEL: Record<ItemKind, string> = {
   sentence: '句子',
   grammar: '语法'
 }
+

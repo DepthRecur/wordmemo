@@ -9,6 +9,7 @@ let db: SqliteDatabase | null = null
 
 export function openDb(file: string): SqliteDatabase {
   db = new DatabaseSync(file, { timeout: 8000 })
+  txDepth = 0
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec('PRAGMA synchronous = NORMAL')
@@ -75,6 +76,7 @@ function migrate(database: SqliteDatabase): void {
   database.exec('BEGIN IMMEDIATE')
   try {
     migrateDecks(database, fromVersion < DECKS_SCHEMA_VERSION)
+    migrateUids(database)
     database.exec('COMMIT')
   } catch (err) {
     try {
@@ -85,6 +87,71 @@ function migrate(database: SqliteDatabase): void {
     throw err
   }
   database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+}
+
+/** 同步要用的表：表名 + 回填 uid 时取时间前缀的列（PLAN-SYNC §3.2） */
+const UID_TABLES: { table: string; timeColumn: string }[] = [
+  { table: 'notes', timeColumn: 'created_at' },
+  { table: 'items', timeColumn: 'created_at' },
+  { table: 'reviews', timeColumn: 'reviewed_at' },
+  { table: 'exams', timeColumn: 'created_at' },
+  // decks.uid 从多库那一版就有，但一直没建唯一索引；库现在也进同步了（S1），
+  // 顺手补上回填与索引，避免两台设备出现同一个 deck uid
+  { table: 'decks', timeColumn: 'created_at' }
+]
+
+/**
+ * 稳定 id（PLAN-SYNC §3.2）：同步用表各加 `uid`、回填老行、建唯一索引。
+ *
+ * 唯一索引不能放进 SCHEMA：老库还没有这一列时 `CREATE UNIQUE INDEX ... (uid)` 会
+ * 直接报 "no such column"（和 ix_notes_deck 是同一个坑）。
+ *
+ * 回填必须做，不能只加列：SQLite 的唯一索引允许多个 NULL，老行全是 NULL 就等于没有 uid。
+ */
+function migrateUids(database: SqliteDatabase): void {
+  for (const { table, timeColumn } of UID_TABLES) {
+    addColumnIfMissing(database, table, 'uid', 'TEXT')
+    fillMissingUids(database, table, timeColumn)
+    repairDuplicateUids(database, table, timeColumn)
+    database.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ux_${table}_uid ON ${table}(uid)`)
+  }
+}
+
+/** 拔掉 NULL / 空串的 uid；时间前缀取行自己的创建时间，让 uid 仍然「时间有序」 */
+function fillMissingUids(database: SqliteDatabase, table: string, timeColumn: string): void {
+  const rows = database
+    .prepare(`SELECT id, ${timeColumn} AS at FROM ${table} WHERE uid IS NULL OR uid = ''`)
+    .all() as unknown as { id: number; at: string | null }[]
+  if (!rows.length) return
+  const update = database.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`)
+  for (const row of rows) {
+    update.run(uidForTime(row.at), toInt(row.id))
+  }
+}
+
+/**
+ * 极端情况兜底：库里已有重复 uid（手工改过库、或早期的实验版本写过）。
+ * 保留 id 最小的那行，其余重新生成——否则建唯一索引会失败，整个应用起不来。
+ */
+function repairDuplicateUids(database: SqliteDatabase, table: string, timeColumn: string): void {
+  const dupes = database
+    .prepare(
+      `SELECT uid FROM ${table} WHERE uid IS NOT NULL AND uid <> ''
+       GROUP BY uid HAVING COUNT(*) > 1`
+    )
+    .all() as unknown as { uid: string }[]
+  for (const dupe of dupes) {
+    const rows = database
+      .prepare(`SELECT id, ${timeColumn} AS at FROM ${table} WHERE uid = ? ORDER BY id ASC`)
+      .all(dupe.uid) as unknown as { id: number; at: string | null }[]
+    const update = database.prepare(`UPDATE ${table} SET uid = ? WHERE id = ?`)
+    for (const row of rows.slice(1)) update.run(uidForTime(row.at), toInt(row.id))
+  }
+}
+
+function uidForTime(at: string | null): string {
+  const time = at ? Date.parse(at) : NaN
+  return newUid(Number.isFinite(time) ? time : undefined)
 }
 
 /**
@@ -237,11 +304,25 @@ export function closeDb(): void {
     /* ignore */
   }
   db = null
+  txDepth = 0
 }
+
+/**
+ * 事务。**可重入**：已经在事务里时直接搭外层那条事务。
+ *
+ * 同步层要求「写操作和它那条 sync_ops 同一条事务」，而写入口会互相调用
+ * （`applyReview` → `addAcceptedZh`、`copyNotes` → 每条笔记的 withSync、
+ * 导入入库 → `createNote` + `upsertItem`）。如果这里一见 BEGIN 就开，
+ * 嵌套调用会直接报 "cannot start a transaction within a transaction"，
+ * 所以内层只身参与外层事务：内层失败由最外层统一 ROLLBACK。
+ */
+let txDepth = 0
 
 export function tx<T>(fn: () => T): T {
   const d = getDb()
+  if (txDepth > 0) return fn()
   d.exec('BEGIN IMMEDIATE')
+  txDepth++
   try {
     const result = fn()
     d.exec('COMMIT')
@@ -253,6 +334,8 @@ export function tx<T>(fn: () => T): T {
       /* ignore */
     }
     throw err
+  } finally {
+    txDepth--
   }
 }
 
