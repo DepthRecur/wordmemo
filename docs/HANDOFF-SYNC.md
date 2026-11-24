@@ -9,20 +9,18 @@
 
 ## 0. 一句话现状
 
-**同步 0.6.0 的代码和验收都已完成，只差发版。** S0–S4 全部实现，自动化 e2e（引擎层 / 双实例界面 /
-快照 / 界面刷新）全过，你的 VM 手动验收（真便携版 + 真 PAT + 真仓库，6 个检查）也全过。
-接下来是：合 `master` → 跑一遍检查 → tag `v0.6.0` → push tag 让 CI 发布 → 核对 Release。
+**v0.6.0 已发布（2026-11-24）。** 同步 S0–S4 全部实现并合入 `master`（`ad3a400`），tag `v0.6.0`
+由 GitHub Actions 发出，Release 三件套齐全。同步代码已冻结；后续改动按新版本走，格式变更规则见
+[PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
 
-- 分支 `feat/sync`；`master` 目前还是 0.5.1，**没有**同步代码
+- 发布记录（过程、产物、sha、核对结果）在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 的「发布 v0.6.0」
 - `npm run typecheck` → 0 错误；`npm test` → **32 文件 / 274 项通过 + 2 份手动测试跳过**；`build` / `dist` 通过
 - 验收期间一共修了 **5 个真 bug**（清单在 §3）
 - 测试仓库 `DepthRecur/wordmemo-sync-test` 现在是「本机 A + 你的 VM」两台设备的正常状态，
   密码 `wordmemo-vm-test-parrot`；不用再清
 
-**下一步**：§3 的「发布 0.6.0」照着做即可。
-
-**新会话三步**：① `git log -1` 确认在 `feat/sync`、工作区干净 → ② 按 §3 跑检查、合 `master` →
-③ `git tag v0.6.0` + push tag + 核对 Release 三件套。中间不需要再动同步代码。
+**发版步骤已完成**（§3 保留作复现手册）：合 `master` → 跑检查 → tag `v0.6.0` → push tag → 核对 Release。
+下一个版本发版时照 §3 做即可。
 
 **当前环境（接手时看一眼）**
 
@@ -145,7 +143,7 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 如果 `.data` 被清了，`tests/real-sync.test.ts` 仍在仓库里，可以自己设
 `WORDMEMO_SYNC_E2E_TOKEN` + `WORDMEMO_SYNC_E2E_REPO` 跑引擎层那套。
 
-### 发布 0.6.0（新会话从这里开始）
+### 发布 0.6.0（已于 2026-11-24 完成；下面保留作复现手册）
 
 0. 前置：工作区干净、在 `feat/sync`、`git log -1` 是 `e2303a2` 或之后；本地有 GitHub 凭据
    （`git push` 走 https 会用到；网络不稳时用 `.data\push-retry.ps1 -Ref feat/sync`）。

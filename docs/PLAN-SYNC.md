@@ -5,6 +5,7 @@
 > 相关：[总览](PLAN-NEXT.md) · [复用调研](RESEARCH-REUSE.md)
 > **2026-11-18 定稿**：同步范围永久限定为结构化数据（不做图片/文件）；`.wmsync` 快照导出/导入从"退路"升级为正式功能。
 > 调研结论已并入本文：**Obsidian Git 不是同类**（文件级 git 合并，见 §3.0）；加密改用 age（BSD-3）而不是自己设计信封；CRDT 路线已评估并否掉（§3.5）。
+> **状态：已发布 v0.6.0（2026-11-24）**。S0–S4 全部完成，`feat/sync` 已合入 `master`，tag `v0.6.0` 由 CI 发布（三件套：zip / `.sha256` / `latest.json`）。同步代码冻结；格式变更规则见 §4（`formatVersion`）。
 
 ---
 
@@ -805,7 +806,25 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 **验收完成（2026-11-24）**：用户 VM 手动验收 6/6 通过（双向同步、建库、设备列表、重启），
 本机自动化 e2e 全部通过，进入发版。
 
-**发布前剩下的**：`npm run dist` 冒烟 → 合回 `master` → tag `v0.6.0` → CI 发布；同步代码不再改动。
+### 发布 v0.6.0（2026-11-24）
+
+已发布。记录这次发版的实际过程与结果：
+
+- **发版前检查**：`typecheck` 0 错误；`npm test` 274 项通过（30 个文件通过，另 2 份手动测试跳过：真实库迁移、真仓库同步）；
+  `build` / `dist` 通过，`release/WordMemo-0.6.0-portable.zip` 142.7 MB。
+- **便携版冒烟**：解压真 zip、启动 `app\WordMemo.exe`，用 CDP 点开「设置 → 同步」——面板完整渲染
+  （导出/导入加密快照、未连接三步表单、「测试并首次同步」），无控制台错误；版本号 `v0.6.0`。
+  这次 APPDATA 重定向没生效，所以动的是真实数据目录（v2→v4 迁移）：已按事前备份逐字节恢复
+  （`wordmemo.db` sha256 与迁移前一致、`user_version` 回到 2、`settings.json` 相同）。
+- **合并**：`git merge --no-ff feat/sync` 无冲突（56 文件 / +10327 / −216）；merge 后 `npm test` 仍 274 项通过；
+  `package.json` / `package-lock.json` 的 `version` 与 `packages[""]` 三处都是 `0.6.0`。
+- **tag**：`v0.6.0`（annotated）→ `ad3a400`；`git push origin master` 在第 5 次尝试才通过
+  （这台机器到 `github.com:443` 时通时断，用 `.data/push-retry.ps1`），tag 一次推成功。
+- **CI**：run `45388841392` 成功。Release `v0.6.0` 三件套齐全：`latest.json` 611 B、
+  `WordMemo-0.6.0-portable.zip` 149674909 B、`.sha256` 94 B；声明 sha256 `584de04c…`。
+- **核对**：`latest.json` 的 `version` / `zip` / `sha256` 与 `.sha256` 一致（CI 另外断言了 zip 实际字节的 sha）；
+  `notes` 171 字符（来自 `release-notes/v0.6.0.md` 三行，只提结构化数据同步，与 README「会泄露/不会泄露」表不冲突）。
+  另按 `updater.parseLatestInfo` 的规则校验线上 `latest.json` 全部通过，0.5.1 的用户会看到更新、0.6.0 不会重复提示。
 
 
 
