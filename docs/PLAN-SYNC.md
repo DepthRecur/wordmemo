@@ -1,4 +1,4 @@
-# 计划 B：云端同步（GitHub 私有仓库当网盘）
+﻿# 计划 B：云端同步（GitHub 私有仓库当网盘）
 
 > 目标版本：v0.5　预计 8~12 个工作日　风险：高（唯一会改数据模型的功能）
 > 前置：多供应商 + 多个库 + 自动更新已完成（同步的修复必须能靠自动更新发出去）
@@ -776,10 +776,32 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 - 设置页同步面板补齐：设备列表与移除、更换同步密码（危险操作二次确认）、最近同步日志、
   仓库 >200 MB 的黄色提醒。
 - 版本 `0.5.1 → 0.6.0`；`release-notes/v0.6.0.md` 三行（数据迁移 / 不可逆 / 改了什么）。
-- 手动测试指南更新到 S2+S3：[TEST-SYNC.md](TEST-SYNC.md)。
-- 自包含测试包 `test-package/`：说明、可勾选清单、问题报告模板、本机双实例脚本、一键自检脚本；
+- 手动测试指南收敛成**一个文件**：[test-package/README.md](../test-package/README.md)
+  （原来拆成 README / TEST-SYNC / checklist / report-template 四份，翻起来麻烦，已合并删除）。
+- 自包含测试包 `test-package/`：单一说明、本机双实例/单实例启动器、一键自检脚本；
   `build-package.ps1` 把说明与便携版 zip 组装成 `release/WordMemo-sync-test-package-0.6.0.zip`。
 
-**发布前剩下的**：用户手动验收（两台设备、VM、PAT 撤销、断网恢复）→ 修 bug →
+### S4.1：本机验收自动化（2026-11-24）
+
+本机那半不靠人点：两套 e2e 直接打真仓库（`DepthRecur/wordmemo-sync-test`），跑完自动清空。
+
+- `tests/real-sync.test.ts` 扩到 10 项：首次上传与密文检查、双设备合并、字段级 LWW、
+  同名库合并（alias）、删除不复活、设备列表、换密码（旧密码拒绝/新密码重连）、
+  移除设备（被移除方被拒）、断网补推、重启（不重推 checkpoint）、加密快照导入幂等。
+- `.data/sync-local-e2e.mjs`（`.ps1` 取凭据）：起两个真实实例（各自 `WORDMEMO_DATA_DIR`），
+  用 CDP 点设置页真实表单——连接、双向推送、设备列表、点「移除」、换密码、重启后仍在。
+- 跑出并修掉 3 个真 bug：
+  1. **同名库合并崩溃**：`applyDeckOp` 直接 INSERT，撞 `decks.name` 唯一索引。
+     现在和 `mergeDecks` 一样先按名字找本机同名库、记 alias 再合并。
+  2. **空同步重传**：`push` 只要「今天有 op」就重写当天分片（新 nonce → 新 commit），
+     `pushedOps` 也报成当天总条数。现在没有待推数据直接返回，计数用待推条数。
+  3. **跨天漏推**：只推当天 op，断网跨过午夜后前一天的 op 永远推不上去。
+     现在把待推（含跨天）和当天分片合并写。
+- 顺带把 `info.json.age` 改成「有东西推上去/还没有 info」时才写，避免每次空同步一个 commit。
+- 远端偶尔返回「不是 WordMemo 的同步文件」的内容（中转缓存/连接被重置时见过）：`readRemoteEnvelope` 绕过本地 ETag 重拿一次，两次都不对才失败；这轮 GUI e2e 里由此避免了两次误报。
+
+**发布前剩下的**：VM 那半的人工验收（干净机器装便携版、双向同步一次）→ 修 bug →
 `npm run dist` 冒烟 → 合回 `master` → tag → CI 发布。代码部分到此为止。
+
+
 

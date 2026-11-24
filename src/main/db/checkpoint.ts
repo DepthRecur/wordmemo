@@ -1558,8 +1558,19 @@ export function applyRemoteOp(op: RemoteSyncOp, origin: string): boolean {
 }
 
 function applyDeckOp(uidValue: string, f: Record<string, unknown>, ts: number, origin: string): boolean {
-  const resolved = resolveAlias('deck', uidValue)
-  const row = findLocalRow('deck', uidValue)
+  let resolved = resolveAlias('deck', uidValue)
+  let row = findLocalRow('deck', uidValue)
+  // 两台设备各自建了同名库：decks.name 有唯一索引，不能直接 INSERT。
+  // 和 mergeDecks 一样合并到本机这条，记住远端 uid → 本机 uid，笔记的 deck_uid 才解析得到。
+  if (!row && typeof f.name === 'string' && f.name) {
+    row = getDb()
+      .prepare('SELECT * FROM decks WHERE name = ? COLLATE NOCASE')
+      .get(f.name) as Record<string, unknown> | undefined
+    if (row) {
+      rememberAlias('deck', uidValue, String(row.uid ?? ''))
+      if (row.uid) resolved = String(row.uid)
+    }
+  }
   if (!row) {
     if (typeof f.name !== 'string' || !f.name) return false
     getDb()

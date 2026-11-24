@@ -1,4 +1,4 @@
-import {
+﻿import {
   applyRemoteOps,
   exportCheckpoint,
   mergeCheckpoint,
@@ -332,9 +332,19 @@ export class SyncEngine {
       finishedAt: startedAt
     }
 
-    await this.pushInfo()
+    const hasPending = pendingSyncOps(1).length > 0
     await this.push(state.deviceId, result)
     await this.pull(state.deviceId, result)
+
+    // 设备信息只在「真的有东西推上去」或还没有 info 时更新：否则每次空同步都会多一个 commit
+    const infoPath = `devices/${state.deviceId}/info.json.age`
+    if (hasPending || result.pushedCheckpoint || !cacheGet(infoPath)?.sha) {
+      try {
+        await this.pushInfo()
+      } catch {
+        /* 设备信息推不上去不影响同步结果，设备列表有本地表兜底 */
+      }
+    }
 
     result.finishedAt = localIso()
     updateSyncState({ lastPushAt: result.finishedAt, lastPullAt: result.finishedAt })
@@ -360,21 +370,37 @@ export class SyncEngine {
       await this.pushCheckpoint(deviceId, checkpointPath)
       getDb().prepare("UPDATE sync_ops SET pushed = 1 WHERE origin = 'local'").run()
       result.pushedCheckpoint = true
-      result.pushedOps = rows.length
+      result.pushedOps = pending.length
       // 压缩（S3）：checkpoint 已经覆盖全部历史，本机旧的 op 分片可以删掉
       await this.pruneOwnOps(deviceId)
       return
     }
 
-    if (!rows.length) return
+    // 没有待推的就不写：否则每次同步都会用新 nonce 重传一遍当天分片（白多一个 commit）
+    if (!pending.length) return
+
+    // 今天的分片 + 还没推上去的（断网跨天时，前一天的 op 也要一起带上）
+    const seen = new Set<number>()
+    const sendRows: { seq: number; op: RemoteSyncOp }[] = []
+    for (const row of [...rows, ...pending]) {
+      if (seen.has(row.seq)) continue
+      seen.add(row.seq)
+      sendRows.push({
+        seq: row.seq,
+        op: {
+          entity: row.entity as RemoteSyncOp['entity'],
+          uid: row.uid,
+          op: row.op as RemoteSyncOp['op'],
+          fields:
+            typeof row.fields === 'string'
+              ? (JSON.parse(row.fields || '{}') as Record<string, unknown>)
+              : row.fields,
+          tsUtc: toInt('ts_utc' in row ? row.ts_utc : row.tsUtc)
+        }
+      })
+    }
     const path = `devices/${deviceId}/ops/${dayRange().day}.jsonl.age`
-    const ops: RemoteSyncOp[] = rows.map((row) => ({
-      entity: row.entity as RemoteSyncOp['entity'],
-      uid: row.uid,
-      op: row.op as RemoteSyncOp['op'],
-      fields: JSON.parse(row.fields || '{}') as Record<string, unknown>,
-      tsUtc: toInt(row.ts_utc)
-    }))
+    const ops: RemoteSyncOp[] = sendRows.map((row) => row.op)
     const file = await encryptEnvelope(
       {
         formatVersion: SYNC_FORMAT_VERSION,
@@ -388,9 +414,9 @@ export class SyncEngine {
       this.workFactor
     )
     await this.putFileSafe(path, file, `sync: ${deviceId.slice(0, 6)} ops`)
-    const maxSeq = Math.max(...rows.map((row) => row.seq))
+    const maxSeq = Math.max(...sendRows.map((row) => row.seq))
     getDb().prepare("UPDATE sync_ops SET pushed = 1 WHERE origin = 'local' AND seq <= ?").run(maxSeq)
-    result.pushedOps = rows.length
+    result.pushedOps = pending.length
   }
 
   /** 远端某个文件是否还在（304 也算在；拿不到 etag 时会读一次内容） */
@@ -446,25 +472,54 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * 拉一个加密文件并解密。
+   *
+   * 远端偶尔会返回「不是我们的文件」的内容（中转缓存/连接被重置时见过），这类响应不是
+   * 落盘的损坏，直接让整个同步失败太亏：绕过本地 ETag 重拿一次，两次都不对才报错。
+   */
+  private async readRemoteEnvelope<T>(
+    path: string,
+    etag: string | null,
+    kind: 'ops' | 'checkpoint'
+  ): Promise<{ payload: T; sha: string | null; etag: string | null } | null> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const remote = await this.client.getFile(path, attempt === 0 ? etag : null)
+      if (remote.status === 304 || !remote.content) return null
+      try {
+        const envelope = await decryptEnvelope<T>(remote.content, this.settings.passphrase, {
+          kind,
+          path
+        })
+        return { payload: envelope.payload, sha: remote.sha, etag: remote.etag }
+      } catch (error) {
+        const notOurs =
+          error instanceof Error && error.message === '这不是 WordMemo 的同步文件'
+        if (!notOurs) throw error
+        if (attempt === 1) {
+          throw new SyncApiError('unknown', 0, '远端同步文件不完整，稍后会再试一次')
+        }
+        console.warn(`[sync] 远端文件内容不是同步文件，重拿一次：${path}`)
+      }
+    }
+    return null
+  }
+
   private async pullCheckpoint(peer: string, result: SyncResult): Promise<void> {
     const path = `devices/${peer}/checkpoint.json.age`
     const cached = cacheGet(path)
-    let file: { status: 200 | 304; sha: string | null; content: Buffer | null; etag: string | null }
+    let read: { payload: unknown; sha: string | null; etag: string | null } | null
     try {
-      file = await this.client.getFile(path, cached?.etag)
+      read = await this.readRemoteEnvelope<unknown>(path, cached?.etag ?? null, 'checkpoint')
     } catch (error) {
       if (error instanceof SyncApiError && error.code === 'not_found') return
       throw error
     }
-    if (file.status === 304 || !file.content) return
-    const envelope = await decryptEnvelope<unknown>(file.content, this.settings.passphrase, {
-      kind: 'checkpoint',
-      path
-    })
-    const checkpoint = validateCheckpoint(envelope.payload)
+    if (!read) return
+    const checkpoint = validateCheckpoint(read.payload)
     result.merged.push(mergeCheckpoint(checkpoint))
     result.pulledCheckpoints++
-    cachePut(path, file.sha, file.etag)
+    cachePut(path, read.sha, read.etag)
     getDb()
       .prepare(
         `INSERT INTO sync_devices (device_id, name, last_seen_at, last_checkpoint_at) VALUES (?, ?, ?, ?)
@@ -484,23 +539,22 @@ export class SyncEngine {
     }
     for (const file of [...files].sort((a, b) => a.name.localeCompare(b.name))) {
       const cached = cacheGet(file.path)
-      let remote: { status: 200 | 304; sha: string | null; content: Buffer | null; etag: string | null }
+      let read: { payload: { ops?: RemoteSyncOp[] }; sha: string | null; etag: string | null } | null
       try {
-        remote = await this.client.getFile(file.path, cached?.etag)
+        read = await this.readRemoteEnvelope<{ ops?: RemoteSyncOp[] }>(
+          file.path,
+          cached?.etag ?? null,
+          'ops'
+        )
       } catch (error) {
         if (error instanceof SyncApiError && error.code === 'not_found') continue
         throw error
       }
-      if (remote.status === 304 || !remote.content) continue
-      const envelope = await decryptEnvelope<{ ops: RemoteSyncOp[] }>(
-        remote.content,
-        this.settings.passphrase,
-        { kind: 'ops', path: file.path }
-      )
-      const ops = Array.isArray(envelope.payload?.ops) ? envelope.payload.ops : []
+      if (!read) continue
+      const ops = Array.isArray(read.payload.ops) ? read.payload.ops : []
       result.appliedOps += applyRemoteOps(ops, `remote:${peer}`)
       result.pulledOpsFiles++
-      cachePut(file.path, remote.sha, remote.etag)
+      cachePut(file.path, read.sha, read.etag)
       getDb()
         .prepare(
           `INSERT INTO sync_devices (device_id, name, last_seen_at) VALUES (?, NULL, ?)

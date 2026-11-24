@@ -17,11 +17,11 @@ $stage = Join-Path $release "WordMemo-sync-test-package-$Version"
 Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
+# 只有一个说明文件（README.md），不再拆 checklist / report-template / TEST-SYNC
 $files = @(
   'README.md',
-  'checklist.md',
-  'report-template.md',
   'launch-device.ps1',
+  'start-host-device.ps1',
   'start-two-devices.ps1',
   'run-checks.ps1',
   'reset-local-test-data.ps1'
@@ -29,7 +29,6 @@ $files = @(
 foreach ($file in $files) {
   Copy-Item (Join-Path $PSScriptRoot $file) $stage
 }
-Copy-Item (Join-Path $Repo 'docs\TEST-SYNC.md') $stage
 Copy-Item $portable $stage
 
 $zip = Join-Path $release "WordMemo-sync-test-package-$Version.zip"

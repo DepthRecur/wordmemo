@@ -1,4 +1,4 @@
-# 交接文档：同步（Sync）板块
+﻿# 交接文档：同步（Sync）板块
 
 > 写给**新会话**：读这一份就能直接开工，不用重读旧对话。
 > 生成时间：2026-11-23　分支：`feat/sync`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
@@ -100,21 +100,28 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 | GitHub 客户端（条件请求 / Contents / Git Data / 错误归一 / size） | `src/main/sync/github.ts` | 完成 |
 | 逐条 op 合并（远端增量） | `db/checkpoint.ts` 的 `applyRemoteOp` | 完成 |
 | 传输引擎（meta / checkpoint / op 分片 / 拉取顺序 / etag / 体积） | `src/main/sync/engine.ts` | 完成 |
-| 真仓库 e2e（`DepthRecur/wordmemo-sync-test`） | `tests/real-sync.test.ts` + `.data/sync-e2e.ps1` | 通过（约 41 秒） |
+| 真仓库 e2e（`DepthRecur/wordmemo-sync-test`） | `tests/real-sync.test.ts` + `.data/sync-e2e.ps1` | 10 项通过（约 3 分钟） |
 | `safeStorage` 密钥文件 / 调度 / 管理器 / 设置页面板 | `secretStore.ts`、`scheduler.ts`、`manager.ts`、`SyncPanel.tsx` | 完成 |
 | 设备列表、移除设备、换密码、checkpoint 压缩、自愈重推 | `engine.ts` + `sync_runs` 日志 | 完成（9 项引擎测试） |
 | README 同步章节、错误对照表、0.6.0 发布准备 | `README.md`、`release-notes/v0.6.0.md` | 完成 |
 
-### 待你手动验收（S2–S3）
+### 验收现状（S2–S3）
 
-**测试包：`test-package/`**（README + 可勾选清单 + 本机双实例脚本 + 一键自检 + 便携版），
-打包产物在 `release/WordMemo-sync-test-package-0.6.0.zip`（约 143 MB，含便携版）。
+**本机那半已经自动化跑完**（两台真实实例 + 真仓库），不用人点：
 
-**完整步骤、预期结果与错误场景见 [TEST-SYNC.md](TEST-SYNC.md)。** 覆盖：
-连接与首次同步、改数据推送、`.wmsync` 导出/导入、单机双实例 / VM 双设备、设备列表与移除、
-换密码（旧密码拒绝、新密码重新加入）、错误场景（密码错/PAT 失效/文件损坏/公开仓库/被移除）。
+| 跑什么 | 命令 | 结果 |
+|---|---|---|
+| 单测 / 构建 | `test-package\run-checks.ps1` | 通过 |
+| 引擎层真仓库 e2e（10 项） | `.data\sync-e2e.ps1` | 通过 |
+| 两个真实实例 + 界面（24 项） | `.data\sync-local-e2e.ps1` | 通过 |
 
-VM 可以作为第二台设备；你用 VM 测时告诉我结果即可，我这边不需要操控 VMware。
+**只剩 VM 那半要人做**：干净机器上装便携版、输 PAT/密码、和本机双向同步一次。
+单一说明文件：[test-package/README.md](../test-package/README.md)（§3 是 VM 步骤，§4 是本机结果）。
+测试包：`release/WordMemo-sync-test-package-0.6.0.zip`（含便携版）。
+
+本轮自动化查出并修掉 3 个真 bug（同名库合并崩溃、空同步重传、跨天漏推），记在 PLAN-SYNC §10。
+
+VM 作为第二台设备；你用 VM 测时告诉我结果即可，我这边不需要操控 VMware。
 
 ### 验收通过后：发布 0.6.0
 
@@ -295,3 +302,5 @@ age 加密、GitHub 客户端、传输引擎、真仓库 e2e、safeStorage、调
 - [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码
 - [ ] `package.json` 版本是 `0.6.0`，`release-notes/v0.6.0.md` 存在
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`、`sync-ui-smoke.mjs`），已被 gitignore
+
+

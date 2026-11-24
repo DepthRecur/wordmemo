@@ -1,92 +1,160 @@
-# WordMemo 同步测试包（0.6.0）
+﻿# WordMemo 0.6.0 同步验收
 
-这个包用来验收 **0.6.0 的同步功能**（S2 + S3）：连接私有 GitHub 仓库、加密上传、两台设备合并、
-设备管理、换密码、以及错误提示。**不连接同步时，应用行为和 0.5.1 一样。**
+**这份文件就是全部指南，不用再翻别的文档。**
+你只需要做 §3（VM，约 5 分钟，5 个勾）；§4 是我已经跑完的本机自动化结果，出问题时才需要看。
 
-## 包里有什么
+---
 
-| 文件 | 用途 |
+## 1. 这次验收什么
+
+0.6.0 新增「同步」：把笔记、词条、复习记录加密后放进你自己的私有 GitHub 仓库，
+多台设备通过它合并。**不连同步时，应用行为和 0.5.1 完全一样。**
+
+验收目标只有一句话：**两台真机器、同一仓库、同一密码，能双向同步且不丢数据。**
+
+- 本机那半（两台设备、冲突、删除、设备管理、换密码、断网、重启、加密快照）：
+  **我已经用自动化跑完**，结果在 §4。
+- VM 那半（另一台真机器上的干净安装）：**由你完成**，步骤见 §3。
+  它验证的是「换一台机器、重新安装、重新输入 PAT 和密码」这条真实路径，
+  以及在两个独立的 Windows 环境之间搬数据。
+
+**不测**（产品边界，不用报 bug）：冲突弹窗（冲突按字段级 LWW / 数组合并 / 删除优先静默处理）、
+同步日志的导出/筛选、图片与附件同步、GitHub 以外的托管。
+
+---
+
+## 2. 开始前（30 秒）
+
+1. **同步密码已经定好**：`wordmemo-vm-test-parrot`
+   本机 A 已经用它连上了。VM 里填同一个，**不要改**，否则两边对不上。
+2. **PAT**：需要 `DepthRecur/wordmemo-sync-test` 的 `Contents: Read and write` 权限。
+   用你之前给我的那个；找不到了就新建：
+   GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens →
+   Generate new token → 只选 `DepthRecur/wordmemo-sync-test` → Contents: Read and write → 复制 `github_pat_...`。
+3. **本机 A 窗口**：现在应该已经开着（设置 → 同步 显示「已连接」，数据目录 `%TEMP%\wordmemo-test\host`）。
+   如果关掉了，在仓库根目录跑：
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File test-package\start-host-device.ps1
+   ```
+   启动后进 设置 → 同步，点一次「立即同步」，确认还是「已同步」。
+
+---
+
+## 3. VM 部分（你要做的）
+
+### 3.1 装便携版
+
+把包里的 `WordMemo-0.6.0-portable.zip` 复制进 VM（共享文件夹、拖拽、U 盘都行），
+解压到任意目录，双击 `WordMemo.exe`。SmartScreen 拦的话：更多信息 → 仍要运行。
+
+> 便携版的数据固定在 **VM 自己的** `%APPDATA%\WordMemo`，和本机互不影响，也不会碰你的真实笔记。
+
+### 3.2 连接
+
+VM 里打开 **设置 → 同步**，填：
+
+| 字段 | 填什么 |
 |---|---|
-| `README.md` | 本文件：怎么用这个包 |
-| `TEST-SYNC.md` | 完整体验步骤、预期结果、错误场景（主文档） |
-| `checklist.md` | 可勾选的验收清单（建议边测边填） |
-| `report-template.md` | 发现问题时按这个模板回报 |
-| `start-two-devices.ps1` | 本机开两个实例（各用一个临时数据目录），不用 VM |
-| `launch-device.ps1` | 单个实例的启动器（被上面那个脚本调用） |
-| `run-checks.ps1` | 一键跑 typecheck / test / build，结果写文件 |
-| `reset-local-test-data.ps1` | 清掉本机两个测试实例的数据 |
-| `WordMemo-0.6.0-portable.zip` | 便携版应用（VM / 另一台机器用） |
+| GitHub 仓库 | `DepthRecur` / `wordmemo-sync-test` |
+| PAT | §2 那个 token |
+| 同步密码 | `wordmemo-vm-test-parrot` |
+| 自动同步 | 每 10 分钟（默认即可） |
 
-> 包里**不含** PAT、同步密码或任何用户数据。
+点 **「测试并首次同步」**。
 
-## 开始前准备
+**预期**：绿色提示「已连接，并完成第一次同步」；状态「已连接」；待上传 `0 条`；
+设备列表出现两台（一台标「本机」，另一台是 8 位 id，那是本机 A）。
 
-1. **备份真实数据**：设置 → 高级与诊断 →「立即备份」。第一次测建议用临时数据目录（见下）。
-2. **建 PAT**：GitHub → Settings → Developer settings → Fine-grained tokens →
-   只授权 `DepthRecur/wordmemo-sync-test`，权限 `Contents: Read and write`。
-3. **想一个同步密码**（≥10 字符，界面可以「帮我生成」），抄下来。
-4. 测试仓库目前是空的；第一次连接会写入 `meta.json`。
+### 3.3 五个检查
 
-## 两种测法
+按顺序做，每项做完在后面打勾。**有一项不对就停下，把现象记下来告诉我。**
 
-### A. 本机双实例（推荐，先做这个）
+| # | 做什么 | 预期 | 结果 |
+|---|---|---|---|
+| 1 | VM 打开「笔记库」 | 能看到本机 A 写的「VM 验收：来自本机」这条笔记 | ☐ |
+| 2 | 本机 A 把这条标题改成「VM 验收：来自本机（已改）」→ 本机点「立即同步」；VM 点「立即同步」 | VM 里标题变成「（已改）」 | ☐ |
+| 3 | VM 新建一条笔记「VM 验收：来自 VM」→ VM 点「立即同步」；本机点「立即同步」 | 本机笔记库里出现这条 | ☐ |
+| 4 | 两边都看 设置 → 同步 → 设备 | 都显示两台设备，其中一台标「本机」 | ☐ |
+| 5 | 关掉 VM 的应用，再双击打开 → 设置 → 同步 → 点「立即同步」 | 仍是「已连接」（不用重输 PAT/密码）；提示「已同步」 | ☐ |
 
-前提：本机有本仓库源码，并已 `npm install`。
+### 3.4 可选：一条错误场景（1 分钟）
+
+VM 里 设置 → 同步 →「断开连接」→ 重新连接时**故意把密码改错一个字符** → 点「测试并首次同步」。
+**预期**：红色提示「同步密码不对」，不会崩，也不会在仓库里生成新数据。
+然后**用正确密码重新连上**（`wordmemo-vm-test-parrot`），确认还能同步。
+
+### 3.5 结束
+
+把 §3.3 的结果发我：哪几项不符、当时屏幕上显示了什么（截图最好）。
+**测试仓库先别清**，我看完日志再一起清。
+
+---
+
+## 4. 本机部分：我已经跑完的自动化
+
+### 4.1 跑的是什么
+
+| 脚本 | 覆盖 | 结果 |
+|---|---|---|
+| `npm test` | 32 个文件、274 项单元/集成测试 | 全通过（2 份真仓库用例默认跳过） |
+| `.data\sync-e2e.ps1` | 引擎层、**真仓库**：首次上传、双设备合并、字段级 LWW、同名库合并、删除不复活、设备列表、换密码、移除设备、断网补推、重启、加密快照 | 10 项全通过 |
+| `.data\sync-local-e2e.ps1` | **两个真实应用实例 + 真界面点击**：连接表单、首次同步、双向推送、设备列表、点按钮移除设备、换密码、旧密码被拒、新密码重连、重启后连接仍在 | 24 项全通过 |
+| `test-package\run-checks.ps1` | typecheck + 全部测试 + build | 通过 |
+
+### 4.2 这轮修掉的 bug
+
+自动化跑出来三个真问题，已经修掉（细节在 `docs/PLAN-SYNC.md` §10）：
+
+1. **两台设备各自建同名库时会崩**：拉取对方的「建库」增量时撞上 `decks.name` 唯一索引，
+   同步直接失败。现在和快照合并走同一套别名规则，合并成一本。
+2. **每次同步都重传当天的增量文件**：即使没有新改动也会多一个 commit，仓库体积无谓增长，
+   「上传 N 条」也虚高。现在没有待推数据就不写。
+3. **断网跨天会漏数据**：只推「当天」的增量，前一天没推上去的 op 会一直留着不推。
+   现在待推的（含跨天遗留）会和当天的一起带上。
+
+### 4.3 你想自己重跑的话
 
 ```powershell
-# 在仓库根目录（不是本包目录）
-npm run build
-powershell -ExecutionPolicy Bypass -File test-package\start-two-devices.ps1
-```
-
-脚本会在 `%TEMP%\wordmemo-test\device-a` 和 `device-b` 各开一个实例（数据互不影响，
-也不会碰你的真实 `%APPDATA%\WordMemo`）。两个实例都连**同一仓库、同一密码**。
-测完运行 `reset-local-test-data.ps1` 清理。
-
-### B. VM / 另一台机器（便携版）
-
-把 `WordMemo-0.6.0-portable.zip` 复制到 VM，解压，双击 `WordMemo.exe`。
-注意：便携版的数据固定在 VM 的 `%APPDATA%\WordMemo`，和本机互不影响。
-VM 里按 `TEST-SYNC.md` 走一遍双设备流程（本机 + VM 连同一仓库）。
-
-## 怎么测
-
-打开 `TEST-SYNC.md`，按顺序做：
-
-1. 连接与首次同步；
-2. 改数据 → 推送 → 另一台拉取；
-3. 导出/导入 `.wmsync`；
-4. 两台设备双向修改（并集 / 字段级 LWW / 删除）；
-5. 设备列表、移除设备、换密码；
-6. 错误场景（密码错、PAT 失效、文件损坏、断网）。
-
-每做完一项在 `checklist.md` 里打勾；失败的项按 `report-template.md` 记录。
-
-## 自动检查（不用手动点）
-
-```powershell
+# 只跑单测 + 构建
 powershell -ExecutionPolicy Bypass -File test-package\run-checks.ps1
+
+# 真仓库的引擎层 e2e（会写入测试仓库，跑完自动清空；token 从凭据管理器取，不打印）
+powershell -NoProfile -ExecutionPolicy Bypass -File .data\sync-e2e.ps1
+
+# 两个真实实例 + 界面（同一仓库，跑完自动清空，截图在 .data\shots）
+powershell -NoProfile -ExecutionPolicy Bypass -File .data\sync-local-e2e.ps1
 ```
 
-结果写到本目录的 `checks-<时间>.txt`：typecheck、全部测试、构建。预期：
+> 这两条 e2e 用的是**固定测试密码**（`wordmemo-sync-e2e-*` / `wordmemo-e2e-*`），
+> 和你 VM 测试用的 `wordmemo-vm-test-parrot` 不是同一个。重跑前先把本机 A 断开，
+> 或者跑完由我重新连一次，否则会看到「同步密码不对」——那是正常的，不是 bug。
 
-- typecheck 0 错误
-- 32 文件 / 274 项通过（另 2 份手动测试跳过）
-- build 通过
+---
 
-## 发现问题怎么回报
+## 5. 出问题怎么报
 
-按 `report-template.md` 填，附上：
+按这几行填，够我定位：
 
-- 哪一步、期望什么、实际什么（截图最好）；
-- 设置页同步面板的红色错误文字；
-- 日志：本机测试实例在 `%TEMP%\wordmemo-test\device-a\diagnostics.log`（VM 在 `%APPDATA%\WordMemo\diagnostics.log`）；
-- GitHub 仓库 `devices/<id>/` 的文件列表（不用发内容）。
+```
+哪一步：
+期望：
+实际：
+截图：（拖动进来）
+设置页红色文字：
+日志：VM 是 %APPDATA%\WordMemo\diagnostics.log；本机是 %TEMP%\wordmemo-test\host\diagnostics.log
+仓库文件列表：（GitHub 网页上 devices/ 下有几个目录、各有什么文件，不用发内容）
+```
 
-**不要**在报告里贴 PAT 或同步密码。
+**不要**贴 PAT 或同步密码。
 
-## 安全提醒
+---
 
-- 同步密码忘记无法恢复；测试用的密码可以随便设，但别用你真实想长期用的那个。
-- 测试仓库里只有密文；`meta.json` 明文只有格式版本、salt、口令校验值、创建时间。
-- 测完可以把仓库里的 `meta.json` 与 `devices/` 删掉，恢复空仓库。
+## 6. 安全与收尾
+
+- 仓库里只有密文；`meta.json` 明文只有格式版本、salt、口令校验值、创建时间、已移除设备 id。
+- 同步密码忘了无法恢复（没有恢复密钥，这是产品决定）；测试密码随便设，别用你真实想长期用的那个。
+- 测试完成后：VM 里可以「断开连接」；本机测试数据用
+  `powershell -ExecutionPolicy Bypass -File test-package\reset-local-test-data.ps1` 清掉
+  （只删 `%TEMP%\wordmemo-test`，不碰真实数据）。
+- 仓库里的测试数据由我清空，你不用管。
+
