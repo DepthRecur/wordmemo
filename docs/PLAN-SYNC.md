@@ -799,9 +799,12 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
      现在把待推（含跨天）和当天分片合并写。
 - 顺带把 `info.json.age` 改成「有东西推上去/还没有 info」时才写，避免每次空同步一个 commit。
 - 远端偶尔返回「不是 WordMemo 的同步文件」的内容（中转缓存/连接被重置时见过）：`readRemoteEnvelope` 绕过本地 ETag 重拿一次，两次都不对才失败；这轮 GUI e2e 里由此避免了两次误报。
+- **同步后界面不刷新**（用户 VM 验收时发现）：数据已经进库，但库列表/笔记列表要重启才看得到，看起来像「应用了 1 条却没动静」。`SyncStatus` 增加 `lastSyncChanges`，渲染进程在「新的成功时间 + 有改动」时重读库/统计并 bump `libraryVersion`（`App.tsx`）。用 `.data/deck-refresh-e2e.mjs` 验证：A 停在笔记库不动，另一台建库+建笔记，A 同步一次后页面直接出现（6 项）。
+- **没连接的设备不能导入快照**：导入/导出按钮原来只在已连接时渲染，等于「换机搬数据」走不通。现在按钮常显，未连接时先问一次同步密码（`sync.export/import` 支持可选 `passphrase`，`manager` 在无密钥时用它）。用 `.data/snapshot-ui-e2e.mjs` 走真界面 + 原生对话框验证（8 项：导出密文、无明文、未连接先问密码、导入出现、重复导入不重复）。
 
 **发布前剩下的**：VM 那半的人工验收（干净机器装便携版、双向同步一次）→ 修 bug →
 `npm run dist` 冒烟 → 合回 `master` → tag → CI 发布。代码部分到此为止。
+
 
 
 

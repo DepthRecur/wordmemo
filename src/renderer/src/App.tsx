@@ -286,6 +286,20 @@ export default function App() {
     }
   }, [])
 
+  // 同步把远端的库/笔记/复习拉下来之后，界面要自己重读一遍：
+  // 否则会出现「同步日志说应用了 1 条，但库里看不到」这种看起来像丢数据的假象。
+  const syncedAtRef = useRef('')
+  useEffect(() => {
+    return window.api.events.onSyncStatus((status) => {
+      if (!status.lastSuccessAt || status.lastSuccessAt === syncedAtRef.current) return
+      syncedAtRef.current = status.lastSuccessAt
+      if (!status.lastSyncChanges) return
+      void refreshDecks()
+      void refreshStats()
+      setLibraryVersion((value) => value + 1)
+    })
+  }, [refreshDecks, refreshStats])
+
   useEffect(() => {
     ;(async () => {
       try {

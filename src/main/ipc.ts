@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+﻿import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
@@ -437,7 +437,7 @@ export function registerIpc(): void {
     changeSyncPassphrase(passphrase)
   )
   ipcMain.handle('sync:log', () => getSyncLog())
-  ipcMain.handle('sync:export', async () => {
+  ipcMain.handle('sync:export', async (_e, passphrase?: string) => {
     const picked = await dialog.showSaveDialog({
       title: '导出加密快照',
       defaultPath: 'wordmemo-同步快照.wmsync',
@@ -446,9 +446,9 @@ export function registerIpc(): void {
     if (picked.canceled || !picked.filePath) {
       return { ok: true, status: syncStatus(), path: null }
     }
-    return exportSnapshotTo(picked.filePath)
+    return exportSnapshotTo(picked.filePath, passphrase)
   })
-  ipcMain.handle('sync:import', async () => {
+  ipcMain.handle('sync:import', async (_e, passphrase?: string) => {
     const picked = await dialog.showOpenDialog({
       title: '导入加密快照',
       properties: ['openFile'],
@@ -457,6 +457,7 @@ export function registerIpc(): void {
     if (picked.canceled || !picked.filePaths[0]) {
       return { ok: false, status: syncStatus(), errorCode: 'canceled', message: '已取消' }
     }
-    return importSnapshotFrom(picked.filePaths[0])
+    return importSnapshotFrom(picked.filePaths[0], passphrase)
   })
 }
+

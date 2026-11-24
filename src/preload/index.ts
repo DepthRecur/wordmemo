@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiBudgetNotice,
   DeckInput,
@@ -127,8 +127,8 @@ const api: WordmemoApi = {
     connect: (input) => ipcRenderer.invoke('sync:connect', input),
     disconnect: () => ipcRenderer.invoke('sync:disconnect'),
     now: () => ipcRenderer.invoke('sync:now'),
-    export: () => ipcRenderer.invoke('sync:export'),
-    import: () => ipcRenderer.invoke('sync:import'),
+    export: (passphrase?: string) => ipcRenderer.invoke('sync:export', passphrase),
+    import: (passphrase?: string) => ipcRenderer.invoke('sync:import', passphrase),
     devices: () => ipcRenderer.invoke('sync:devices'),
     removeDevice: (deviceId: string) => ipcRenderer.invoke('sync:removeDevice', deviceId),
     changePassphrase: (passphrase: string) =>
@@ -174,3 +174,4 @@ const api: WordmemoApi = {
 }
 
 contextBridge.exposeInMainWorld('api', api)
+

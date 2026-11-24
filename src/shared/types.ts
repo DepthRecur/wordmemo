@@ -1,4 +1,4 @@
-export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
+﻿export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
 export type CardDirection = 'en2zh' | 'zh2en' | 'listen2en'
 export type JudgeSource = 'exact' | 'variant' | 'local' | 'ai' | 'manual' | 'giveup'
 export type ReviewMode = 'longterm' | 'exam' | 'learn'
@@ -451,6 +451,8 @@ export interface SyncStatus {
   deviceId: string
   deviceName: string | null
   lastSuccessAt: string | null
+  /** 上一次成功同步实际应用/合并的改动条数（>0 时界面要把库/笔记/统计重新读一遍） */
+  lastSyncChanges: number
   lastErrorCode: string | null
   lastErrorMessage: string | null
   pendingOps: number
@@ -867,9 +869,9 @@ export interface WordmemoApi {
     /** 立即同步（手动永远可用） */
     now(): Promise<SyncActionResult>
     /** 导出加密快照到用户选的位置；取消返回 path=null */
-    export(): Promise<SyncActionResult & { path: string | null }>
+    export(passphrase?: string): Promise<SyncActionResult & { path: string | null }>
     /** 导入加密快照（合并，不覆盖） */
-    import(): Promise<SyncImportResult>
+    import(passphrase?: string): Promise<SyncImportResult>
     /** 设备列表（本机 + 远端见过的设备） */
     devices(): Promise<SyncDeviceInfo[]>
     /** 移除其它设备：远端目录删掉，并把它列进 meta.revokedDevices */
@@ -958,3 +960,4 @@ export const KIND_LABEL: Record<ItemKind, string> = {
   sentence: '句子',
   grammar: '语法'
 }
+

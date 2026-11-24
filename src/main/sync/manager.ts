@@ -30,6 +30,8 @@ let scheduler: SyncScheduler | null = null
 let unsubscribeOps: (() => void) | null = null
 let running = false
 let lastError: { code: string; message: string } | null = null
+/** 上一次成功同步应用/合并的条数：界面据此决定要不要重读库和列表 */
+let lastSyncChanges = 0
 
 export function setSyncStatusSink(sink: (status: SyncStatus) => void): void {
   statusSink = sink
@@ -73,6 +75,7 @@ export function buildStatus(): SyncStatus {
     deviceId: syncState.deviceId,
     deviceName: syncState.deviceName,
     lastSuccessAt: syncState.lastPullAt ?? syncState.lastPushAt ?? null,
+    lastSyncChanges,
     lastErrorCode: lastError?.code ?? null,
     lastErrorMessage: lastError?.message ?? null,
     pendingOps: countPendingOps(),
@@ -165,6 +168,13 @@ async function runSync(): Promise<boolean> {
   try {
     const result = await engine.syncNow()
     lastError = null
+    lastSyncChanges =
+      result.appliedOps +
+      result.merged.reduce((sum, stats) => {
+        let total = 0
+        for (const value of Object.values(stats)) if (typeof value === 'number') total += value
+        return sum + total
+      }, 0)
     recordRun(
       {
         durationMs: Date.now() - started,
@@ -181,6 +191,7 @@ async function runSync(): Promise<boolean> {
     return true
   } catch (error) {
     lastError = describeError(error)
+    lastSyncChanges = 0
     recordRun({ ...empty, durationMs: Date.now() - started }, false, lastError.code)
     return false
   } finally {
@@ -286,13 +297,17 @@ export async function syncNow(): Promise<SyncActionResult> {
   }
 }
 
-export async function exportSnapshotTo(file: string): Promise<SyncActionResult & { path: string | null }> {
-  const secrets = loadSyncSecrets()
-  if (!secrets) {
-    return { ...fail('no_secret', '没有找到本机保存的同步密码，请重新连接一次'), path: null }
+export async function exportSnapshotTo(
+  file: string,
+  passphrase?: string
+): Promise<SyncActionResult & { path: string | null }> {
+  // 没连接时允许现场输一次密码：换机、离线搬数据不该强迫先连仓库
+  const secret = passphrase || loadSyncSecrets()?.passphrase
+  if (!secret) {
+    return { ...fail('no_secret', '请输入同步密码：本机还没有保存过'), path: null }
   }
   try {
-    await exportEncryptedSnapshot(file, secrets.passphrase)
+    await exportEncryptedSnapshot(file, secret)
     return { ok: true, status: buildStatus(), path: file }
   } catch (error) {
     const info = describeError(error)
@@ -300,11 +315,14 @@ export async function exportSnapshotTo(file: string): Promise<SyncActionResult &
   }
 }
 
-export async function importSnapshotFrom(file: string): Promise<SyncImportResult> {
-  const secrets = loadSyncSecrets()
-  if (!secrets) return fail('no_secret', '没有找到本机保存的同步密码，请重新连接一次')
+export async function importSnapshotFrom(
+  file: string,
+  passphrase?: string
+): Promise<SyncImportResult> {
+  const secret = passphrase || loadSyncSecrets()?.passphrase
+  if (!secret) return fail('no_secret', '请输入同步密码：本机还没有保存过')
   try {
-    const { stats } = await importEncryptedSnapshot(file, secrets.passphrase)
+    const { stats } = await importEncryptedSnapshot(file, secret)
     // 导入的数据也是本地变更：尽快推上去（没有连接时 markDirty 什么都不做）
     scheduler?.markDirty()
     const applied =
@@ -441,3 +459,4 @@ export function getSyncLog(): SyncLogEntry[] {
 function fail(code: string, message: string): SyncActionResult {
   return { ok: false, status: buildStatus(), errorCode: code, message }
 }
+

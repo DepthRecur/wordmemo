@@ -65,6 +65,8 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
   const [showChange, setShowChange] = useState(false)
   const [newPass, setNewPass] = useState('')
   const [confirmPass, setConfirmPass] = useState('')
+  const [snapshotPrompt, setSnapshotPrompt] = useState<'export' | 'import' | null>(null)
+  const [snapshotPass, setSnapshotPass] = useState('')
 
   useEffect(() => {
     void window.api.sync.status().then(setStatus)
@@ -221,39 +223,44 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
     }
   }
 
-  async function exportSnapshot(): Promise<void> {
-    setBusy('export')
-    try {
-      const result = await window.api.sync.export()
-      setStatus(result.status)
-      if (!result.ok) notify(result.message ?? '导出失败', 'err')
-      else if (result.path) notify(`已导出到 ${result.path}`, 'ok')
-      else notify('已取消', 'info')
-    } catch (error) {
-      notify(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'err')
-    } finally {
-      setBusy(null)
+  async function startSnapshot(kind: 'export' | 'import'): Promise<void> {
+    if (kind === 'import' && !window.confirm('导入会与当前数据合并（不覆盖）。继续？')) return
+    if (configured) {
+      await runSnapshot(kind)
+      return
     }
+    // 还没连接：先问一次密码，换机/离线搬数据不用先去连仓库
+    setSnapshotPass('')
+    setSnapshotPrompt(kind)
   }
 
-  async function importSnapshot(): Promise<void> {
-    if (!window.confirm('导入会与当前数据合并（不覆盖）。继续？')) return
-    setBusy('import')
+  async function runSnapshot(kind: 'export' | 'import', passphrase?: string): Promise<void> {
+    const label = kind === 'export' ? '导出' : '导入'
+    setBusy(kind)
     try {
-      const result = await window.api.sync.import()
-      setStatus(result.status)
-      if (result.errorCode === 'canceled') return
-      if (!result.ok) {
-        notify(result.message ?? '导入失败', 'err')
-        return
+      if (kind === 'export') {
+        const result = await window.api.sync.export(passphrase)
+        setStatus(result.status)
+        if (!result.ok) notify(result.message ?? '导出失败', 'err')
+        else if (result.path) notify(`已导出到 ${result.path}`, 'ok')
+        else notify('已取消', 'info')
+      } else {
+        const result = await window.api.sync.import(passphrase)
+        setStatus(result.status)
+        if (result.errorCode === 'canceled') return
+        if (!result.ok) {
+          notify(result.message ?? '导入失败', 'err')
+          return
+        }
+        notify(
+          `已导入并合并：笔记 ${result.notes ?? 0}、词条 ${result.items ?? 0}、复习 ${result.reviews ?? 0}`,
+          'ok'
+        )
+        await refreshSettings()
       }
-      notify(
-        `已导入并合并：笔记 ${result.notes ?? 0}、词条 ${result.items ?? 0}、复习 ${result.reviews ?? 0}`,
-        'ok'
-      )
-      await refreshSettings()
+      setSnapshotPrompt(null)
     } catch (error) {
-      notify(`导入失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+      notify(`${label}失败：${error instanceof Error ? error.message : String(error)}`, 'err')
     } finally {
       setBusy(null)
     }
@@ -272,6 +279,45 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
           只同步结构化数据（笔记、词条、复习记录、考试与库），图片和文件永远不上传。
           数据用你的同步密码加密后放进自己的私有 GitHub 仓库。
         </div>
+
+        {/* 快照不受「是否已连接」限制：换机、离线搬数据时先导入再决定连不连 */}
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <Button onClick={() => void startSnapshot('export')} disabled={busy !== null}>
+            <Download size={15} /> 导出加密快照
+          </Button>
+          <Button onClick={() => void startSnapshot('import')} disabled={busy !== null}>
+            <Upload size={15} /> 导入加密快照
+          </Button>
+        </div>
+        {snapshotPrompt && (
+          <div className="col" style={{ gap: 8 }}>
+            <div className="hint">
+              本机还没连同步：{snapshotPrompt === 'export' ? '导出' : '导入'}快照需要输入同步密码
+              （就是当初加密这份数据用的那个）。
+            </div>
+            <Field label="同步密码">
+              <input
+                className="input"
+                type="password"
+                value={snapshotPass}
+                placeholder="至少 10 个字符"
+                onChange={(e) => setSnapshotPass(e.target.value)}
+                autoComplete="off"
+              />
+            </Field>
+            <div className="row">
+              <Button
+                onClick={() => void runSnapshot(snapshotPrompt, snapshotPass)}
+                disabled={busy !== null}
+              >
+                {busy === snapshotPrompt ? '处理中…' : `确认${snapshotPrompt === 'export' ? '导出' : '导入'}`}
+              </Button>
+              <Button size="sm" onClick={() => setSnapshotPrompt(null)}>
+                取消
+              </Button>
+            </div>
+          </div>
+        )}
 
         {configured && status ? (
           <>
@@ -312,12 +358,6 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
             <div className="row" style={{ flexWrap: 'wrap' }}>
               <Button onClick={() => void runNow()} disabled={busy !== null || status.state === 'syncing'}>
                 <RefreshCw size={15} /> {status.state === 'syncing' ? '同步中…' : '立即同步'}
-              </Button>
-              <Button onClick={() => void exportSnapshot()} disabled={busy !== null}>
-                <Download size={15} /> 导出加密快照
-              </Button>
-              <Button onClick={() => void importSnapshot()} disabled={busy !== null}>
-                <Upload size={15} /> 导入加密快照
               </Button>
               <Button onClick={() => void disconnect()} disabled={busy !== null}>
                 <Unplug size={15} /> 断开连接
