@@ -1,4 +1,4 @@
-﻿# WordMemo 0.6.0 同步验收
+# WordMemo 0.6.0 同步验收
 
 **这份文件就是全部指南，不用再翻别的文档。**
 你只需要做 §3（VM，约 5 分钟，5 个勾）；§4 是我已经跑完的本机自动化结果，出问题时才需要看。
@@ -31,12 +31,13 @@
    用你之前给我的那个；找不到了就新建：
    GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens →
    Generate new token → 只选 `DepthRecur/wordmemo-sync-test` → Contents: Read and write → 复制 `github_pat_...`。
-3. **本机 A 窗口**：现在应该已经开着（设置 → 同步 显示「已连接」，数据目录 `%TEMP%\wordmemo-test\host`）。
-   如果关掉了，在仓库根目录跑：
+3. **本机 A 窗口**：在仓库根目录跑下面这条，把「本机这台」打开
+   （数据目录 `%TEMP%\wordmemo-test\host`，里面已经连好了，不用重输 PAT/密码）：
    ```powershell
    powershell -ExecutionPolicy Bypass -File test-package\start-host-device.ps1
    ```
-   启动后进 设置 → 同步，点一次「立即同步」，确认还是「已同步」。
+   启动后进 设置 → 同步，应该直接显示「已连接」；点一次「立即同步」，确认提示「已同步」。
+   笔记库里应该有一条「VM 验收：来自本机」。
 
 ---
 
