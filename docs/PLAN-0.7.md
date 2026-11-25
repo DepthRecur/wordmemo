@@ -6,6 +6,36 @@
 
 ---
 
+## 0.2 进度（每做完一条勾一笔）
+
+分支：`feat/0.7-backlog`（2026-11-26 早上开工）
+
+| 条目 | 状态 | 提交 |
+|---|---|---|
+| 计划与决策归档 | ✅ | `f9bc295 docs: record the 0.7 backlog decisions and execution plan` |
+| A-01 同步静默假成功 | ✅ | `d0a93ca fix(sync): join an in-flight run instead of faking success` |
+| A-04 skipped 上报 | ✅ | `cd6f45b fix(sync): surface skipped records instead of dropping them silently` |
+| A-03 时钟夹取 | ⬜ 下一步 | — |
+| D-06 边界测试 | ⬜ | A-01 已带 `tests/sync-manager.test.ts`（5 项）；剩余「断开连接时不中止在飞同步」的行为未改 |
+| A-02 / C-04 / E-04 | ⬜ | 阶段 2 |
+| D-01 / D-02 | ⬜ | 阶段 3 |
+| D-05 | ⬜ | 阶段 4（待定 A/B，见 §0.1②） |
+| B-02 / C-02 / C-05②(+A-06) / F-04 / F-06 | ⬜ | 阶段 5 |
+| E-02 / G-01~G-06 / 不做落档 | ⬜ | 阶段 6 |
+
+**当前基线**：`npm run typecheck` 0 错误；`npm test` **31 文件 / 290 项（279 通过 + 11 跳过）**。
+
+### 断点（2026-11-26 08:30 停手，12:00 续）
+
+- 已提交到 `feat/0.7-backlog`，**未推送**（不需要网络）。
+- 下一步就是 **A-03 时钟夹取**：在 `checkpoint.ts` 里加 `CLOCK_SKEW_LIMIT_MS = 5 * 60_000` 与 `clampRemoteTs()`，
+  **必须夹在 ts 的推导点**（`applyRemoteOp` 的 `op.tsUtc`、`mergeCheckpoint` 的 `createdAtMs`），
+  这样后面 `recordSyncOp({tsUtc: ts})` 写进 `sync_ops` 的也是夹过的值——否则字段时钟会留在未来，
+  本机后续修改会一直输给那个未来时间戳。偏差 > 5 分钟时写一条 `logDiagnostic('sync-clock-skew')`，不打断同步。
+- A-03 完成后补测试：给一条 `tsUtc = now + 2h` 的 op → 应用后 `sync_ops` 里记的 ts 被夹到 now+5min。
+
+---
+
 ## 0. 决策汇总
 
 | 类别 | 条数 | 编号 |
