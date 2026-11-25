@@ -10,6 +10,7 @@ import { checkPassphrase } from '@shared/passphrase'
 import { exportEncryptedSnapshot, importEncryptedSnapshot } from '../db/checkpoint'
 import { countPendingOps, getSyncState, onSyncOpWritten } from '../db/sync'
 import { getDb, localIso } from '../db/connection'
+import { log as logDiagnostic } from '../diagnostics'
 import { getSettings, updateSettings } from '../settings'
 import { SyncEngine, SyncSetupError } from './engine'
 import { SyncApiError } from './github'
@@ -37,6 +38,8 @@ let inFlight: Promise<boolean> | null = null
 let lastError: { code: string; message: string } | null = null
 /** 上一次成功同步应用/合并的条数：界面据此决定要不要重读库和列表 */
 let lastSyncChanges = 0
+/** 上一次同步被跳过的记录数（A-04）：>0 时界面给警告，别再静默吞掉 */
+let lastSyncSkipped = 0
 
 export function setSyncStatusSink(sink: (status: SyncStatus) => void): void {
   statusSink = sink
@@ -81,6 +84,7 @@ export function buildStatus(): SyncStatus {
     deviceName: syncState.deviceName,
     lastSuccessAt: syncState.lastPullAt ?? syncState.lastPushAt ?? null,
     lastSyncChanges,
+    lastSyncSkipped,
     lastErrorCode: lastError?.code ?? null,
     lastErrorMessage: lastError?.message ?? null,
     pendingOps: countPendingOps(),
@@ -187,13 +191,27 @@ async function doRunSync(target: SyncEngine): Promise<boolean> {
   try {
     const result = await target.syncNow()
     lastError = null
-    lastSyncChanges =
-      result.appliedOps +
-      result.merged.reduce((sum, stats) => {
-        let total = 0
-        for (const value of Object.values(stats)) if (typeof value === 'number') total += value
-        return sum + total
-      }, 0)
+    // A-04：skipped 不是「成功的改动」，不能混进 lastSyncChanges（否则界面会把跳过的算成应用了）
+    let merged = 0
+    let skipped = 0
+    for (const stats of result.merged) {
+      for (const [key, value] of Object.entries(stats)) {
+        if (typeof value !== 'number') continue
+        if (key === 'skipped') skipped += value
+        else merged += value
+      }
+    }
+    lastSyncChanges = result.appliedOps + merged
+    lastSyncSkipped = skipped
+    if (skipped > 0) {
+      // 静默失败也要算账：写进诊断日志，并在状态里带出去
+      logDiagnostic('sync-skipped', {
+        skipped,
+        appliedOps: result.appliedOps,
+        merged,
+        peers: result.peers
+      })
+    }
     recordRun(
       {
         durationMs: Date.now() - started,
@@ -211,6 +229,7 @@ async function doRunSync(target: SyncEngine): Promise<boolean> {
   } catch (error) {
     lastError = describeError(error)
     lastSyncChanges = 0
+    lastSyncSkipped = 0
     recordRun({ ...empty, durationMs: Date.now() - started }, false, lastError.code)
     return false
   } finally {

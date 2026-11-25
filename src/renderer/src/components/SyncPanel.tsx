@@ -355,6 +355,11 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
                 {status.lastErrorMessage}
               </div>
             )}
+            {status.lastSyncSkipped > 0 && (
+              <div className="hint" style={{ color: 'var(--yellow)' }}>
+                上次同步有 {status.lastSyncSkipped} 条记录没能合并（已跳过），详见诊断日志。
+              </div>
+            )}
             <div className="row" style={{ flexWrap: 'wrap' }}>
               <Button onClick={() => void runNow()} disabled={busy !== null || status.state === 'syncing'}>
                 <RefreshCw size={15} /> {status.state === 'syncing' ? '同步中…' : '立即同步'}

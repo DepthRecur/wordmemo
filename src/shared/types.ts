@@ -1,4 +1,4 @@
-﻿export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
+export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
 export type CardDirection = 'en2zh' | 'zh2en' | 'listen2en'
 export type JudgeSource = 'exact' | 'variant' | 'local' | 'ai' | 'manual' | 'giveup'
 export type ReviewMode = 'longterm' | 'exam' | 'learn'
@@ -453,6 +453,8 @@ export interface SyncStatus {
   lastSuccessAt: string | null
   /** 上一次成功同步实际应用/合并的改动条数（>0 时界面要把库/笔记/统计重新读一遍） */
   lastSyncChanges: number
+  /** 上一次同步里「解不开、找不到对应行」而跳过的记录数（>0 时界面给一条警告，MESSAGES 硬规则 2） */
+  lastSyncSkipped: number
   lastErrorCode: string | null
   lastErrorMessage: string | null
   pendingOps: number

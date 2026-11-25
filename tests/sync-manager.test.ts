@@ -80,6 +80,10 @@ afterAll(() => {
 
 beforeEach(() => {
   resetSyncManagerForTests()
+  // 上一个用例可能已经断开了连接（disconnectSync 会改 settings），这里恢复成「已连接」
+  updateSettings({
+    sync: { enabled: true, owner: 'owner', repo: 'repo', apiBase: 'https://api.github.com', intervalMin: 0 }
+  })
 })
 
 describe('同步管理器：同一时刻只有一轮', () => {
@@ -162,5 +166,32 @@ describe('同步管理器：同一时刻只有一轮', () => {
     gate.resolve()
     await expect(run).resolves.toBeDefined()
     expect(buildStatus().enabled).toBe(false)
+  })
+
+  it('被跳过的记录不会算进「应用了 N 条」，而是单独计数（A-04）', async () => {
+    fakeEngine(async () => ({
+      ...okResult(),
+      appliedOps: 2,
+      merged: [
+        {
+          decks: 1,
+          notes: 3,
+          items: 0,
+          reviews: 0,
+          exams: 0,
+          noteItems: 0,
+          cardFlags: 0,
+          tombstones: 4,
+          skipped: 5
+        }
+      ]
+    }))
+
+    const result = await syncNow()
+    expect(result.ok).toBe(true)
+    const status = buildStatus()
+    // 2 条 op + (1+3+4) 条真正合并的；skipped 不算改动
+    expect(status.lastSyncChanges).toBe(10)
+    expect(status.lastSyncSkipped).toBe(5)
   })
 })
