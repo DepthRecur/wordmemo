@@ -115,7 +115,7 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
         setPat('')
         setPassphrase('')
         setShowConnect(false)
-        notify('已连接，并完成第一次同步', 'ok')
+        notify(result.message ?? '已连接，并完成第一次同步', 'ok')
         await refreshSettings()
       } else {
         notify(result.message ?? '连接失败', 'err')
@@ -132,7 +132,7 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
     try {
       const result: SyncActionResult = await window.api.sync.now()
       setStatus(result.status)
-      if (result.ok) notify('已同步', 'ok')
+      if (result.ok) notify(result.message ?? '已同步', 'ok')
       else notify(result.message ?? '同步失败', 'err')
     } catch (error) {
       notify(`同步失败：${error instanceof Error ? error.message : String(error)}`, 'err')

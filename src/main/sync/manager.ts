@@ -28,7 +28,12 @@ let statusSink: ((status: SyncStatus) => void) | null = null
 let engine: SyncEngine | null = null
 let scheduler: SyncScheduler | null = null
 let unsubscribeOps: (() => void) | null = null
-let running = false
+/**
+ * 正在进行的同步（A-01）。以前只用一个 `running` 布尔值，第二次调用直接 `return true`
+ * ——「正在同步」被当成了「同步成功」，界面会提示「已连接，并完成第一次同步」而其实一次没跑。
+ * 现在保存的是那一次运行的 promise：后来者**加入并等待**它，拿到的就是真实结果。
+ */
+let inFlight: Promise<boolean> | null = null
 let lastError: { code: string; message: string } | null = null
 /** 上一次成功同步应用/合并的条数：界面据此决定要不要重读库和列表 */
 let lastSyncChanges = 0
@@ -62,7 +67,7 @@ function configured(): boolean {
 export function buildStatus(): SyncStatus {
   const sync = getSettings().sync
   let state: SyncStatus['state'] = 'disconnected'
-  if (configured()) state = running ? 'syncing' : lastError ? 'error' : 'idle'
+  if (configured()) state = inFlight ? 'syncing' : lastError ? 'error' : 'idle'
   const syncState = getSyncState()
   return {
     configured: configured(),
@@ -151,9 +156,23 @@ function recordRun(record: RunRecord, ok: boolean, errorCode: string | null): vo
   }
 }
 
-async function runSync(): Promise<boolean> {
-  if (!engine || running) return true
-  running = true
+/**
+ * 跑一次同步。
+ * - 同一时刻只有一轮在跑：后来者**加入并等待那一轮**，拿到的是真实结果（不再假装成功）；
+ * - 没有引擎（没连接）时返回 false —— 以前这里返回 true，等于「没同步也算成功」。
+ */
+function runSync(): Promise<boolean> {
+  const target = engine
+  if (!target) return Promise.resolve(false)
+  if (inFlight) return inFlight
+  const run: Promise<boolean> = doRunSync(target).finally(() => {
+    if (inFlight === run) inFlight = null
+  })
+  inFlight = run
+  return run
+}
+
+async function doRunSync(target: SyncEngine): Promise<boolean> {
   emit()
   const started = Date.now()
   const empty: RunRecord = {
@@ -166,7 +185,7 @@ async function runSync(): Promise<boolean> {
     appliedOps: 0
   }
   try {
-    const result = await engine.syncNow()
+    const result = await target.syncNow()
     lastError = null
     lastSyncChanges =
       result.appliedOps +
@@ -195,7 +214,6 @@ async function runSync(): Promise<boolean> {
     recordRun({ ...empty, durationMs: Date.now() - started }, false, lastError.code)
     return false
   } finally {
-    running = false
     emit()
   }
 }
@@ -263,6 +281,8 @@ export async function connectSync(input: SyncConnectInput): Promise<SyncActionRe
     }
   })
   attach({ token: pat, passphrase: input.passphrase })
+  // 旧引擎那一轮可能还在跑：先等它结束，否则新的这轮会被并进旧运行、等于没同步
+  if (inFlight) await inFlight.catch(() => undefined)
   await runSync()
   const failure = getLastError()
   return {
@@ -283,12 +303,17 @@ export function disconnectSync(): SyncStatus {
   return buildStatus()
 }
 
-/** 手动同步：永远可用（受「正在进行」保护） */
+/** 手动同步：永远可用（已经在跑时如实告诉用户，不假装成功） */
 export async function syncNow(): Promise<SyncActionResult> {
   if (!configured() || !engine) return fail('not_configured', '还没有连接同步')
+  // 进去之前先看有没有一轮在跑：跑完之后的 lastError 是那一轮的结果，不能当成本次的
+  const joined = inFlight !== null
   if (scheduler) await scheduler.runNow()
   else await runSync()
   const failure = getLastError()
+  if (!failure && joined) {
+    return { ok: true, status: buildStatus(), message: '正在同步，完成后会自动刷新' }
+  }
   return {
     ok: !failure,
     status: buildStatus(),
@@ -350,19 +375,47 @@ export async function importSnapshotFrom(
 /** 退出前尽力推一次；最多等 timeoutMs（PLAN-SYNC §3.8） */
 export async function flushBeforeQuit(timeoutMs = 3000): Promise<void> {
   if (!engine) return
-  const deadline = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
-  try {
-    await Promise.race([runSync().then(() => undefined), deadline])
-  } catch {
-    /* 退出路径上不抛错 */
+  const startedAt = Date.now()
+  const budget = (): number => Math.max(0, timeoutMs - (Date.now() - startedAt))
+  /** 在剩余预算内等一个 promise；超时就放弃（不抛错、不留定时器） */
+  const waitWithin = async (work: Promise<unknown>): Promise<void> => {
+    const left = budget()
+    if (left <= 0) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        work.then(
+          () => undefined,
+          () => undefined
+        ),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, left)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
+  // 已经有一轮在跑：等它，而不是原来那样立刻返回、把这次的推送丢掉
+  await waitWithin(runSync())
+  // 那一轮跑完还有没推上去的，再抢一次（同一个预算）
+  if (engine && countPendingOps() > 0 && budget() > 250) await waitWithin(runSync())
 }
 
 /** 供测试/诊断：清掉内存状态（不删磁盘上的设置与密钥） */
 export function resetSyncManagerForTests(): void {
   detachRuntime()
-  running = false
+  inFlight = null
   lastError = null
+}
+
+/**
+ * 仅供测试：注入引擎替身，避免连真 GitHub。
+ * 传 `null` 清掉（同时会把调度器一起摘掉，测试里不要用它去模拟「已连接且有定时器」）。
+ */
+export function __setSyncEngineForTests(fake: unknown): void {
+  detachRuntime()
+  engine = (fake ?? null) as unknown as SyncEngine | null
 }
 
 function getLastError(): { code: string; message: string } | null {
