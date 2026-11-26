@@ -1306,10 +1306,27 @@ function scopeFromSync(scope: Record<string, unknown> | undefined): {
 } {
   const raw = (scope ?? {}) as Record<string, unknown>
   const deckUidValue = typeof raw.deck_uid === 'string' ? raw.deck_uid : null
-  const { deck_uid: _ignored, ...rest } = raw
+  const {
+    deck_uid: _ignoredDeck,
+    note_uids: rawNoteUids,
+    item_uids: rawItemUids,
+    noteIds: _ignoredNoteIds,
+    itemIds: _ignoredItemIds,
+    ...rest
+  } = raw
+  // A-06：远端带来的是 uid；旧版发过来的 noteIds/itemIds 是**对方机器的整数 id**，
+  // 直接用会指到本机的无关笔记，这里一律丢掉（等对方升级后重写 scope 就会自愈）。
   const out: ExamScope = { ...(rest as ExamScope) }
   const deckId = deckIdByUid(deckUidValue)
   if (deckId) out.deckId = deckId
+  const noteIds = (Array.isArray(rawNoteUids) ? rawNoteUids : [])
+    .map((uid) => noteIdByUid(String(uid)))
+    .filter((id): id is number => !!id)
+  if (noteIds.length) out.noteIds = noteIds
+  const itemIds = (Array.isArray(rawItemUids) ? rawItemUids : [])
+    .map((uid) => itemIdByUid(String(uid)))
+    .filter((id): id is number => !!id)
+  if (itemIds.length) out.itemIds = itemIds
   return { scope: out, deckUidValue }
 }
 
