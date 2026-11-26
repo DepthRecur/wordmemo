@@ -36,7 +36,9 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
     /** null = 全部库 */
     deckId: null as number | null,
     scope: [] as number[],
-    allNotes: true
+    allNotes: true,
+    /** C-05②：按标签缩小范围（逗号分隔，空 = 不限） */
+    tags: ''
   })
 
   const loadExams = useCallback(async () => {
@@ -80,13 +82,18 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
   const create = async () => {
     try {
       const deckScope = form.deckId ? { deckId: form.deckId } : {}
+      const tags = form.tags
+        .split(/[,，、\s]+/)
+        .map((tag) => tag.trim())
+        .filter(Boolean)
+      const tagScope = tags.length ? { tags } : {}
       const id = await window.api.exams.create({
         title: form.title.trim() || '英语听写',
         examDate: form.examDate,
         scope:
           form.allNotes || form.scope.length === 0
-            ? deckScope
-            : { ...deckScope, noteIds: form.scope },
+            ? { ...deckScope, ...tagScope }
+            : { ...deckScope, ...tagScope, noteIds: form.scope },
         level: form.level,
         targetRetention: form.retention,
         dailyMinutes: form.minutes
@@ -349,6 +356,14 @@ export default function ExamPage({ notify, navigate, refreshStats, decks, deckId
               value={form.deckId}
               includeAll
               onChange={(id) => setForm({ ...form, deckId: id, scope: [] })}
+            />
+          </Field>
+          <Field label="按标签（可选）" hint="逗号分隔；与「范围」「范围库」都是与关系，留空表示不限">
+            <input
+              className="input"
+              value={form.tags}
+              placeholder="例如：课标, 第三单元"
+              onChange={(e) => setForm({ ...form, tags: e.target.value })}
             />
           </Field>
         </div>
