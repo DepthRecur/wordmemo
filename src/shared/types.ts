@@ -502,6 +502,24 @@ export interface SyncConnectInput {
   intervalMin?: number
 }
 
+/** 回收站一项（D-05 / schema v5）：删除时间 + 快照里的名字 */
+export interface DeletedEntry {
+  entity: 'note' | 'item' | 'deck' | 'exam'
+  uid: string
+  /** 删除时间（epoch ms） */
+  tsUtc: number
+  label: string
+  /** 有没有内容快照；没有的话只能显示、不能恢复 */
+  restorable: boolean
+  /** 不能恢复的原因 */
+  reason: string | null
+}
+
+export interface RestoreResult {
+  ok: boolean
+  message: string
+}
+
 export interface SyncActionResult {
   ok: boolean
   status: SyncStatus
@@ -890,6 +908,10 @@ export interface WordmemoApi {
     changePassphrase(passphrase: string): Promise<SyncActionResult>
     /** 最近 20 次同步记录 */
     log(): Promise<SyncLogEntry[]>
+    /** 回收站：最近的删除（最多 50 条，新的在前） */
+    deleted(): Promise<DeletedEntry[]>
+    /** 按原始 uid 恢复一条删除；只恢复本机删除且有内容快照的 */
+    restore(entity: string, uid: string): Promise<RestoreResult>
   }
   system: {
     openDataDir(): Promise<void>

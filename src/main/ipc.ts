@@ -30,6 +30,7 @@ import { deleteItem, getItem, listItems, setDirection, updateItem } from './db/i
 import { applyReview, dailyPlan, markItemLearned } from './db/cards'
 import { createDeck, listDecks, removeDeck, updateDeck } from './db/decks'
 import { createExam, deleteExam, listExams, updateExam } from './db/exams'
+import { listDeleted, restoreDeleted } from './db/trash'
 import { buildExamPlan } from './planner'
 import { dashboardStats } from './db/stats'
 import { ingestFile } from './importers/ingest'
@@ -486,6 +487,9 @@ export function registerIpc(): void {
     changeSyncPassphrase(passphrase)
   )
   ipcMain.handle('sync:log', () => getSyncLog())
+  // D-05 回收站：只列有内容快照的本机删除，恢复时用原来的 uid
+  ipcMain.handle('sync:deleted', () => listDeleted(50))
+  ipcMain.handle('sync:restore', (_e, entity: string, uid: string) => restoreDeleted(entity, uid))
   ipcMain.handle('sync:export', async (_e, passphrase?: string) => {
     const picked = await dialog.showSaveDialog({
       title: '导出加密快照',
