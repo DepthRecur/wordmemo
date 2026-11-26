@@ -190,6 +190,8 @@ describe('传输引擎：两台设备对着假仓库同步', () => {
     expect(result.deviceId).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/)
     expect(files.has('meta.json')).toBe(true)
     expect([...files.keys()].some((key) => key.endsWith('/checkpoint.json.age'))).toBe(true)
+    // D-01：还要留一份月度归档（checkpoint-YYYYMM.json.age），保留策略见 checkpointKeep
+    expect([...files.keys()].some((key) => /\/checkpoint-\d{6}\.json\.age$/.test(key))).toBe(true)
     expect([...files.keys()].some((key) => key.endsWith('/info.json.age'))).toBe(true)
 
     const meta = JSON.parse(files.get('meta.json')!.content.toString('utf8'))

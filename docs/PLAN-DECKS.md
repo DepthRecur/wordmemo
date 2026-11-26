@@ -277,7 +277,7 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 
 ### 7.3 导入页（`ImportPage.tsx`）
 
-- 顶部「导入到：[库 ▾]」，默认记住上次选择（`settings.lastDeckId`）。
+- 顶部「导入到：[库 ▾]」，默认记住上次选择（**实际实现用 `settings.currentDeckId`**；计划里写的 `lastDeckId` 从未存在，`ImportPage` 直接读当前库）。
 - 草稿落盘时写入 `deck_id`；`commitDraft` / `commitAll` 按草稿的库入库，不再需要用户二次选。
 - 若用户在导入过程中切换库，只影响之后新解析的文件，已落盘草稿不变（横幅提示）。
 
@@ -435,6 +435,8 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 
 - 每库独立进度（备选方案 B）仍未做，`cards.deck_id` 不在本版。
 - 移到目标库的「待学 +N」预告、库数量 >10 的合并提示、搜索结果的库徽标样式，都可以后续补。
+
+> **2026-11-25 复核**：「待学 +N」预告与「>10 个库建议合并」都**不做**（用户几乎不会到 10 个库；预告需要给 `SUMMARY_SELECT` 加 `unlearned_count`，收益不足）。搜索结果的库徽标已经显示（`Notes.tsx` 的 `Badge`）。
 - **库颜色、按库汇总表：2026-11-19 决定不做**（理由见 HANDOFF §5.3）：颜色在库少时不如看名字、库多时相近色反而降低辨识；汇总表没有对应需求，每库计数已在库标签与设置页可见。
 - 迁移备份目前只留同名一份（`pre-migrate-v0.db`）；如果以后 SCHEMA_VERSION 继续升级，旧备份文件名会区分版本，正好各留一份。
 

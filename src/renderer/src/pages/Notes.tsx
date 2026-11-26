@@ -1030,7 +1030,7 @@ export default function Notes({
                     : '音标：暂无'}
                 </div>
                 <div className="hint" style={{ marginTop: 4 }}>
-                  音标只在词条详情显示，复习测验中不会出现。
+                  音标只在词条详情显示；复习卡上默认隐藏，需要时点「音标提示」再点一下。
                 </div>
               </div>
               <div className="row" style={{ marginLeft: 'auto' }}>

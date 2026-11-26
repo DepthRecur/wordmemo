@@ -119,6 +119,38 @@ export function recordTombstone(entity: SyncEntity, uid: string, tsUtc: number):
     .run(entity, uid, Math.trunc(tsUtc))
 }
 
+/**
+ * 删除影子保留 30 天（D-05 方案 B，PLAN-SYNC §3.9）。
+ *
+ * 影子表原先只增不减。这里在启动时清掉 30 天前的删除，**不提供恢复入口**：
+ * 表里只有 `entity / uid / ts_utc`，没有内容快照，恢复不出标题和词条
+ * （BACKLOG D-05 的结论：恢复要升 schema v5，留到后续版本）。
+ *
+ * 两条护栏：
+ * - 还没推出去的删除不清：否则对端那份旧快照会把内容重新带回来。
+ * - `now` 由调用方传入，测试可以自己定时间。
+ */
+export const TOMBSTONE_KEEP_DAYS = 30
+
+export function purgeOldTombstones(
+  now: number = Date.now(),
+  keepDays: number = TOMBSTONE_KEEP_DAYS
+): number {
+  const cutoff = Math.trunc(now - keepDays * 24 * 60 * 60 * 1000)
+  const result = getDb()
+    .prepare(
+      `DELETE FROM sync_tombstones
+        WHERE ts_utc < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM sync_ops o
+             WHERE o.origin = 'local' AND o.pushed = 0 AND o.op = 'delete'
+               AND o.entity = sync_tombstones.entity AND o.uid = sync_tombstones.uid
+          )`
+    )
+    .run(cutoff)
+  return toInt(result.changes)
+}
+
 export interface SyncTombstone {
   entity: SyncEntity
   uid: string

@@ -39,6 +39,52 @@ function op(entity: RemoteSyncOp['entity'], uid: string, fields: Record<string, 
 const NOTE_UID = '01JNOTE0000000000000000001'
 const ITEM_UID = '01JITEM0000000000000000001'
 
+describe('时钟夹取（A-03）', () => {
+  const itemFields = (headword: string): Record<string, unknown> => ({
+    kind: 'word',
+    headword,
+    pos: null,
+    phonetic: null,
+    meanings: [`${headword} 的释义`],
+    collocations: [],
+    examples: [],
+    extra: null,
+    accepted_zh: [],
+    learned_at: null,
+    created_at: '2026-11-26T08:00:00'
+  })
+
+  function lastOpTs(entity: string, uid: string): number {
+    const row = q<{ ts_utc: number }>(
+      'SELECT ts_utc FROM sync_ops WHERE entity = ? AND uid = ? ORDER BY seq DESC LIMIT 1',
+      entity,
+      uid
+    )[0]
+    return Number(row?.ts_utc ?? 0)
+  }
+
+  it('远端时间戳领先 2 小时：夹到 now+5 分钟，写进 sync_ops 的也是夹过的值', () => {
+    const uid = '01JITEM00000000000000SKEW01'
+    const future = Date.now() + 2 * 3_600_000
+    const before = Date.now()
+
+    expect(applyRemoteOp(op('item', uid, itemFields('skewed'), future), 'remote:skewed')).toBe(true)
+
+    const recorded = lastOpTs('item', uid)
+    // 没有被夹的话，字段时钟会留在 2 小时后，本机之后所有修改都输给它
+    expect(recorded).toBeLessThan(future)
+    expect(recorded).toBeLessThanOrEqual(before + 5 * 60_000 + 2_000)
+    expect(q('SELECT id FROM items WHERE uid = ?', uid).length).toBe(1)
+  })
+
+  it('正常范围内的远端时间戳不被改写', () => {
+    const uid = '01JITEM00000000000000SKEW02'
+    const normal = Date.now() - 60_000
+    expect(applyRemoteOp(op('item', uid, itemFields('normal'), normal), ORIGIN)).toBe(true)
+    expect(lastOpTs('item', uid)).toBe(normal)
+  })
+})
+
 describe('逐条 op 合并', () => {
   it('note → item → noteItem → review → cardFlag 依次落地', () => {
     expect(

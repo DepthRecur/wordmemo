@@ -10,11 +10,13 @@ import { checkPassphrase } from '@shared/passphrase'
 import { exportEncryptedSnapshot, importEncryptedSnapshot } from '../db/checkpoint'
 import { countPendingOps, getSyncState, onSyncOpWritten } from '../db/sync'
 import { getDb, localIso } from '../db/connection'
+import { log as logDiagnostic } from '../diagnostics'
 import { getSettings, updateSettings } from '../settings'
-import { SyncEngine, SyncSetupError } from './engine'
+import { SyncEngine, SyncCancelledError, SyncSetupError } from './engine'
 import { SyncApiError } from './github'
 import { loadSyncSecrets, saveSyncSecrets, clearSyncSecrets, type SyncSecrets } from './secretStore'
 import { SyncScheduler } from './scheduler'
+import { quotaState } from './quota'
 
 /**
  * 同步管理器：设置页 / 托盘只跟它打交道。
@@ -28,10 +30,19 @@ let statusSink: ((status: SyncStatus) => void) | null = null
 let engine: SyncEngine | null = null
 let scheduler: SyncScheduler | null = null
 let unsubscribeOps: (() => void) | null = null
-let running = false
+/**
+ * 正在进行的同步（A-01）。以前只用一个 `running` 布尔值，第二次调用直接 `return true`
+ * ——「正在同步」被当成了「同步成功」，界面会提示「已连接，并完成第一次同步」而其实一次没跑。
+ * 现在保存的是那一次运行的 promise：后来者**加入并等待**它，拿到的就是真实结果。
+ */
+let inFlight: Promise<boolean> | null = null
 let lastError: { code: string; message: string } | null = null
 /** 上一次成功同步应用/合并的条数：界面据此决定要不要重读库和列表 */
 let lastSyncChanges = 0
+/** 上一次同步被跳过的记录数（A-04）：>0 时界面给警告，别再静默吞掉 */
+let lastSyncSkipped = 0
+/** D-06：attach 时自增；旧 engine 用闭包里的 token 判断自己是否已作废 */
+let epoch = 0
 
 export function setSyncStatusSink(sink: (status: SyncStatus) => void): void {
   statusSink = sink
@@ -62,8 +73,11 @@ function configured(): boolean {
 export function buildStatus(): SyncStatus {
   const sync = getSettings().sync
   let state: SyncStatus['state'] = 'disconnected'
-  if (configured()) state = running ? 'syncing' : lastError ? 'error' : 'idle'
+  if (configured()) state = inFlight ? 'syncing' : lastError ? 'error' : 'idle'
   const syncState = getSyncState()
+  const quota = engine
+    ? quotaState(engine.rateLimit.remaining, engine.rateLimit.resetAt, Date.now())
+    : { paused: false, resumeAt: null }
   return {
     configured: configured(),
     enabled: sync.enabled,
@@ -76,12 +90,15 @@ export function buildStatus(): SyncStatus {
     deviceName: syncState.deviceName,
     lastSuccessAt: syncState.lastPullAt ?? syncState.lastPushAt ?? null,
     lastSyncChanges,
+    lastSyncSkipped,
     lastErrorCode: lastError?.code ?? null,
     lastErrorMessage: lastError?.message ?? null,
     pendingOps: countPendingOps(),
     lastPushAt: syncState.lastPushAt,
     lastPullAt: syncState.lastPullAt,
     rateLimitRemaining: engine?.rateLimit.remaining ?? null,
+    quotaPaused: quota.paused,
+    quotaResumeAt: quota.resumeAt ? new Date(quota.resumeAt).toISOString() : null,
     repoSizeKb: engine?.repositorySizeKb ?? null
   }
 }
@@ -89,16 +106,19 @@ export function buildStatus(): SyncStatus {
 function attach(secrets: SyncSecrets): void {
   const sync = getSettings().sync
   detachRuntime()
+  // D-06：每次 attach 拿一个新 epoch；detach 会让旧 engine 在下一个阶段边界停下
+  const token = ++epoch
   engine = new SyncEngine({
     owner: sync.owner,
     repo: sync.repo,
     token: secrets.token,
     passphrase: secrets.passphrase,
-    apiBase: sync.apiBase
+    apiBase: sync.apiBase,
+    shouldStop: () => token !== epoch
   })
   scheduler = new SyncScheduler({
     intervalMin: sync.intervalMin,
-    run: () => runSync(),
+    run: () => runSync({ auto: true }),
     onChange: emit
   })
   unsubscribeOps = onSyncOpWritten(() => scheduler?.markDirty())
@@ -106,6 +126,8 @@ function attach(secrets: SyncSecrets): void {
 }
 
 function detachRuntime(): void {
+  // 先作废在飞的同步：它会在下一个阶段边界抛 SyncCancelledError 停下（D-06）
+  epoch += 1
   scheduler?.dispose()
   scheduler = null
   unsubscribeOps?.()
@@ -151,9 +173,35 @@ function recordRun(record: RunRecord, ok: boolean, errorCode: string | null): vo
   }
 }
 
-async function runSync(): Promise<boolean> {
-  if (!engine || running) return true
-  running = true
+/**
+ * 跑一次同步。
+ * - 同一时刻只有一轮在跑：后来者**加入并等待那一轮**，拿到的是真实结果（不再假装成功）；
+ * - 没有引擎（没连接）时返回 false —— 以前这里返回 true，等于「没同步也算成功」。
+ */
+function runSync(options: { auto?: boolean } = {}): Promise<boolean> {
+  const target = engine
+  if (!target) return Promise.resolve(false)
+  if (inFlight) return inFlight
+  // D-02：额度快用完时只暂停「自动」同步；手动同步（syncNow / 退出前 flush）永远放行
+  if (options.auto) {
+    const quota = quotaState(target.rateLimit.remaining, target.rateLimit.resetAt, Date.now())
+    if (quota.paused) {
+      logDiagnostic('sync-quota-pause', {
+        remaining: target.rateLimit.remaining,
+        resumeAt: quota.resumeAt
+      })
+      emit()
+      return Promise.resolve(false)
+    }
+  }
+  const run: Promise<boolean> = doRunSync(target).finally(() => {
+    if (inFlight === run) inFlight = null
+  })
+  inFlight = run
+  return run
+}
+
+async function doRunSync(target: SyncEngine): Promise<boolean> {
   emit()
   const started = Date.now()
   const empty: RunRecord = {
@@ -166,15 +214,29 @@ async function runSync(): Promise<boolean> {
     appliedOps: 0
   }
   try {
-    const result = await engine.syncNow()
+    const result = await target.syncNow()
     lastError = null
-    lastSyncChanges =
-      result.appliedOps +
-      result.merged.reduce((sum, stats) => {
-        let total = 0
-        for (const value of Object.values(stats)) if (typeof value === 'number') total += value
-        return sum + total
-      }, 0)
+    // A-04：skipped 不是「成功的改动」，不能混进 lastSyncChanges（否则界面会把跳过的算成应用了）
+    let merged = 0
+    let skipped = 0
+    for (const stats of result.merged) {
+      for (const [key, value] of Object.entries(stats)) {
+        if (typeof value !== 'number') continue
+        if (key === 'skipped') skipped += value
+        else merged += value
+      }
+    }
+    lastSyncChanges = result.appliedOps + merged
+    lastSyncSkipped = skipped
+    if (skipped > 0) {
+      // 静默失败也要算账：写进诊断日志，并在状态里带出去
+      logDiagnostic('sync-skipped', {
+        skipped,
+        appliedOps: result.appliedOps,
+        merged,
+        peers: result.peers
+      })
+    }
     recordRun(
       {
         durationMs: Date.now() - started,
@@ -190,12 +252,14 @@ async function runSync(): Promise<boolean> {
     )
     return true
   } catch (error) {
+    // 被主动作废（断开连接/换密码）不是失败：不写进「上次同步失败」、也不算一次运行
+    if (error instanceof SyncCancelledError) return false
     lastError = describeError(error)
     lastSyncChanges = 0
+    lastSyncSkipped = 0
     recordRun({ ...empty, durationMs: Date.now() - started }, false, lastError.code)
     return false
   } finally {
-    running = false
     emit()
   }
 }
@@ -263,6 +327,8 @@ export async function connectSync(input: SyncConnectInput): Promise<SyncActionRe
     }
   })
   attach({ token: pat, passphrase: input.passphrase })
+  // 旧引擎那一轮可能还在跑：先等它结束，否则新的这轮会被并进旧运行、等于没同步
+  if (inFlight) await inFlight.catch(() => undefined)
   await runSync()
   const failure = getLastError()
   return {
@@ -283,12 +349,17 @@ export function disconnectSync(): SyncStatus {
   return buildStatus()
 }
 
-/** 手动同步：永远可用（受「正在进行」保护） */
+/** 手动同步：永远可用（已经在跑时如实告诉用户，不假装成功） */
 export async function syncNow(): Promise<SyncActionResult> {
   if (!configured() || !engine) return fail('not_configured', '还没有连接同步')
+  // 进去之前先看有没有一轮在跑：跑完之后的 lastError 是那一轮的结果，不能当成本次的
+  const joined = inFlight !== null
   if (scheduler) await scheduler.runNow()
   else await runSync()
   const failure = getLastError()
+  if (!failure && joined) {
+    return { ok: true, status: buildStatus(), message: '正在同步，完成后会自动刷新' }
+  }
   return {
     ok: !failure,
     status: buildStatus(),
@@ -350,19 +421,47 @@ export async function importSnapshotFrom(
 /** 退出前尽力推一次；最多等 timeoutMs（PLAN-SYNC §3.8） */
 export async function flushBeforeQuit(timeoutMs = 3000): Promise<void> {
   if (!engine) return
-  const deadline = new Promise<void>((resolve) => setTimeout(resolve, timeoutMs))
-  try {
-    await Promise.race([runSync().then(() => undefined), deadline])
-  } catch {
-    /* 退出路径上不抛错 */
+  const startedAt = Date.now()
+  const budget = (): number => Math.max(0, timeoutMs - (Date.now() - startedAt))
+  /** 在剩余预算内等一个 promise；超时就放弃（不抛错、不留定时器） */
+  const waitWithin = async (work: Promise<unknown>): Promise<void> => {
+    const left = budget()
+    if (left <= 0) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        work.then(
+          () => undefined,
+          () => undefined
+        ),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, left)
+        })
+      ])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
+  // 已经有一轮在跑：等它，而不是原来那样立刻返回、把这次的推送丢掉
+  await waitWithin(runSync())
+  // 那一轮跑完还有没推上去的，再抢一次（同一个预算）
+  if (engine && countPendingOps() > 0 && budget() > 250) await waitWithin(runSync())
 }
 
 /** 供测试/诊断：清掉内存状态（不删磁盘上的设置与密钥） */
 export function resetSyncManagerForTests(): void {
   detachRuntime()
-  running = false
+  inFlight = null
   lastError = null
+}
+
+/**
+ * 仅供测试：注入引擎替身，避免连真 GitHub。
+ * 传 `null` 清掉（同时会把调度器一起摘掉，测试里不要用它去模拟「已连接且有定时器」）。
+ */
+export function __setSyncEngineForTests(fake: unknown): void {
+  detachRuntime()
+  engine = (fake ?? null) as unknown as SyncEngine | null
 }
 
 function getLastError(): { code: string; message: string } | null {

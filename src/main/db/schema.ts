@@ -149,8 +149,9 @@ CREATE TABLE IF NOT EXISTS sync_ops (
 );
 CREATE INDEX IF NOT EXISTS ix_sync_ops_pending ON sync_ops(origin, pushed, seq);
 
--- 删除的影子表（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要有 ts 可比，
--- 顺带给 S3 的「最近 30 天删除可恢复」留底。一次删除一行，同 uid 保留最新的 ts。
+-- 删除的影子表（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要有 ts 可比。
+-- 一次删除一行，同 uid 保留最新的 ts；启动时清掉 30 天前的（purgeOldTombstones）。
+-- 只存 uid 和 ts、不存内容，所以**不提供恢复**（D-05 方案 B）。
 CREATE TABLE IF NOT EXISTS sync_tombstones (
   entity TEXT NOT NULL,
   uid TEXT NOT NULL,

@@ -367,6 +367,42 @@ export default function ImportPage({
     await handlePaths(paths)
   }
 
+  // F-06：截图后直接 Ctrl+V。粘贴的图片没有本地路径，先让主进程落成临时文件，再走同一个导入路径。
+  // 在输入框里粘贴文字不劫持（草稿的标题/词条编辑都要能正常粘贴）。
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+      ) {
+        return
+      }
+      const items = Array.from(event.clipboardData?.items ?? [])
+      const image = items.find((item) => item.type.startsWith('image/'))
+      if (!image) return
+      const file = image.getAsFile()
+      if (!file) return
+      event.preventDefault()
+      void (async () => {
+        try {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(String(reader.result ?? ''))
+            reader.onerror = () => reject(reader.error ?? new Error('读取剪贴板图片失败'))
+            reader.readAsDataURL(file)
+          })
+          const saved = await window.api.importer.savePastedImage(dataUrl)
+          await handlePaths([saved])
+        } catch (error) {
+          notify(`粘贴图片失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+        }
+      })()
+    }
+    window.addEventListener('paste', onPaste)
+    return () => window.removeEventListener('paste', onPaste)
+  }, [handlePaths])
+
   /** 拖拽与点击添加共用：空状态的大上传区和有草稿时的「继续添加」卡片都走这里 */
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()

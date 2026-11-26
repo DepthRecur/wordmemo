@@ -578,7 +578,16 @@ export default function App() {
         ) : nav.route === 'stats' ? (
           <StatsPage stats={stats} onRefresh={refreshStats} decks={decks} deckId={deckId} />
         ) : (
-          <SettingsPage {...common} initialSection={nav.section} />
+          <SettingsPage
+            {...common}
+            initialSection={nav.section}
+            onLibraryChanged={() => {
+              // C-02：设置页里改了库（建/改名/删/移动）之后，笔记库列表的缓存与统计都要重读
+              setLibraryVersion((v) => v + 1)
+              void refreshDecks()
+              void refreshStats()
+            }}
+          />
         )}
       </main>
 

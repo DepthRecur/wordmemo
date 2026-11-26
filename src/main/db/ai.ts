@@ -4,6 +4,17 @@ import { getDb, localIso, parseJson } from './connection'
 export type CostSource = 'provider' | 'catalog' | 'snapshot' | 'none'
 
 /**
+ * 清空 AI 回答缓存（B-02）。
+ *
+ * P-07 已决定「缓存键不含 model、不做失效」，所以换个模型仍然会命中旧答案——
+ * 这是有意的取舍，但用户至少要能自救一次。返回删掉的条数。
+ */
+export function clearAiCache(): number {
+  const info = getDb().prepare('DELETE FROM ai_cache').run()
+  return Number(info.changes ?? 0)
+}
+
+/**
  * 缓存的键带 provider：A 家的答案不能被当成 B 家的。
  * 唯一键是 (provider, kind, cache_key)（P2 起；老库在 migrate 里重建过表）。
  */

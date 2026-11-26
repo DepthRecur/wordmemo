@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, Database, FolderOpen, Volume2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Database, FileText, FolderOpen, Volume2 } from 'lucide-react'
 import type {
   AiPriceInfo,
   AiProviderConfig,
@@ -44,6 +44,8 @@ interface Props {
   deckId: number | null
   setDeck: (id: number) => Promise<void>
   refreshDecks: () => Promise<Deck[]>
+  /** C-02：库变了（建/改名/删/移动）之后通知外层，让笔记库列表丢掉缓存、统计重读 */
+  onLibraryChanged?: () => void
   /** 从别的页面跳进来时直接打开的分区（如「笔记库」） */
   initialSection?: string
 }
@@ -137,6 +139,7 @@ export default function SettingsPage({
   deckId,
   setDeck,
   refreshDecks,
+  onLibraryChanged,
   initialSection
 }: Props) {
   const [draft, setDraft] = useState<Settings>(settings)
@@ -349,6 +352,34 @@ export default function SettingsPage({
     }
   }
 
+  const clearAnswerCache = async () => {
+    if (
+      !window.confirm(
+        '清空 AI 回答缓存？\n清空后同样的内容会重新请求 AI（会消耗 token）。\n\n' +
+          '提示：缓存键不含模型，所以换了模型也可能会复用旧答案；想拿到新答案就清一次。'
+      )
+    ) {
+      return
+    }
+    try {
+      const removed = await window.api.settings.clearAiCache()
+      notify(`已清空 ${removed} 条 AI 缓存`, 'ok')
+      await loadInfo()
+    } catch (error) {
+      notify(`清空缓存失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+    }
+  }
+
+  const exportDiagnostics = async () => {
+    try {
+      const res = await window.api.system.exportDiagnostics()
+      if (!res.ok || !res.path) return
+      notify(`已导出诊断信息：${res.path}`, 'ok')
+    } catch (error) {
+      notify(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+    }
+  }
+
   const refreshPricingNow = async () => {
     setPricingBusy(true)
     try {
@@ -439,6 +470,8 @@ export default function SettingsPage({
       if (!handled.length) return
       // 先刷新拿到新值，再清草稿：否则输入框会闪一下旧值
       await refreshDecks()
+      // 改名/改额度之后，笔记库列表里的库名与「待学」也要跟着变（C-02）
+      onLibraryChanged?.()
       setDeckDrafts((prev) => {
         const next = { ...prev }
         for (const id of handled) delete next[id]
@@ -471,6 +504,7 @@ export default function SettingsPage({
       const id = await window.api.decks.create({ name })
       setNewDeckName('')
       await refreshDecks()
+      onLibraryChanged?.()
       // 从「一个库都没有」建起来的：顺手设为当前库，别让托盘/导入还在 0 上
       if (wasEmpty) await setDeck(id)
       notify(`已创建「${name}」`, 'ok')
@@ -496,9 +530,9 @@ export default function SettingsPage({
         }
       }
       await refreshDecks()
+      onLibraryChanged?.()
     } catch (err) {
-      notify(`调整顺序失败：${err instanceof Error ? err.message : String(err)}`, 'err')
-    } finally {
+      notify(`调整顺序失败：${err instanceof Error ? err.message : String(err)}`, 'err')    } finally {
       setDeckBusy(false)
     }
   }
@@ -517,6 +551,8 @@ export default function SettingsPage({
       const removedCurrent = deckId === deleteDeck.id
       const res = await window.api.decks.remove(deleteDeck.id, target)
       const next = await refreshDecks()
+      // 删库/合并之后：笔记库列表可能还缓存着旧行与旧库名，这里强制失效（C-02）
+      onLibraryChanged?.()
       // 统计按删除后的当前库刷新（D-07）；删的是当前库时目标库由主进程决定，可能为 null
       void refreshStats(removedCurrent ? target : undefined)
       if (removedCurrent) {
@@ -678,6 +714,9 @@ export default function SettingsPage({
             <Badge tone={providers.some((p) => p.keySet) ? 'green' : 'yellow'}>
               {providers.filter((p) => p.keySet).length} / {providers.length || 4} 家已配置
             </Badge>
+            <Button size="sm" variant="ghost" onClick={() => void clearAnswerCache()}>
+              清空回答缓存
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => void clearAllKeys()}>
               清除全部 Key
             </Button>
@@ -1205,6 +1244,9 @@ export default function SettingsPage({
               <Button onClick={() => void backup()}>立即备份</Button>
               <Button onClick={() => void window.api.system.openDataDir()}>
                 <FolderOpen size={15} /> 打开数据目录
+              </Button>
+              <Button onClick={() => void exportDiagnostics()}>
+                <FileText size={15} /> 导出诊断
               </Button>
             </div>
             <div className="row-between" style={{ marginTop: 8 }}>

@@ -1,4 +1,4 @@
-﻿export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
+export type ItemKind = 'word' | 'phrase' | 'sentence' | 'grammar'
 export type CardDirection = 'en2zh' | 'zh2en' | 'listen2en'
 export type JudgeSource = 'exact' | 'variant' | 'local' | 'ai' | 'manual' | 'giveup'
 export type ReviewMode = 'longterm' | 'exam' | 'learn'
@@ -453,12 +453,18 @@ export interface SyncStatus {
   lastSuccessAt: string | null
   /** 上一次成功同步实际应用/合并的改动条数（>0 时界面要把库/笔记/统计重新读一遍） */
   lastSyncChanges: number
+  /** 上一次同步里「解不开、找不到对应行」而跳过的记录数（>0 时界面给一条警告，MESSAGES 硬规则 2） */
+  lastSyncSkipped: number
   lastErrorCode: string | null
   lastErrorMessage: string | null
   pendingOps: number
   lastPushAt: string | null
   lastPullAt: string | null
   rateLimitRemaining: number | null
+  /** D-02：额度快用完时自动同步暂停（手动同步不受影响） */
+  quotaPaused: boolean
+  /** 额度重置时间（ISO）；null = 不知道 */
+  quotaResumeAt: string | null
   /** 远端仓库体积（KB；GitHub 的 size 字段），超过 200 MB 时界面提醒 */
   repoSizeKb: number | null
 }
@@ -734,6 +740,8 @@ export interface WordmemoApi {
     clearApiKey(provider?: AiProviderId): Promise<void>
     /** 清掉全部 Key（含旧的 secrets.bin） */
     clearAllApiKeys(): Promise<void>
+    /** 清空 AI 回答缓存（换个模型后想拿到新答案时用）；返回删掉的条数 */
+    clearAiCache(): Promise<number>
     testApiKey(provider?: AiProviderId, key?: string): Promise<AiTestResult>
     /** 设置页四张卡片的只读视图（不含 Key） */
     aiProviders(): Promise<AiSettingsInfo>
@@ -787,6 +795,8 @@ export interface WordmemoApi {
   }
   importer: {
     pickFiles(): Promise<string[]>
+    /** 粘贴进来的图片没有本地路径：先把 data URL 落成临时文件，返回路径（F-06） */
+    savePastedImage(dataUrl: string): Promise<string>
     /** 传入本地绝对路径：解析 + AI 校验后立刻落盘成草稿，返回草稿 id；deckId = 这份草稿入库时进的库 */
     parse(paths: string[], deckId?: number): Promise<ImportResult[]>
     /** 未入库草稿摘要列表（不含 payload，可以放心一次拉全） */
@@ -884,6 +894,8 @@ export interface WordmemoApi {
   system: {
     openDataDir(): Promise<void>
     backup(): Promise<string>
+    /** 把版本/沙箱状态/日志末尾打成 txt（取消时 path=null） */
+    exportDiagnostics(): Promise<{ ok: boolean; path: string | null }>
     appVersion(): Promise<string>
     buildInfo(): Promise<BuildInfo>
     /** 只刷新渲染层（主进程不重启） */

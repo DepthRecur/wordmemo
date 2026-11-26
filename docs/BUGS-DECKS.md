@@ -25,7 +25,7 @@
 - **D-02**：`removeDeck` 现在同步 `import_drafts.deck_id`（移到目标库；删最后一个库时置 0）。
 - **D-05**：`removeDeck` 现在同步 `settings.currentDeckId`（指向被删库时改为目标库；没有库时写 0，`settings.ts` 已允许 0）。
 - **D-07**：`SettingsPage.removeDeckRow` 成功后调用 `refreshStats()`。
-- **D-03**：笔记库列表的「到期」列已在 2026-11-20 删除，界面症状消失；`SUMMARY_SELECT` 里的 `due_count` 还留着但没人显示。如果以后还要用这一列，先按本条的计数口径修。
+- **D-03**：笔记库列表的「到期」列已在 2026-11-20 删除，界面症状消失；`SUMMARY_SELECT` 里的 `due_count`、`NoteSummary.dueCount` 与相应子查询也已在同一次修改里**全部删除**（2026-11-26 核对：`notes.ts` 与 `types.ts` 里都不再有它）。如果以后还要恢复这一列，先按本条的计数口径修。
 
 ---
 

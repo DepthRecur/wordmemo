@@ -1,4 +1,4 @@
-﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiBudgetNotice,
   DeckInput,
@@ -24,6 +24,7 @@ const api: WordmemoApi = {
     setApiKey: (provider, key) => ipcRenderer.invoke('settings:setApiKey', provider, key),
     clearApiKey: (provider) => ipcRenderer.invoke('settings:clearApiKey', provider),
     clearAllApiKeys: () => ipcRenderer.invoke('settings:clearAllApiKeys'),
+    clearAiCache: () => ipcRenderer.invoke('settings:clearAiCache'),
     testApiKey: (provider, key) => ipcRenderer.invoke('settings:testApiKey', provider, key),
     aiProviders: () => ipcRenderer.invoke('settings:aiProviders'),
     refreshCatalog: (provider, force) =>
@@ -79,7 +80,8 @@ const api: WordmemoApi = {
     draftBytes: () => ipcRenderer.invoke('importer:draftBytes'),
     draftIssues: () => ipcRenderer.invoke('importer:draftIssues'),
     draftThumb: (id: number) => ipcRenderer.invoke('importer:draftThumb', id),
-    pathForFile: (file: File) => webUtils.getPathForFile(file)
+    pathForFile: (file: File) => webUtils.getPathForFile(file),
+    savePastedImage: (dataUrl: string) => ipcRenderer.invoke('importer:savePastedImage', dataUrl)
   },
   review: {
     daily: (deckId?: number | null) => ipcRenderer.invoke('review:daily', deckId),
@@ -138,6 +140,7 @@ const api: WordmemoApi = {
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),
     backup: () => ipcRenderer.invoke('system:backup'),
+    exportDiagnostics: () => ipcRenderer.invoke('system:exportDiagnostics'),
     appVersion: () => ipcRenderer.invoke('system:appVersion'),
     buildInfo: () => ipcRenderer.invoke('system:buildInfo'),
     reloadWindow: () => ipcRenderer.invoke('system:reloadWindow'),

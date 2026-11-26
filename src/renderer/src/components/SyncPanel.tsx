@@ -115,7 +115,7 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
         setPat('')
         setPassphrase('')
         setShowConnect(false)
-        notify('已连接，并完成第一次同步', 'ok')
+        notify(result.message ?? '已连接，并完成第一次同步', 'ok')
         await refreshSettings()
       } else {
         notify(result.message ?? '连接失败', 'err')
@@ -132,7 +132,7 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
     try {
       const result: SyncActionResult = await window.api.sync.now()
       setStatus(result.status)
-      if (result.ok) notify('已同步', 'ok')
+      if (result.ok) notify(result.message ?? '已同步', 'ok')
       else notify(result.message ?? '同步失败', 'err')
     } catch (error) {
       notify(`同步失败：${error instanceof Error ? error.message : String(error)}`, 'err')
@@ -353,6 +353,18 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
             {status.state === 'error' && status.lastErrorMessage && (
               <div className="hint" style={{ color: 'var(--red)' }}>
                 {status.lastErrorMessage}
+              </div>
+            )}
+            {status.lastSyncSkipped > 0 && (
+              <div className="hint" style={{ color: 'var(--yellow)' }}>
+                上次同步有 {status.lastSyncSkipped} 条记录没能合并（已跳过），详见诊断日志。
+              </div>
+            )}
+            {status.quotaPaused && (
+              <div className="hint" style={{ color: 'var(--yellow)' }}>
+                GitHub 额度快用完了，已暂停自动同步
+                {status.quotaResumeAt ? `（约 ${timeText(status.quotaResumeAt)} 之后恢复）` : ''}
+                ；期间仍可以点「立即同步」。
               </div>
             )}
             <div className="row" style={{ flexWrap: 'wrap' }}>

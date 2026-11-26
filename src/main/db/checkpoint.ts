@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import type { ExamScope, Example } from '@shared/types'
 import { normalizeEn } from '@shared/normalize'
 import { getDb, localIso, parseJson, toInt, toNum, tx } from './connection'
+import { log as logDiagnostic } from '../diagnostics'
 import { ensureCards } from './items'
 import { scopeForSync } from './exams'
 import { newCardSnapshot, replayCard } from '../fsrs'
@@ -715,8 +716,34 @@ function replayLocalCard(cardId: number): void {
  * 把一份快照合并进本机库。整份一个事务：中途失败全部回滚，不会留下半合并状态。
  * 重复导入同一份快照不会产生任何变化（字段时钟挡住，见文件顶部说明）。
  */
+/** 远端时间戳最多可以领先本机多久（PLAN-SYNC §7 的「时钟夹取 ±5 分钟」） */
+const CLOCK_SKEW_LIMIT_MS = 5 * 60_000
+let lastSkewLoggedAt = 0
+
+/**
+ * 夹取远端时间戳（A-03）。
+ *
+ * 一台系统时间快几小时的机器，写下的字段会**永久**赢掉字段级 LWW，另一台的真实修改被静默覆盖。
+ * 夹到「本机 now + 5 分钟」= 它只赢这一轮；等它把时钟改回来，后续修改照常按时间先后合并。
+ * 代价（有意接受）：那台设备领先期间，本机对**同一个字段**的修改最多 5 分钟内可能被它再压过一次。
+ *
+ * **必须夹在 ts 的推导点**（`op.tsUtc` / `checkpoint.createdAtMs`），不能只在比较时夹：
+ * 合并写回会把这个 ts 记进 `sync_ops`，字段时钟就跟着留在未来，本机之后的修改会一直输给它。
+ */
+function clampRemoteTs(ts: number): number {
+  const now = Date.now()
+  const limit = now + CLOCK_SKEW_LIMIT_MS
+  if (ts <= limit) return ts
+  // 一份快照/一批 op 会连着走很多次，这里限流，一分钟最多记一条
+  if (now - lastSkewLoggedAt > 60_000) {
+    lastSkewLoggedAt = now
+    logDiagnostic('sync-clock-skew', { remoteTs: ts, clampedTo: limit, aheadMs: ts - now })
+  }
+  return limit
+}
+
 export function mergeCheckpoint(checkpoint: SyncCheckpoint): MergeStats {
-  const ts = toInt(checkpoint.createdAtMs) || Date.now()
+  const ts = clampRemoteTs(toInt(checkpoint.createdAtMs) || Date.now())
   const origin = `remote:${checkpoint.deviceId || 'unknown'}`
   const stats = emptyStats()
   clockCache.clear()
@@ -1279,10 +1306,27 @@ function scopeFromSync(scope: Record<string, unknown> | undefined): {
 } {
   const raw = (scope ?? {}) as Record<string, unknown>
   const deckUidValue = typeof raw.deck_uid === 'string' ? raw.deck_uid : null
-  const { deck_uid: _ignored, ...rest } = raw
+  const {
+    deck_uid: _ignoredDeck,
+    note_uids: rawNoteUids,
+    item_uids: rawItemUids,
+    noteIds: _ignoredNoteIds,
+    itemIds: _ignoredItemIds,
+    ...rest
+  } = raw
+  // A-06：远端带来的是 uid；旧版发过来的 noteIds/itemIds 是**对方机器的整数 id**，
+  // 直接用会指到本机的无关笔记，这里一律丢掉（等对方升级后重写 scope 就会自愈）。
   const out: ExamScope = { ...(rest as ExamScope) }
   const deckId = deckIdByUid(deckUidValue)
   if (deckId) out.deckId = deckId
+  const noteIds = (Array.isArray(rawNoteUids) ? rawNoteUids : [])
+    .map((uid) => noteIdByUid(String(uid)))
+    .filter((id): id is number => !!id)
+  if (noteIds.length) out.noteIds = noteIds
+  const itemIds = (Array.isArray(rawItemUids) ? rawItemUids : [])
+    .map((uid) => itemIdByUid(String(uid)))
+    .filter((id): id is number => !!id)
+  if (itemIds.length) out.itemIds = itemIds
   return { scope: out, deckUidValue }
 }
 
@@ -1511,8 +1555,10 @@ export interface RemoteSyncOp {
  * 只是粒度是「这条 op 带着的字段」。返回是否真的改动了本机数据。
  */
 export function applyRemoteOp(op: RemoteSyncOp, origin: string): boolean {
-  const ts = toInt(op.tsUtc)
-  if (!op.uid || !ts) return false
+  const rawTs = toInt(op.tsUtc)
+  if (!op.uid || !rawTs) return false
+  // 夹取必须在推导点做（见 clampRemoteTs 的说明）：后面 recordSyncOp 会把同一个 ts 记进 sync_ops
+  const ts = clampRemoteTs(rawTs)
   const f = op.fields ?? {}
 
   if (op.op === 'delete') {

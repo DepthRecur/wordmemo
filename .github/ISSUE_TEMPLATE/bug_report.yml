@@ -1,0 +1,59 @@
+name: Bug 报告
+description: 报告一个可复现的问题（请先把「诊断信息」导出来）
+title: '[bug] '
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        谢谢反馈。请尽量把下面填完——少了版本、系统与日志，我基本没法定位。
+        里面不要贴 API Key、同步密码或 PAT。
+  - type: input
+    id: version
+    attributes:
+      label: WordMemo 版本
+      description: 设置 → 高级与诊断 → 版本（或右下角 vX.Y.Z）
+      placeholder: 0.6.0
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: 系统
+      description: Windows 版本 / 是否在虚拟机 / 是否装了杀毒或电子教室类软件
+      placeholder: Windows 10 22H2，装了 360
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 从打开应用到出问题，按顺序写；能稳定复现最好
+      placeholder: |
+        1. 打开 导入笔记
+        2. 拖入一张手机拍的图
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望的结果 / 实际的结果
+      placeholder: 期望导入成功；实际提示「识别失败」。
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 诊断信息
+      description: 设置 → 高级与诊断 →「导出诊断」，把生成的 txt 拖进来（已含版本、沙箱状态与日志末尾 300 行）
+      placeholder: 把 wordmemo-diagnostics-*.txt 拖到这里
+    validations:
+      required: false
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 诊断信息与截图里没有 API Key、同步密码或 GitHub PAT
+          required: true

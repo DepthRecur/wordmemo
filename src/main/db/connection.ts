@@ -7,15 +7,48 @@ import { dedupeItems } from './dedupe'
 
 let db: SqliteDatabase | null = null
 
+/**
+ * 数据库版本比这个程序新（旧版本打开了新版的库）。
+ * PLAN-UPDATE §3.4-4 的红线：必须拒绝，不能「硬跑」——旧代码读到不认识的表结构会静默写坏数据，
+ * 而且 migrate() 会把 user_version 改回旧值，让下次新版再迁移一遍。
+ */
+export class DatabaseTooNewError extends Error {
+  readonly dbVersion: number
+  readonly supportedVersion: number
+  constructor(dbVersion: number, supportedVersion: number) {
+    super(`数据库版本是 ${dbVersion}，本程序只支持到 ${supportedVersion}；请升级 WordMemo 后再打开。`)
+    this.name = 'DatabaseTooNewError'
+    this.dbVersion = dbVersion
+    this.supportedVersion = supportedVersion
+  }
+}
+
 export function openDb(file: string): SqliteDatabase {
-  db = new DatabaseSync(file, { timeout: 8000 })
+  const opened = new DatabaseSync(file, { timeout: 8000 })
+  db = opened
   txDepth = 0
-  db.exec('PRAGMA journal_mode = WAL')
-  db.exec('PRAGMA foreign_keys = ON')
-  db.exec('PRAGMA synchronous = NORMAL')
-  db.exec(SCHEMA)
-  migrate(db)
-  return db
+  try {
+    opened.exec('PRAGMA journal_mode = WAL')
+    opened.exec('PRAGMA foreign_keys = ON')
+    opened.exec('PRAGMA synchronous = NORMAL')
+    // 先看版本再跑 SCHEMA/迁移：新库上任何写操作都不该发生
+    const version = toInt(
+      (opened.prepare('PRAGMA user_version').get() as { user_version?: number } | undefined)?.user_version
+    )
+    if (version > SCHEMA_VERSION) throw new DatabaseTooNewError(version, SCHEMA_VERSION)
+    opened.exec(SCHEMA)
+    migrate(opened)
+    return opened
+  } catch (error) {
+    // 打不开就别留着句柄（Windows 上会锁住文件，用户连备份都拷不走）
+    db = null
+    try {
+      opened.close()
+    } catch {
+      /* ignore */
+    }
+    throw error
+  }
 }
 
 function migrate(database: SqliteDatabase): void {

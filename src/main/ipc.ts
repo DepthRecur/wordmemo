@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
@@ -41,6 +41,7 @@ import { enrichNote } from './enrich'
 import { semanticSearch } from './search'
 import { lookupPhonetic } from './media/phonetic'
 import { getDb } from './db/connection'
+import { clearAiCache } from './db/ai'
 import { testApiKey } from './ai/client'
 import { muteBudgetNotice } from './ai/budget'
 import { aiSettingsInfo } from './ai/info'
@@ -123,6 +124,8 @@ export function registerIpc(): void {
     clearAllApiKeys()
     updateSettings({})
   })
+  // B-02：P-07 决定缓存键不含 model，换模型会复用旧答案；这里给用户一个自救入口
+  ipcMain.handle('settings:clearAiCache', () => clearAiCache())
   ipcMain.handle('settings:testApiKey', (_e, provider?: string, key?: string) =>
     testApiKey(asProviderId(provider), typeof key === 'string' ? key : undefined)
   )
@@ -255,6 +258,18 @@ export function registerIpc(): void {
     // 含 … 表示词组里有单词没查到，只作为本次提示，不写回词条，下次可重试
     if (phonetic && !phonetic.includes('…')) updateItem(item.id, { phonetic })
     return phonetic
+  })
+
+  // F-06：粘贴进来的图片没有本地路径（webUtils 拿不到），先落成临时文件再走同一条导入路径
+  ipcMain.handle('importer:savePastedImage', (_e, dataUrl: string) => {
+    const match = /^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''))
+    if (!match) throw new Error('只接受 PNG / JPEG 图片')
+    const ext = match[1] === 'png' ? 'png' : 'jpg'
+    const dir = path.join(app.getPath('temp'), 'wordmemo-paste')
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`)
+    fs.writeFileSync(file, Buffer.from(match[2], 'base64'))
+    return file
   })
 
   ipcMain.handle('importer:pickFiles', async () => {
@@ -397,6 +412,40 @@ export function registerIpc(): void {
     return target
   })
   ipcMain.handle('system:appVersion', () => app.getVersion())
+  // F-04：把诊断信息打成一个 txt，用户直接发给我排错（日志本身已轮转，不会无限长）
+  ipcMain.handle('system:exportDiagnostics', async () => {
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .slice(0, 19)
+    const picked = await dialog.showSaveDialog({
+      title: '导出诊断信息',
+      defaultPath: `wordmemo-diagnostics-${stamp}.txt`,
+      filters: [{ name: '文本文件', extensions: ['txt'] }]
+    })
+    if (picked.canceled || !picked.filePath) return { ok: false, path: null as string | null }
+    const parts: string[] = []
+    parts.push(`WordMemo 诊断信息  ${new Date().toISOString()}`)
+    parts.push(`版本            ${app.getVersion()}`)
+    parts.push(`平台            ${process.platform} ${process.arch}`)
+    parts.push(`数据目录        ${dataDir()}`)
+    try {
+      parts.push(`运行状态        ${JSON.stringify(getDiagnostics())}`)
+    } catch {
+      /* ignore */
+    }
+    for (const name of ['diagnostics.log.1', 'diagnostics.log']) {
+      const file = path.join(dataDir(), name)
+      if (!fs.existsSync(file)) continue
+      parts.push('', `=== ${name}（末尾 300 行）===`)
+      // 只取末尾：日志可能已经有 2 MB
+      const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
+      parts.push(...lines.slice(-300))
+    }
+    fs.writeFileSync(picked.filePath, parts.join('\n'), 'utf8')
+    return { ok: true, path: picked.filePath }
+  })
   ipcMain.handle('system:buildInfo', () => {
     let buildTime: string | null = null
     try {

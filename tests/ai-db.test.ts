@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DatabaseSync } from '../src/main/db/sqlite'
 import { closeDb, getDb, openDb } from '../src/main/db/connection'
-import { getAiCache, logAiUsage, monthAiCost, setAiCache } from '../src/main/db/ai'
+import { clearAiCache, getAiCache, logAiUsage, monthAiCost, setAiCache } from '../src/main/db/ai'
 
 const dirs: string[] = []
 
@@ -91,6 +91,27 @@ describe('ai_cache / ai_usage 的 provider 维度', () => {
     const month = monthAiCost()
     expect(month.calls).toBe(2)
     expect(month.cost).toBeCloseTo(0.75, 10)
+  })
+
+  it('清空回答缓存（B-02）：删光、返回条数，用量记录不受影响', () => {
+    openDb(tmpDb())
+    setAiCache('deepseek', 'judge', 'k1', 'deepseek-flash', '{"ok":1}')
+    setAiCache('openai', 'judge', 'k2', 'gpt-x', '{"ok":2}')
+    logAiUsage({
+      provider: 'deepseek',
+      kind: 'judge',
+      model: 'm',
+      promptTokens: 1,
+      cachedTokens: 0,
+      completionTokens: 1,
+      costUsd: 0.01
+    })
+
+    expect(clearAiCache()).toBe(2)
+    expect(getAiCache('deepseek', 'judge', 'k1')).toBeNull()
+    expect(getAiCache('openai', 'judge', 'k2')).toBeNull()
+    // 用量是账本，不能跟着缓存一起清
+    expect(monthAiCost().calls).toBe(1)
   })
 
   it('老库迁移：补上 provider 列，并把已有行回填 deepseek', () => {

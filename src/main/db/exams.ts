@@ -1,6 +1,6 @@
 import type { Exam, ExamInput, ExamScope } from '@shared/types'
 import { getDb, localIso, parseJson, toInt, toNum } from './connection'
-import { deckUid, examUid, withSync } from './sync'
+import { deckUid, examUid, itemUid, noteUid, withSync } from './sync'
 import { newUid } from './uid'
 
 interface ExamRow {
@@ -43,12 +43,19 @@ export function getExam(id: number): Exam | null {
 }
 
 /**
- * 考试范围的同步形态：`scope.deckId` 是本机的库 id，不能出网，换成 `deck_uid`。
- * 落在本机的字段仍然用 deckId（查询路径不变）。
+ * 考试范围的同步形态：`scope.deckId` / `noteIds` / `itemIds` 都是**本机整数 id**，
+ * 不能出网（A-06：以前只换了 deckId，另外两个原样发出去，另一台就指向它自己的无关笔记）。
+ * 落在本机的字段仍然用本机 id（查询路径不变）。
  */
 export function scopeForSync(scope: ExamScope): Record<string, unknown> {
-  const { deckId, ...rest } = scope
-  return deckId === undefined ? rest : { ...rest, deck_uid: deckUid(deckId) }
+  const { deckId, noteIds, itemIds, ...rest } = scope
+  const out: Record<string, unknown> = { ...rest }
+  if (deckId !== undefined) out.deck_uid = deckUid(deckId)
+  const noteUids = (noteIds ?? []).map((id) => noteUid(id)).filter((uid): uid is string => !!uid)
+  if (noteUids.length) out.note_uids = noteUids
+  const itemUids = (itemIds ?? []).map((id) => itemUid(id)).filter((uid): uid is string => !!uid)
+  if (itemUids.length) out.item_uids = itemUids
+  return out
 }
 
 export function createExam(input: ExamInput): number {

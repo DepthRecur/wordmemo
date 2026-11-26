@@ -1,4 +1,4 @@
-﻿import {
+import {
   applyRemoteOps,
   exportCheckpoint,
   mergeCheckpoint,
@@ -20,6 +20,7 @@ import {
   DEFAULT_SCRYPT_WORK_FACTOR
 } from './crypto'
 import { GitHubClient, SyncApiError } from './github'
+import { monthStamp, pickObsoleteArchives } from './checkpointKeep'
 
 /**
  * 同步引擎（PLAN-SYNC S2）：一次 `syncNow()` = 连上仓库 → 推本地变更 → 拉别的设备。
@@ -60,6 +61,19 @@ export interface SyncSettings {
   apiBase?: string
   /** 测试用：把 age 的 scrypt work factor 调低；生产不传 */
   workFactor?: number
+  /**
+   * 返回 true 表示「这次同步已经作废」（D-06：用户断开连接/换密码时）。
+   * 在每个阶段之间检查一次，让在飞的同步尽早停下，而不是继续写远端。
+   */
+  shouldStop?: () => boolean
+}
+
+/** 同步被主动作废（断开连接/换密码）：不是错误，不该出现在「上次同步失败」里 */
+export class SyncCancelledError extends Error {
+  constructor() {
+    super('同步已取消')
+    this.name = 'SyncCancelledError'
+  }
 }
 
 export interface MetaFile {
@@ -118,6 +132,10 @@ function cacheUpdatedAt(path: string): number {
   return Number.isFinite(ts) ? ts : 0
 }
 
+function cacheDrop(path: string): void {
+  getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(path)
+}
+
 function dayRange(now = new Date()): { start: number; end: number; day: string } {
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   return {
@@ -164,6 +182,11 @@ export class SyncEngine {
 
   get rateLimit(): { remaining: number | null; resetAt: number | null } {
     return this.client.rateLimit
+  }
+
+  /** D-06：被作废（断开连接/换密码）就在阶段之间停下，别再写远端 */
+  private checkStop(): void {
+    if (this.settings.shouldStop?.()) throw new SyncCancelledError()
   }
 
   /** 远端仓库体积（KB；拿不到就是 null） */
@@ -307,6 +330,7 @@ export class SyncEngine {
    */
   async syncNow(): Promise<SyncResult> {
     const startedAt = localIso()
+    this.checkStop() // 一开始就作废了就别连网
     if (!this.meta) await this.connect()
     else {
       this.meta = await this.refreshMeta()
@@ -332,9 +356,12 @@ export class SyncEngine {
       finishedAt: startedAt
     }
 
+    this.checkStop()
     const hasPending = pendingSyncOps(1).length > 0
     await this.push(state.deviceId, result)
+    this.checkStop()
     await this.pull(state.deviceId, result)
+    this.checkStop()
 
     // 设备信息只在「真的有东西推上去」或还没有 info 时更新：否则每次空同步都会多一个 commit
     const infoPath = `devices/${state.deviceId}/info.json.age`
@@ -433,19 +460,61 @@ export class SyncEngine {
 
   private async pushCheckpoint(deviceId: string, path: string): Promise<void> {
     const checkpoint: SyncCheckpoint = exportCheckpoint('checkpoint')
-    const file = await encryptEnvelope(
-      {
-        formatVersion: SYNC_FORMAT_VERSION,
-        kind: 'checkpoint',
-        path,
-        deviceId,
-        createdAt: checkpoint.createdAt
-      },
-      checkpoint,
-      this.settings.passphrase,
-      this.workFactor
-    )
+    const seal = (target: string): Promise<Buffer> =>
+      encryptEnvelope(
+        {
+          formatVersion: SYNC_FORMAT_VERSION,
+          kind: 'checkpoint',
+          path: target,
+          deviceId,
+          createdAt: checkpoint.createdAt
+        },
+        checkpoint,
+        this.settings.passphrase,
+        this.workFactor
+      )
+    const file = await seal(path)
     await this.putFileSafe(path, file, `sync: ${deviceId.slice(0, 6)} checkpoint`)
+    // D-01：规范路径每次都写（旧客户端只认它），另外每月留一份归档、只保留最近 2 份。
+    // 本月已经归档过就不再加密一遍（scrypt 不便宜），归档失败也不影响这次同步。
+    const archivePath = `devices/${deviceId}/checkpoint-${monthStamp(new Date())}.json.age`
+    if (!cacheGet(archivePath)?.sha) {
+      try {
+        const archive = await seal(archivePath)
+        await this.putFileSafe(archivePath, archive, `sync: ${deviceId.slice(0, 6)} checkpoint archive`)
+        await this.pruneCheckpointArchives(deviceId)
+      } catch {
+        /* 归档只是额外保险：失败不拖累本次同步 */
+      }
+    }
+  }
+
+  /** 只保留最近 2 份月度归档（D-01） */
+  private async pruneCheckpointArchives(deviceId: string): Promise<void> {
+    let entries: { name: string; type: string; path: string; sha: string }[] = []
+    try {
+      entries = (await this.client.listDir(`devices/${deviceId}`)) as unknown as {
+        name: string
+        type: string
+        path: string
+        sha: string
+      }[]
+    } catch (error) {
+      if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      return
+    }
+    const obsolete = pickObsoleteArchives(entries.filter((e) => e.type === 'file').map((e) => e.name))
+    for (const name of obsolete) {
+      const target = entries.find((e) => e.name === name)
+      if (!target) continue
+      try {
+        await this.client.deleteFile(target.path, target.sha, `sync: prune ${deviceId.slice(0, 6)}`)
+      } catch (error) {
+        if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      }
+      getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(target.path)
+      cacheDrop(target.path)
+    }
   }
 
   /* ------------------------------ 拉取 ------------------------------ */
