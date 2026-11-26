@@ -1,7 +1,7 @@
-import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, dialog, net } from 'electron'
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, dialog, net, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
-import { backupBeforeMigrate, openDb } from './db/connection'
+import { backupBeforeMigrate, DatabaseTooNewError, openDb } from './db/connection'
 import { getSettings, initSettings, updateSettings } from './settings'
 import { initFsrs } from './fsrs'
 import { registerIpc } from './ipc'
@@ -380,13 +380,59 @@ async function bootstrap(): Promise<void> {
   const dataDir = userDataDir()
   const dbFile = path.join(dataDir, 'wordmemo.db')
   // 坑 1（PLAN-NEXT §7）：迁移在 openDb() 里跑，必须先复制一份旧库再打开
+  let preMigrateBackup: string | null = null
   try {
-    const backup = backupBeforeMigrate(dbFile, path.join(dataDir, 'backups'))
-    if (backup) log('pre-migrate-backup', { file: backup })
+    preMigrateBackup = backupBeforeMigrate(dbFile, path.join(dataDir, 'backups'))
+    if (preMigrateBackup) log('pre-migrate-backup', { file: preMigrateBackup })
   } catch (err) {
     log('pre-migrate-backup-failed', { error: err instanceof Error ? err.message : String(err) })
   }
-  openDb(dbFile)
+  try {
+    openDb(dbFile)
+  } catch (error) {
+    if (error instanceof DatabaseTooNewError) {
+      // A-02：旧版本打开新库 → 拒绝启动（PLAN-UPDATE §3.4-4 的红线）
+      log('db-too-new', { dbVersion: error.dbVersion, supported: error.supportedVersion })
+      const choice = dialog.showMessageBoxSync({
+        type: 'error',
+        title: '数据库版本比这个版本新',
+        message: `这个数据库是更新版本的 WordMemo 写的（v${error.dbVersion}），当前版本只支持到 v${error.supportedVersion}。`,
+        detail:
+          '请下载并打开最新版本再试，不要用旧版本继续使用，否则可能写坏数据。\n\n' +
+          '如果确实要回退到旧版本：先打开数据目录，把 backups/ 里最近一次备份复制回来（文件名形如 wordmemo-pre-migrate-v*.db → 改名为 wordmemo.db），再启动。',
+        buttons: ['打开数据目录', '退出'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true
+      })
+      if (choice === 0) {
+        try {
+          await shell.openPath(dataDir)
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      // C-04：迁移/打开失败 → 明确告诉用户备份在哪（PLAN-DECKS 的风险对策）
+      const message = error instanceof Error ? error.message : String(error)
+      log('db-open-failed', { error: message, backup: preMigrateBackup })
+      dialog.showErrorBox(
+        '数据库无法打开',
+        preMigrateBackup
+          ? `WordMemo 在打开数据库时出错，已为你备份到：\n${preMigrateBackup}\n\n错误信息：${message}\n\n请把备份文件和数据目录里的 diagnostics.log 一起反馈。`
+          : `WordMemo 在打开数据库时出错，而且这次没能生成备份。\n\n错误信息：${message}\n\n请不要删除数据目录，把 diagnostics.log 反馈给我。`
+      )
+      if (preMigrateBackup) {
+        try {
+          await shell.openPath(path.dirname(preMigrateBackup))
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    app.quit()
+    return
+  }
   initSettings()
   log('app-start', { ...getDiagnostics() })
   log('sandbox-start', {
