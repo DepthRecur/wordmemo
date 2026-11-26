@@ -1,6 +1,6 @@
-# 交接文档（给下一个会话 / 未来的自己）
+﻿# 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-23（便携版完结；同步 S0 重放通过，交接见 [HANDOFF-SYNC.md](HANDOFF-SYNC.md)）　当前分支：`feat/sync`　仓库：`DepthRecur/wordmemo`（public）
+> 最后更新：2026-11-26（0.6.0 已发布；0.7 改进进行中，见 [PLAN-0.7.md](PLAN-0.7.md)）　当前分支：`feat/0.7-backlog`（同步与 0.6.0 已在 `master`）　仓库：`DepthRecur/wordmemo`（public）
 > **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过两次（各约 3 分钟），Release 三件套由 CI 生成。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
@@ -31,7 +31,7 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest，17 个测试文件（185 项）必须全绿
+npm test             # vitest：以实际输出为准（2026-11-26 基线 40 文件 / 318 项，307 通过 + 11 跳过）
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
@@ -113,7 +113,7 @@ src/main/tray-bridge.ts ← ipc.ts → index.ts 的托盘刷新回调（避免�
 src/main/reviewSession.ts ← 复习现场（离开后回来接着上一张卡）→ userData/review-session.json
 src/renderer/src/components/DeckPicker.tsx ← 库标签栏（DeckTabs）与下拉（DeckSelect）
 src/renderer/src/components/Select.tsx ← 自定义下拉；列表 portal 到 body + fixed 定位（弹窗里也不会被 overflow 裁掉）
-src/renderer/src/pages/SettingsPage.tsx ← 左侧 7 分区（供应商/角色/复习/笔记库/提醒/发音/高级与诊断）
+src/renderer/src/pages/SettingsPage.tsx ← 左侧 8 分区（供应商/角色与预算/复习/笔记库/同步/提醒/发音/高级与诊断）
 src/renderer/src/components/ModelPicker.tsx ← 模型可搜索下拉（公开名 + id + 价格，允许手填）
 src/renderer/src/pages/StatsPage.tsx    ← 本月 AI 花费按供应商拆分 + 顶部库过滤
 scripts/Launcher.cs   ← 便携版启动器（U1：读写 sandbox-state.json、按 compatMode 传 --no-sandbox；失败计数/写 probe；U2：按 update/state.json 七步换目录 + 回滚 + error.log + 清 stale）
@@ -363,11 +363,11 @@ docs/               ← 四份计划 + 调研 + 本文件
 需要背景时读 docs/PLAN-NEXT.md 的 §5（已定决策）、§7（坑点）、§8（待定）。
 改任何用户可见文案前先读 docs/MESSAGES.md。
 
-当前状态（2026-11-23）：多供应商（冻结）、多个库、便携版 U0–U3 + 真机验收 + 真实发布（0.5.1）全部完结。
-typecheck 0 错误、npm test 18 文件 191 项全绿；GitHub 仓库已公开，`v0.5.0`/`v0.5.1` 已发 Release。
-**便携版板块不再改**（B/C 不再测试；更新失败靠用户自己下 zip 兜底）。
-同步：分支 `feat/sync` 已开，S0 第一步（重放）**判据通过**——`replayCard()` 在真实写入口造出的轨迹上与库里那张卡逐字段相等，
-`enableFuzz` 必须关（否则重放不收敛），细节见 PLAN-SYNC §10「S0 第一步」。
+当前状态（2026-11-26）：多供应商（冻结）、多个库、便携版 U0–U3、云端同步 0.6.0 全部完结并发布。
+typecheck 0 错误、npm test 40 文件 318 项（307 通过 + 11 跳过；真实库迁移与真仓库同步按设计跳过）。
+0.7 的改进计划与进度见 [PLAN-0.7.md](PLAN-0.7.md)，已勾选的取舍见 [BACKLOG.md](BACKLOG.md)。
+**便携版板块不再改**（B/C 不再测试；更新失败靠用户自己下 zip 兜底，已写进 README「已知限制」）。
+同步的实现记录在 [PLAN-SYNC §10](PLAN-SYNC.md)，交接与避坑清单在 [HANDOFF-SYNC.md](HANDOFF-SYNC.md)。
 下一步（接着 S0）：给 notes/items/reviews/exams 加 `uid TEXT UNIQUE` + 回填 + `SCHEMA_VERSION` 2→3，
 写入口统一 `withSync` + `sync_ops` 表，`cardFlag` 事件单独同步。
 

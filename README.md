@@ -1,4 +1,4 @@
-# WordMemo · 英语笔记背诵工具
+﻿# WordMemo · 英语笔记背诵工具
 
 把老师的英语笔记（图片 / txt / md / docx / xlsx）变成结构化词条库，用 **FSRS** 安排长期复习，用**听写日期倒排**生成冲刺计划，用 **DeepSeek / OpenAI / Gemini / GLM** 做识别、校验、语义判分和搭配补充，发音自动抓取并缓存到本地。
 
@@ -6,17 +6,21 @@
 
 ## 启动
 
+> **两种拿到程序的方式**，别混：
+> - **便携版（推荐给使用者）**：从 GitHub Release 下载 `WordMemo-<版本>-portable.zip`，解压后双击根目录的 `WordMemo.exe`（启动器会拉起 `app\WordMemo.exe`）。下面这段描述的是这种方式。
+> - **从源码跑（给开发者/自己改代码）**：`npm install` → `npm run dev`（脚本已带 `--noSandbox`），或双击 `调试启动（控制台）.bat` 看日志。**仓库根目录没有打包好的 `app\`，所以不要在仓库里双击 `WordMemo.exe`**——它只会提示「便携版不完整」。
+
 双击 **`WordMemo.exe`**（可以右键发送到桌面快捷方式）。
 
 - 这是本地编译的小启动器，直接拉起 Electron，不经过 VBS / CMD
 - 没有“来自 Internet”的安全警告，也不会有控制台闪窗
-- 参数里已经带了 `--no-sandbox`
+- 需要时会带上 `--no-sandbox`：由 `sandbox-state.json` + 启动器决定（连续 3 次启动失败就切兼容模式），不是无条件加
 - 首次使用先到 **设置 → 左侧「AI 供应商」** 填一个 Key（默认 DeepSeek）
 
-> **为什么需要 `--no-sandbox`？**
+> **为什么可能需要 `--no-sandbox`？**
 > 这台机器的 Chromium 沙箱初始化会被环境拦截，Electron 不带这个参数会在窗口出现前直接退出（事件日志 `0xc0000005`）；加上之后即使极域电子教室在运行也正常。应用本身仍然保持 `contextIsolation: true`、`nodeIntegration: false`，只加载本地页面。
 
-如果启动器失效（例如项目目录被移动），先运行 `scripts\build-launcher.cmd` 重新生成，或双击 `调试启动（控制台）.bat` 查看错误。**不要直接双击 `node_modules\electron\dist\electron.exe`**。
+如果启动器坏了（例如杀软删了文件、解压不完整），重新解压一份完整的 zip；开发目录里可以用 `npm run launcher` 重新生成便携版启动器（需要 `app\`），或双击 `调试启动（控制台）.bat` 看错误。**不要直接双击 `node_modules\electron\dist\electron.exe`**。
 
 > **关闭窗口不等于退出**：点 × 只是把窗口收进托盘，应用仍在后台跑（到期提醒依赖它）。另外应用是单实例的，旧进程还在时再双击 `WordMemo.exe` 只会把旧窗口叫出来，**不会加载新代码**。
 >
@@ -76,7 +80,7 @@
 - **长期记忆**：冲刺复习同样写入 FSRS 历史，考完自动回到长期轨道。
 - **发音**：有道 → 百度 → Free Dictionary API → 系统语音，四级回退，mp3 落盘缓存；词条详情里可以分别试美音和英音。
 - **提醒**：系统通知 + 托盘菜单 + 开机自启（设置里开启）。
-- **后台与退出**：侧边栏底部显示**构建时间、启动时间、权限级别和托盘状态**；设置 →「后台与退出」提供「重新加载界面 / 重启应用 / 退出应用 / 重新检测」，托盘菜单也有「重启应用（加载新版本）」；关闭窗口时第一次会提示应用仍在后台运行。诊断细节写在 `.data/diagnostics.log`。
+- **后台与退出**：侧边栏底部显示**构建时间、启动时间、权限级别和托盘状态**；设置 →「后台与退出」提供「重新加载界面 / 重启应用 / 退出应用 / 重新检测」，托盘菜单也有「重启应用（加载新版本）」；关闭窗口时第一次会提示应用仍在后台运行。诊断细节写在数据目录的 `diagnostics.log`（打包版是 `%APPDATA%\WordMemo\diagnostics.log`，超过 2 MB 会滚成 `.1`；设置 →「高级与诊断」→「导出诊断」可以打成一个 txt）。
 
 ## 首次配置
 
@@ -238,13 +242,13 @@ scripts/         图标生成、启动器 Launcher.cs / build-launcher.cmd
 
 ## 测试
 
-`npm test`：25 项集成测试，覆盖文本解析、多词性、跨词性/类型去重、建议清理、音标显示、词条去重、固定搭配、单向抽卡与去重计数、当天单批次、判分、FSRS 复习、冲刺计划、统计，以及草稿持久化（重开数据库仍能恢复修改）、入库/丢弃、同一文件不重复识别、多文件入库后其余草稿不丢。
+`npm test`：Vitest 集成测试（2026-11-26 基线：40 个文件 / 318 项，307 通过 + 11 跳过——真实库迁移与真仓库同步按设计跳过），覆盖文本解析、多词性、去重、音标显示、单向抽卡、当天单批次、判分、FSRS 复习、冲刺计划、统计、草稿持久化，以及多供应商、多库、便携版更新与同步（uid、快照合并、加密、传输引擎、配额降级、时钟夹取）等。
 
 另外用 Electron 调试端口做过真实窗口验证：导入 `samples/demo.txt` → 学习新词 → 每个词随机抽 1 个方向 → 提交并写回 FSRS → 删除清理；并在真实词库验证了中文语义搜索（“允许” → AI 扩展 → 找到 permit）、点击单词打开词条详情、以及复习队列每个词只出现一次。草稿功能上线时还验证了：导入页顶部草稿卡片带、自动保存后重新进入仍在、丢弃后回到空态、侧边栏构建时间，以及「退出应用」IPC 能真正结束进程。
 
 ## 已知限制
 
-- **本机 Electron 必须带 `--no-sandbox`**：Chromium 沙箱初始化会被当前环境拦截，不带参数会在窗口出现前崩溃；`WordMemo.exe` 启动器已带该参数。应用仍保持 `contextIsolation` 和 `nodeIntegration: false`。
+- **本机 Electron 必须带 `--no-sandbox`**：Chromium 沙箱初始化会被当前环境拦截，不带参数会在窗口出现前崩溃；便携版启动器按 `sandbox-state.json` 自动决定是否带（连续 3 次启动失败切兼容模式）。应用仍保持 `contextIsolation` 和 `nodeIntegration: false`。
 - **关闭窗口只是收进托盘**：应用不会退出，再次双击 `WordMemo.exe` 也只会叫出旧实例（单实例锁），不会加载新构建。更新后请用侧边栏「退出」、设置 →「退出应用」或托盘右键「退出 / 重启应用」。
 - **Windows 11 托盘图标可能收在「^」里**：这是系统对新手图标的分组策略，不是应用没启动；用应用内的退出入口即可，也可以在「设置 → 个性化 → 任务栏 → 其他系统托盘图标」里把 WordMemo 设为常显。
 - **D 盘项目目录带 Low 完整性标签会让托盘彻底失效**：`icacls D:\ymh\Code\tools\wordmemo` 显示 `Mandatory Label\Low Mandatory Level`，目录里的 `WordMemo.exe` / `electron.exe` 会以 Low 运行；任务栏 Explorer 是 Medium，Windows 的 UIPI 必然拒绝注册托盘（Electron 日志 `Unable to create status tray icon`）。修复：右键 `repair-integrity.cmd` →「以管理员身份运行」，只把这两个 exe 的标签改成 Medium，不动目录和其他文件。以后重装/升级 Electron 后需要重跑一次。验证：`icacls ...\WordMemo.exe` 应显示 `Medium Mandatory Level`，侧边栏权限应显示「正常权限」。

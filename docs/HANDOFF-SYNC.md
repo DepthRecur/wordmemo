@@ -1,4 +1,4 @@
-# 交接文档：同步（Sync）板块
+﻿# 交接文档：同步（Sync）板块
 
 > 写给**新会话**：读这一份就能直接开工，不用重读旧对话。
 > 生成时间：2026-11-24（同步验收完成）　分支：`feat/sync`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
@@ -85,7 +85,7 @@ PLAN-SYNC §5 原本写着「重放做不到就打退路」。**结论：重放�
 
 ---
 
-## 3. S0/S1 已完成，S2 进行中
+## 3. 实现记录（S0–S4 全部完成，已发布 0.6.0）
 
 S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验收**，记录在 [PLAN-SYNC.md](PLAN-SYNC.md) §10。
 必须记住的结论：
@@ -182,7 +182,7 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 
 ---
 
-## 4. 更后面（S2–S4 摘要，别提前做）
+## 4. 阶段摘要（S2–S4；都已完成，留作对照）
 
 | 阶段 | 做什么 | 验收 |
 |---|---|---|
@@ -307,36 +307,33 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 ## 9. 新会话开场提示词（直接复制）
 
 ```
-继续 WordMemo（D:\ymh\Code\tools\wordmemo），同步已进入收尾。
-先确认分支：git checkout feat/sync（同步的全部代码都在这个分支上，master 没有）。
-然后读 docs/HANDOFF-SYNC.md（这一份就够了），再读 docs/PLAN-SYNC.md §10（实现记录）。
-先看 HANDOFF-SYNC §3 的「待你手动验收（S2–S3）」：按用户反馈修 bug，然后发 0.6.0。
+继续 WordMemo（D:\ymh\Code\tools\wordmemo）。同步已在 0.6.0 发布，当前主线是 0.7 的改进计划。
+先确认状态：git branch --show-current、git log --oneline -5（同步代码已在 master）。
+然后读 docs/PLAN-0.7.md（§0.2 有进度与断点）与 docs/BACKLOG.md（已勾选的决策）。
+同步的实现记录在 docs/PLAN-SYNC.md §10；这本 HANDOFF-SYNC 是同步板块的交接与避坑清单。
 
-现状：分支 feat/sync，typecheck 0 错误、npm test 32 文件 274 项通过
-（+2 份手动测试默认跳过：真实库迁移、真仓库同步）。
-S0–S4 代码全部完成：uid 迁移、sync_ops + withSync、cardFlag、deck/noteItem、快照合并、
-age 加密、GitHub 客户端、传输引擎、真仓库 e2e、safeStorage、调度、设置页同步面板、
-设备管理/移除设备、换密码、checkpoint 压缩、同步日志与体积提醒、README 与发布准备。
-版本已改成 0.6.0，release-notes/v0.6.0.md 已写。
+现状（2026-11-26）：分支 feat/0.7-backlog，typecheck 0 错误、npm test 40 文件 318 项
+（304 通过 + 11 跳过：真实库迁移、真仓库同步按设计跳过）。
+0.7 已完成：A-01 同步假成功、A-03 时钟夹取、A-04 skipped 上报、A-02 旧库闸门、
+C-04 迁移失败提示、E-04 --data-dir、D-01 checkpoint 归档、D-02 额度降级、D-05 待定、
+D-06 作废在飞同步、B-02 清 AI 缓存、C-02 删库刷新、C-05② 考试标签、A-06 考试范围按 uid、
+F-04 日志轮转+导出诊断、F-06 粘贴图片、E-02 发布材料文字部分。
 
-发版步骤：
-1) 按用户验收反馈修 bug，补回归测试；
-2) npm run typecheck && npm test && npm run build && npm run dist，
-   解压 release/WordMemo-0.6.0-portable.zip 冒烟；
-3) 合回 master（先确认 master 与 feat/sync 的差异），git tag v0.6.0；
-4) push master 与 tag，CI 自动发布；核对 Release 三件套（zip / sha256 / latest.json）。
+下一件事：D-05（等用户选「升 schema v5 做回收站」还是「只做 30 天清理」）→ 然后阶段 6
+的文档对齐（G-01~G-06）与 0.7.0 发版。
 注意：这台机器到 github.com:443 时通时断，push 用 .data/push-retry.ps1。
+```
 
 硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
-每做完一步在 PLAN-SYNC §10 记一笔，git commit -s。
+每做完一步在 PLAN-SYNC §10 或 PLAN-0.7 §0.2 记一笔，git commit -s。
 ```
 
 ---
 
 ## 10. 交接自检（新会话花两分钟确认）
 
-- [ ] `git branch --show-current` → `feat/sync`
-- [ ] `npm test` → 32 文件 274 项通过（另 2 份手动测试跳过）
+- [ ] `git branch --show-current` → `feat/0.7-backlog`（0.7 期间）或 `master`
+- [ ] `npm test` → 以实际输出为准（2026-11-26 基线：40 文件 318 项，307 通过 + 11 跳过）
 - [ ] `npm run typecheck` → 0 错误
 - [ ] `git log --oneline -8` → 能看到 `feat(sync): manage sync devices`、
       `feat(sync): add the sync settings panel`、`feat(sync): schedule sync runs`、
