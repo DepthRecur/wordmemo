@@ -5,6 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { closeDb, openDb } from '../src/main/db/connection'
 import { initSettings, updateSettings } from '../src/main/settings'
 import type { SyncResult } from '../src/main/sync/engine'
+import { SyncCancelledError } from '../src/main/sync/engine'
 import {
   __setSyncEngineForTests,
   buildStatus,
@@ -204,5 +205,16 @@ describe('同步管理器：同一时刻只有一轮', () => {
     fakeEngine(async () => okResult(), 4000)
     await syncNow()
     expect(buildStatus().quotaPaused).toBe(false)
+  })
+
+  it('同步被作废（断开连接）不会记成「上次同步失败」（D-06）', async () => {
+    fakeEngine(async () => {
+      throw new SyncCancelledError()
+    })
+    const result = await syncNow()
+    // 不是错误：状态里不该出现 lastError，界面也不会弹「同步失败」
+    expect(buildStatus().lastErrorCode).toBeNull()
+    expect(buildStatus().state).not.toBe('error')
+    expect(result.ok).toBe(true)
   })
 })

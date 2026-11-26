@@ -12,7 +12,7 @@ import { countPendingOps, getSyncState, onSyncOpWritten } from '../db/sync'
 import { getDb, localIso } from '../db/connection'
 import { log as logDiagnostic } from '../diagnostics'
 import { getSettings, updateSettings } from '../settings'
-import { SyncEngine, SyncSetupError } from './engine'
+import { SyncEngine, SyncCancelledError, SyncSetupError } from './engine'
 import { SyncApiError } from './github'
 import { loadSyncSecrets, saveSyncSecrets, clearSyncSecrets, type SyncSecrets } from './secretStore'
 import { SyncScheduler } from './scheduler'
@@ -41,6 +41,8 @@ let lastError: { code: string; message: string } | null = null
 let lastSyncChanges = 0
 /** 上一次同步被跳过的记录数（A-04）：>0 时界面给警告，别再静默吞掉 */
 let lastSyncSkipped = 0
+/** D-06：attach 时自增；旧 engine 用闭包里的 token 判断自己是否已作废 */
+let epoch = 0
 
 export function setSyncStatusSink(sink: (status: SyncStatus) => void): void {
   statusSink = sink
@@ -104,12 +106,15 @@ export function buildStatus(): SyncStatus {
 function attach(secrets: SyncSecrets): void {
   const sync = getSettings().sync
   detachRuntime()
+  // D-06：每次 attach 拿一个新 epoch；detach 会让旧 engine 在下一个阶段边界停下
+  const token = ++epoch
   engine = new SyncEngine({
     owner: sync.owner,
     repo: sync.repo,
     token: secrets.token,
     passphrase: secrets.passphrase,
-    apiBase: sync.apiBase
+    apiBase: sync.apiBase,
+    shouldStop: () => token !== epoch
   })
   scheduler = new SyncScheduler({
     intervalMin: sync.intervalMin,
@@ -121,6 +126,8 @@ function attach(secrets: SyncSecrets): void {
 }
 
 function detachRuntime(): void {
+  // 先作废在飞的同步：它会在下一个阶段边界抛 SyncCancelledError 停下（D-06）
+  epoch += 1
   scheduler?.dispose()
   scheduler = null
   unsubscribeOps?.()
@@ -245,6 +252,8 @@ async function doRunSync(target: SyncEngine): Promise<boolean> {
     )
     return true
   } catch (error) {
+    // 被主动作废（断开连接/换密码）不是失败：不写进「上次同步失败」、也不算一次运行
+    if (error instanceof SyncCancelledError) return false
     lastError = describeError(error)
     lastSyncChanges = 0
     lastSyncSkipped = 0

@@ -61,6 +61,19 @@ export interface SyncSettings {
   apiBase?: string
   /** 测试用：把 age 的 scrypt work factor 调低；生产不传 */
   workFactor?: number
+  /**
+   * 返回 true 表示「这次同步已经作废」（D-06：用户断开连接/换密码时）。
+   * 在每个阶段之间检查一次，让在飞的同步尽早停下，而不是继续写远端。
+   */
+  shouldStop?: () => boolean
+}
+
+/** 同步被主动作废（断开连接/换密码）：不是错误，不该出现在「上次同步失败」里 */
+export class SyncCancelledError extends Error {
+  constructor() {
+    super('同步已取消')
+    this.name = 'SyncCancelledError'
+  }
 }
 
 export interface MetaFile {
@@ -169,6 +182,11 @@ export class SyncEngine {
 
   get rateLimit(): { remaining: number | null; resetAt: number | null } {
     return this.client.rateLimit
+  }
+
+  /** D-06：被作废（断开连接/换密码）就在阶段之间停下，别再写远端 */
+  private checkStop(): void {
+    if (this.settings.shouldStop?.()) throw new SyncCancelledError()
   }
 
   /** 远端仓库体积（KB；拿不到就是 null） */
@@ -312,6 +330,7 @@ export class SyncEngine {
    */
   async syncNow(): Promise<SyncResult> {
     const startedAt = localIso()
+    this.checkStop() // 一开始就作废了就别连网
     if (!this.meta) await this.connect()
     else {
       this.meta = await this.refreshMeta()
@@ -337,9 +356,12 @@ export class SyncEngine {
       finishedAt: startedAt
     }
 
+    this.checkStop()
     const hasPending = pendingSyncOps(1).length > 0
     await this.push(state.deviceId, result)
+    this.checkStop()
     await this.pull(state.deviceId, result)
+    this.checkStop()
 
     // 设备信息只在「真的有东西推上去」或还没有 info 时更新：否则每次空同步都会多一个 commit
     const infoPath = `devices/${state.deviceId}/info.json.age`
