@@ -360,6 +360,13 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
                 上次同步有 {status.lastSyncSkipped} 条记录没能合并（已跳过），详见诊断日志。
               </div>
             )}
+            {status.quotaPaused && (
+              <div className="hint" style={{ color: 'var(--yellow)' }}>
+                GitHub 额度快用完了，已暂停自动同步
+                {status.quotaResumeAt ? `（约 ${timeText(status.quotaResumeAt)} 之后恢复）` : ''}
+                ；期间仍可以点「立即同步」。
+              </div>
+            )}
             <div className="row" style={{ flexWrap: 'wrap' }}>
               <Button onClick={() => void runNow()} disabled={busy !== null || status.state === 'syncing'}>
                 <RefreshCw size={15} /> {status.state === 'syncing' ? '同步中…' : '立即同步'}

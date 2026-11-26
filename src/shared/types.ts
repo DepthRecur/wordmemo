@@ -461,6 +461,10 @@ export interface SyncStatus {
   lastPushAt: string | null
   lastPullAt: string | null
   rateLimitRemaining: number | null
+  /** D-02：额度快用完时自动同步暂停（手动同步不受影响） */
+  quotaPaused: boolean
+  /** 额度重置时间（ISO）；null = 不知道 */
+  quotaResumeAt: string | null
   /** 远端仓库体积（KB；GitHub 的 size 字段），超过 200 MB 时界面提醒 */
   repoSizeKb: number | null
 }

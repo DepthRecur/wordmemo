@@ -47,10 +47,10 @@ function okResult(): SyncResult {
 }
 
 /** 引擎替身：只实现 manager 用到的三个成员（syncNow / rateLimit / repositorySizeKb） */
-function fakeEngine(syncNow: () => Promise<SyncResult>): { calls: number } {
+function fakeEngine(syncNow: () => Promise<SyncResult>, remaining = 4000): { calls: number } {
   const stats = { calls: 0 }
   __setSyncEngineForTests({
-    rateLimit: { remaining: 4000, resetAt: null },
+    rateLimit: { remaining, resetAt: null },
     repositorySizeKb: null,
     syncNow: async () => {
       stats.calls += 1
@@ -193,5 +193,16 @@ describe('同步管理器：同一时刻只有一轮', () => {
     // 2 条 op + (1+3+4) 条真正合并的；skipped 不算改动
     expect(status.lastSyncChanges).toBe(10)
     expect(status.lastSyncSkipped).toBe(5)
+  })
+
+  it('额度低于阈值时状态里标记「暂停自动同步」（D-02）', async () => {
+    fakeEngine(async () => okResult(), 50)
+    await syncNow()
+    expect(buildStatus().quotaPaused).toBe(true)
+
+    // 额度恢复后（下一次请求会刷新 remaining）不再暂停
+    fakeEngine(async () => okResult(), 4000)
+    await syncNow()
+    expect(buildStatus().quotaPaused).toBe(false)
   })
 })

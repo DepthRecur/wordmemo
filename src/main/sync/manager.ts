@@ -16,6 +16,7 @@ import { SyncEngine, SyncSetupError } from './engine'
 import { SyncApiError } from './github'
 import { loadSyncSecrets, saveSyncSecrets, clearSyncSecrets, type SyncSecrets } from './secretStore'
 import { SyncScheduler } from './scheduler'
+import { quotaState } from './quota'
 
 /**
  * 同步管理器：设置页 / 托盘只跟它打交道。
@@ -72,6 +73,9 @@ export function buildStatus(): SyncStatus {
   let state: SyncStatus['state'] = 'disconnected'
   if (configured()) state = inFlight ? 'syncing' : lastError ? 'error' : 'idle'
   const syncState = getSyncState()
+  const quota = engine
+    ? quotaState(engine.rateLimit.remaining, engine.rateLimit.resetAt, Date.now())
+    : { paused: false, resumeAt: null }
   return {
     configured: configured(),
     enabled: sync.enabled,
@@ -91,6 +95,8 @@ export function buildStatus(): SyncStatus {
     lastPushAt: syncState.lastPushAt,
     lastPullAt: syncState.lastPullAt,
     rateLimitRemaining: engine?.rateLimit.remaining ?? null,
+    quotaPaused: quota.paused,
+    quotaResumeAt: quota.resumeAt ? new Date(quota.resumeAt).toISOString() : null,
     repoSizeKb: engine?.repositorySizeKb ?? null
   }
 }
@@ -107,7 +113,7 @@ function attach(secrets: SyncSecrets): void {
   })
   scheduler = new SyncScheduler({
     intervalMin: sync.intervalMin,
-    run: () => runSync(),
+    run: () => runSync({ auto: true }),
     onChange: emit
   })
   unsubscribeOps = onSyncOpWritten(() => scheduler?.markDirty())
@@ -165,10 +171,22 @@ function recordRun(record: RunRecord, ok: boolean, errorCode: string | null): vo
  * - 同一时刻只有一轮在跑：后来者**加入并等待那一轮**，拿到的是真实结果（不再假装成功）；
  * - 没有引擎（没连接）时返回 false —— 以前这里返回 true，等于「没同步也算成功」。
  */
-function runSync(): Promise<boolean> {
+function runSync(options: { auto?: boolean } = {}): Promise<boolean> {
   const target = engine
   if (!target) return Promise.resolve(false)
   if (inFlight) return inFlight
+  // D-02：额度快用完时只暂停「自动」同步；手动同步（syncNow / 退出前 flush）永远放行
+  if (options.auto) {
+    const quota = quotaState(target.rateLimit.remaining, target.rateLimit.resetAt, Date.now())
+    if (quota.paused) {
+      logDiagnostic('sync-quota-pause', {
+        remaining: target.rateLimit.remaining,
+        resumeAt: quota.resumeAt
+      })
+      emit()
+      return Promise.resolve(false)
+    }
+  }
   const run: Promise<boolean> = doRunSync(target).finally(() => {
     if (inFlight === run) inFlight = null
   })
