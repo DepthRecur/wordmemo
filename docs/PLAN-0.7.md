@@ -26,19 +26,23 @@
 | F-06 粘贴图片 | ✅ | `…feat(import): paste an image straight into the import page` |
 | A-06 考试范围按 uid 同步 | ✅（勾选后新增那条） | `…fix(sync): send exam note/item scope as uids, not local ids` |
 | C-05② 考试页标签筛选 | ✅ | `…feat(exam): filter the exam scope by tags` |
-| D-06 边界测试 | 🟡 部分 | A-01 已带 `tests/sync-manager.test.ts`（5 项）；**断开连接不中止在飞同步**仍未改 |
+| D-06 边界测试 | ✅ | A-01 的 5 项 + `tests/sync-cancel.test.ts`（2 项）+ manager 1 项；断开连接现在会让在飞的同步在阶段边界作废 |
+| E-02 发布材料（文字） | ✅ | README「常见现象 / 被拦截怎么加白」+ `.github/ISSUE_TEMPLATE/bug_report.yml`；4 张截图留占位 |
+| 「不做」的 23 条落档 | ✅ | 分别写进 PLAN.md §14.1 / PLAN-SYNC §9 / PLAN-PROVIDERS / PLAN-DECKS / PLAN-UPDATE / README 已知限制 |
+| G-01 / G-02 全部、G-03 大部分 | ✅ | 两份 handoff 的进度、分支、测试数；README 启动章节、`--no-sandbox` 口径、日志路径、测试条数 |
 | D-05 回收站 | ⬜ 等下一条 | 需要你选 A（升 v5）/ B（只清理）→ 见 §0.1② |
-| E-02 / D-08 截图 | ⬜ | 阶段 6（文字我来写，图你后补） |
-| G-01~G-06 / 23 条「不做」落档 | ⬜ | 阶段 6，最后做（代码定稿后再改文档） |
+| G-03 剩余 / G-04 / G-05 / G-06 | ⬜ | 阶段 6（PLAN-UPDATE / PLAN-SYNC / GITHUB-SELECTION / BUGS-DECKS / PLAN-DECKS / test-package） |
+| D-08 截图 | ⬜ | 你手动补图 |
 
 **当前基线**：`npm run typecheck` 0 错误；`npm test` **37 文件 / 315 项（304 通过 + 11 跳过）**，开工前是 32 文件 / 285 项。
 
-### 断点（2026-11-26 08:25 停手，12:00 续）
+### 断点（2026-11-26 08:30 停手，12:00 续）
 
-- 全部已提交到 `feat/0.7-backlog`，工作区干净，**未推送**（不需要网络）。
-- 12:00 的第一件事：**D-05**。先问用户选 A 还是 B；若没答复就跳到 **E-02 文字部分**（README「常见现象/加白」+ Issue 模板 + 4 个截图占位）与 **G-01/G-02**（两份 handoff 对齐），把需要等代码定稿的 G-03~G-06 留到最后。
-- 还欠着的一件事（代码）：`disconnectSync()` 不中止在飞同步（engine 引用丢了，promise 继续跑、仍会写远端）。做法：给 `SyncEngine` 加 `AbortSignal`（github 客户端 `fetch` 的 signal），或简单点——先在 manager 里标 `detached`，在 `doRunSync` 的每次 await 之后检查并提前返回；补一个测试。
+- 全部已提交到 `feat/0.7-backlog`（16 个提交），工作区干净，**未推送**（不需要网络）。
+- 12:00 的第一件事：**D-05**。先问用户选 A 还是 B；没答复就做 **G-04 / G-05 / G-06**（三份 plan 文档的对齐 + `test-package/README.md`），这些不依赖 D-05。
+- D-05 方案定下后 → 代码 → 然后 0.7.0 发版（改版本号 + `release-notes/v0.7.0.md` 三行 + `npm run dist` + 用 `--data-dir` 冒烟 + 合 master + tag + CI 核对）。
 - A-06 引入的传输形态变化（`note_uids` / `item_uids`）要在 **PLAN-SYNC §4** 补一句：0.6.0 读到 0.7 写的考试会看不到「指定笔记」，退化成整库范围（仅升级窗口）。
+- 提醒：写文档时别再用「37 文件 / 315 项」这类硬编码——现在以 `npm test` 输出为准（基线 40 文件 / 318 项）。
 
 ---
 
