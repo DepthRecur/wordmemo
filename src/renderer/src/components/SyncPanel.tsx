@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CloudUpload, Download, KeyRound, RefreshCw, Upload, Unplug } from 'lucide-react'
 import type {
+  DeletedEntry,
   Settings,
   SyncActionResult,
   SyncDeviceInfo,
@@ -32,6 +33,21 @@ const INTERVALS = [
   { value: 30, label: '每 30 分钟' },
   { value: 60, label: '每 60 分钟' }
 ]
+
+/** 回收站里显示的实体名（D-05） */
+const DELETED_TYPE: Record<DeletedEntry['entity'], string> = {
+  note: '笔记',
+  item: '词条',
+  deck: '库',
+  exam: '考试'
+}
+
+/** 删除时间：只到分钟，够用且不会太长 */
+function deletedAt(tsUtc: number): string {
+  const date = new Date(tsUtc)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return `${date.getMonth() + 1}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
 
 function strengthText(passphrase: string): string {
   const strength = checkPassphrase(passphrase)
@@ -67,10 +83,17 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
   const [confirmPass, setConfirmPass] = useState('')
   const [snapshotPrompt, setSnapshotPrompt] = useState<'export' | 'import' | null>(null)
   const [snapshotPass, setSnapshotPass] = useState('')
+  const [deleted, setDeleted] = useState<DeletedEntry[]>([])
+  const [showTrash, setShowTrash] = useState(false)
 
   useEffect(() => {
     void window.api.sync.status().then(setStatus)
     return window.api.events.onSyncStatus(setStatus)
+  }, [])
+
+  // 回收站和「有没有连接同步」无关：没连接时删除的东西也在这里
+  useEffect(() => {
+    void window.api.sync.deleted().then(setDeleted)
   }, [])
 
   useEffect(() => {
@@ -85,6 +108,18 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
 
   async function refreshDevices(): Promise<void> {
     setDevices(await window.api.sync.devices())
+  }
+
+  /** 回收站：恢复一条删除（只恢复内容，复习进度回不来） */
+  async function restoreDeletedEntry(entry: DeletedEntry): Promise<void> {
+    setBusy(`restore:${entry.uid}`)
+    try {
+      const result = await window.api.sync.restore(entry.entity, entry.uid)
+      notify(result.message, result.ok ? 'ok' : 'info')
+      setDeleted(await window.api.sync.deleted())
+    } finally {
+      setBusy(null)
+    }
   }
 
   async function connect(): Promise<void> {
@@ -478,6 +513,48 @@ export function SyncPanel({ notify, settings, refreshSettings }: Props) {
         ) : (
           <div className="hint">还没有连接。按下面三步填好，点「测试并首次同步」。</div>
         )}
+
+        {/* 回收站（D-05）：和「有没有连接同步」无关，删掉的东西在本地就能恢复 */}
+        <div className="col" style={{ gap: 4 }}>
+          <div className="row-between">
+            <span className="muted tiny">最近删除</span>
+            <Button size="sm" onClick={() => setShowTrash((value) => !value)}>
+              {showTrash ? '收起' : `回收站${deleted.length ? `（${deleted.length}）` : ''}`}
+            </Button>
+          </div>
+          {showTrash && (
+            <div className="col" style={{ gap: 6 }}>
+              <div className="hint">
+                恢复的是内容：复习进度在删除时就没了，恢复不回来。删除记录保留 30 天；
+                只列本机删的，别的设备删的东西这里没有内容快照。
+              </div>
+              {deleted.length === 0 ? (
+                <span className="hint">没有可恢复的删除。</span>
+              ) : (
+                deleted.map((entry) => (
+                  <div className="row-between" key={`${entry.entity}:${entry.uid}`}>
+                    <span className="tiny">
+                      {DELETED_TYPE[entry.entity]} · {entry.label} · {deletedAt(entry.tsUtc)}
+                    </span>
+                    {entry.restorable ? (
+                      <Button
+                        size="sm"
+                        onClick={() => void restoreDeletedEntry(entry)}
+                        disabled={busy !== null}
+                      >
+                        恢复
+                      </Button>
+                    ) : (
+                      <span className="tiny muted" title={entry.reason ?? ''}>
+                        无法恢复
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
 
         {(!configured || showConnect) && (
           <div className="col" style={{ gap: 10 }}>
