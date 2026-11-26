@@ -133,6 +133,12 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 
 设置 → 同步 → 填仓库（`owner/repo`）、PAT、密码 →「测试并首次同步」。之后默认每 10 分钟同步一次，也可以在任意时刻点「立即同步」。本机会用系统凭据加密（Windows DPAPI）记住 PAT 与密码。
 
+![设置 → 同步](shots/sync-panel.png)
+
+**删除恢复（0.7.1 起）**：删掉的笔记、词条、库、考试会进「最近删除」，30 天内可以恢复内容。恢复的是内容——复习进度在删除时就清掉了，回不来；只有本机删的才有内容快照。
+
+![最近删除 / 回收站](shots/sync-recycle.png)
+
 ### 会泄露什么、不会泄露什么
 
 | 会泄露（GitHub 能看到） | 不会泄露 |
@@ -176,7 +182,7 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 ## 更新
 
 - 便携版：双击 `WordMemo.exe` 启动器 → 由它启动 `app/WordMemo.exe`。数据固定在 `%APPDATA%\WordMemo`，删掉或替换程序目录不会丢词库。
-- **自动更新（0.4.0 起）**：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，之后每天一次（失败退避 1~6 小时）。有新版本会自动下载、流式校验 sha256、解压到 `update\app-new`，然后提示「下次启动生效」。
+- **自动更新（0.4.0 起）**：应用启动 60 秒后检查 GitHub Releases 的 `latest.json`，之后每天一次（失败退避 1~6 小时）。有新版本会自动下载、流式校验 sha256、解压到程序目录的 `app-new\`，然后提示「下次启动生效」。
 - **应用绝不替换自己、也不静默重启**：退出程序后再双击 `WordMemo.exe`，启动器才会把 `app` 换成新版；旧版保留在 `app-old` 直到下一次启动，换目录失败会自动回滚并写 `update\error.log`。
 - **手动更新（GitHub 连不上时的兜底，和自动更新是同一份 zip）**：退出程序 → 下载新版 zip → 把 zip 里的 `app` 解压覆盖到程序目录的 `app` → 重新打开。数据不会丢。
 - 更新源只有 GitHub Releases（`releases/latest/download/latest.json`），不做镜像、不接受远程下发的配置或脚本。
@@ -185,13 +191,27 @@ Key 只保存在本机（Windows DPAPI 加密），不会上传；价格来自 m
 
 ### 常见现象：下载了却打不开 / 被拦下来
 
-> 这一节的截图待补（`shots/smartscreen-1.png` 起）。文字先按下面的步骤走。
+> 这一节还差两张截图（需要真机操作，见文末「截图待补」）。文字步骤可以直接照做。
 
 1. **「Windows 已保护你的电脑」（SmartScreen）**：点「更多信息」→「仍要运行」。出现这个是因为没做代码签名（明确选择），不代表文件有问题；不放心就先用上面的 `certutil` 核对 sha256。
 2. **杀软/安全软件报毒或直接删掉 `WordMemo.exe`**：把整个程序目录加进「排除」或「信任」白名单，再重新解压一份 zip（被删掉的那份已经不完整）。应用不联网下载任何可执行文件，更新包也只有 GitHub 这一个来源。
 3. **解压后双击没反应**：先确认解压完整（zip 里应当有 `WordMemo.exe` 和 `app\` 目录，只复制其中一个都不行）；再用「调试启动（控制台）.bat」或 `app\WordMemo.exe --no-sandbox` 看具体报错。连续 3 次启动失败后启动器会自动切到兼容模式。
 4. **托盘图标不见了**（被收进任务栏右下角的「^」）：程序还在跑；用侧边栏底部「退出」或托盘右键退出。若怀疑是权限问题，见文末「已知限制」里的 `repair-integrity.cmd`。
 5. **GitHub 连不上、自动更新一直失败**：走上面的「手动更新」，和自动更新是同一份 zip，效果一样。
+
+#### 截图待补（需要你在这台机器上操作一下）
+
+应用内的截图已经补好（`shots/sync-panel.png`、`shots/sync-recycle.png`）。还差两张**只有真机能截**的：
+
+| 文件名 | 截什么 | 怎么操作 |
+|---|---|---|
+| `shots/smartscreen-1.png` | 「Windows 已保护你的电脑」整个对话框（要能看到标题和「更多信息」） | 用**浏览器**从 Release 下载 `WordMemo-0.7.1-portable.zip`（一定要走浏览器下载，这样文件才带 Mark-of-the-Web）→ 解压 → 双击 `WordMemo.exe`。如果没弹，右键 zip → 属性 → 勾「解除锁定」取消再试，或换一个从没运行过的解压目录 |
+| `shots/smartscreen-2.png` | 点「更多信息」之后、露出「仍要运行」的那一屏 | 接着上一张，点「更多信息」再截 |
+| `shots/av-block.png` | 杀软报毒 / 拦截 / 已隔离的弹窗 | 在装了火绒、360 或开着 Defender 实时保护的机器上解压并双击。如果杀软是**静默删文件**不给弹窗，就截「保护历史记录」里对应的那条威胁记录（路径里的用户名可以打码） |
+
+截图不用修图，窗口大小无所谓，能看清文字即可；放进 `shots/` 后我在 README 正文里补图注。
+
+> 可选的第三张（`shots/github-release.png`）是 Release 页面的三件套截图。我试过用无头 Edge 截，但这台机器此刻连不上 `github.com`（`ERR_CONNECTION_RESET`），你方便时打开 <https://github.com/DepthRecur/wordmemo/releases/tag/v0.7.1> 截一张就行。
 
 ## 发布（维护者）
 
@@ -221,6 +241,10 @@ release\win-unpacked\WordMemo.exe --data-dir=%TEMP%\wordmemo-smoke
 ```
 
 开发模式默认用仓库里的 `.data/`；`--data-dir` 对两种模式都生效，优先级最高。
+
+> **走启动器时传不了参数**：`WordMemo.exe`（启动器）只负责换目录和决定沙箱参数，不转发命令行。要隔离数据目录，请直接启动 `app\WordMemo.exe --data-dir=…`（或 `release\win-unpacked\WordMemo.exe`）。打包版**不认** `WORDMEMO_DATA_DIR` 环境变量——那个只对开发模式生效（PLAN-0.7 E-04）。
+>
+> 2026-11-26 就因为这个踩了一次：本想用启动器验证「0.7.0 → 0.7.1 自动更新」，结果它拉起的新版打开了真实 `%APPDATA%\WordMemo`，把真库迁移到了 v5。已从 `backups\wordmemo-pre-migrate-v2.db` 恢复回 v2 并删掉多出来的备份（`notes=2 / items=14 / decks=2 / cards=42` 都在）。**验证更新链路时要么直接启动 `app\WordMemo.exe --data-dir=…`，要么先备份真库。**
 
 技术栈：Electron 38.8.6（Chromium 140 / Node 22）、React 19、TypeScript、`ts-fsrs` 6（FSRS-7）、`node:sqlite`（零原生编译）、Vite。
 
