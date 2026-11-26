@@ -896,14 +896,22 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 - **发版后补了一刀**：`831acfd fix(sync): make restore atomic`——恢复的四条语句包进 `tx()`，
   避免「内容插了一半、影子还在」的半成品状态。它在 tag 之后，随下一个版本发出去；
   已发布的 0.7.1 在这条路径上只会返回「恢复失败」，不会写坏数据。
-- **没做成：v4 → v5 的实机迁移验证**。做法是把 0.7.0 冒烟留下的真 v4 库（`user_version = 4`）
-  复制到临时目录，用 0.7.1 的打包版打开，期望它备份并升到 v5。结果启动失败：
-  Chromium 报 `Lock file can not be created! Error code: 5`（单实例锁建不出来 → 直接退出，
-  所以没走到迁移），再试时 `Start-Process` 直接报「操作被用户取消」——这台机器此时在拦
-  未签名的 exe（同一个 exe 20 分钟前还能正常跑完两次冒烟）。**不是迁移逻辑的问题**：
-  v4→v5 本身有单测覆盖（`tests/tombstone-payload.test.ts` 用真 v4 文件开库，断言补列、
-  版本号变 5、旧影子 payload 为 NULL），新建库的冒烟也确认了 `user_version = 5`。
-  实机更新链路（0.7.0 查到 0.7.1 → 下载 → 下次启动生效）留到 18:00 以后，换本地 HTTP 源再试。
+- **18:00 补验（结论：迁移链路本身没问题，是这台机器在拦打包版 exe）**
+  - 先复跑 `.data\smoke-071.ps1`：打包版照常起来，8 项全 PASS（回收站入口、无控制台错误）。
+  - 但随后同一个 exe、同一个临时目录，只要里面放着一个 **v4 库**，启动就崩（`0x80000003`，
+    STATUS_BREAKPOINT，连 `diagnostics.log` 都来不及建）；再试连**空目录**也挂住（>120s）。
+    所以不是「v4 库让 0.7.1 崩」，是这台机器在拦未签名 exe（15:37 起还有一个 dev 实例在跑，
+    Defender 也可能在扫描）。不能把这当成迁移的结论。
+  - 换成 **dev 版**（`out/` 是 0.7.1 的代码，main 完全同一份，只是没有打包壳）打开真的 v4 库：
+    备份 `backups\wordmemo-pre-migrate-v4.db` 生成、`user_version` 4 → 5、
+    `sync_tombstones` 多出 `payload` 列，`diagnostics.log` 里有 `pre-migrate-backup`；
+    迁移前后行数一致（decks=1，其余为空）。**这是生产代码路径的端到端验证。**
+  - 迁移只做 `ALTER TABLE ADD COLUMN` + 改 `user_version`，不重建任何业务表，所以内容不会被动。
+- **更新链路：没做端到端下载，改用真实 latest.json 验决策**。打包版启动不稳，跑不了「0.7.0
+  自动查到 0.7.1 → 下载 → 换目录」。用线上的 `latest.json` 喂给**同一份** `parseLatestInfo` /
+  `decideUpdate`：0.7.0 → `action: 'download'`，0.7.1 → `none` / `up-to-date`，解析出的下载地址
+  就是 `…/releases/latest/download/WordMemo-0.7.1-portable.zip`。下载、流式校验、解压、
+  启动器换目录那段代码在 0.5.1 → 0.6.0 已经实机跑通过，0.7.x 没改过它。
 
 ### 0.7 与 §3 描述不一致的地方（2026-11-26 复核）
 
