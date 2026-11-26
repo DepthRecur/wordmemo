@@ -349,6 +349,24 @@ export default function SettingsPage({
     }
   }
 
+  const clearAnswerCache = async () => {
+    if (
+      !window.confirm(
+        '清空 AI 回答缓存？\n清空后同样的内容会重新请求 AI（会消耗 token）。\n\n' +
+          '提示：缓存键不含模型，所以换了模型也可能会复用旧答案；想拿到新答案就清一次。'
+      )
+    ) {
+      return
+    }
+    try {
+      const removed = await window.api.settings.clearAiCache()
+      notify(`已清空 ${removed} 条 AI 缓存`, 'ok')
+      await loadInfo()
+    } catch (error) {
+      notify(`清空缓存失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+    }
+  }
+
   const refreshPricingNow = async () => {
     setPricingBusy(true)
     try {
@@ -678,6 +696,9 @@ export default function SettingsPage({
             <Badge tone={providers.some((p) => p.keySet) ? 'green' : 'yellow'}>
               {providers.filter((p) => p.keySet).length} / {providers.length || 4} 家已配置
             </Badge>
+            <Button size="sm" variant="ghost" onClick={() => void clearAnswerCache()}>
+              清空回答缓存
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => void clearAllKeys()}>
               清除全部 Key
             </Button>

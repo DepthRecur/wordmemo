@@ -1,4 +1,4 @@
-﻿import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type {
   AiBudgetNotice,
   DeckInput,
@@ -24,6 +24,7 @@ const api: WordmemoApi = {
     setApiKey: (provider, key) => ipcRenderer.invoke('settings:setApiKey', provider, key),
     clearApiKey: (provider) => ipcRenderer.invoke('settings:clearApiKey', provider),
     clearAllApiKeys: () => ipcRenderer.invoke('settings:clearAllApiKeys'),
+    clearAiCache: () => ipcRenderer.invoke('settings:clearAiCache'),
     testApiKey: (provider, key) => ipcRenderer.invoke('settings:testApiKey', provider, key),
     aiProviders: () => ipcRenderer.invoke('settings:aiProviders'),
     refreshCatalog: (provider, force) =>

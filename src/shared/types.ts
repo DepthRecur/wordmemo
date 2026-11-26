@@ -740,6 +740,8 @@ export interface WordmemoApi {
     clearApiKey(provider?: AiProviderId): Promise<void>
     /** 清掉全部 Key（含旧的 secrets.bin） */
     clearAllApiKeys(): Promise<void>
+    /** 清空 AI 回答缓存（换个模型后想拿到新答案时用）；返回删掉的条数 */
+    clearAiCache(): Promise<number>
     testApiKey(provider?: AiProviderId, key?: string): Promise<AiTestResult>
     /** 设置页四张卡片的只读视图（不含 Key） */
     aiProviders(): Promise<AiSettingsInfo>

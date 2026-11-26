@@ -1,4 +1,4 @@
-﻿import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type {
@@ -41,6 +41,7 @@ import { enrichNote } from './enrich'
 import { semanticSearch } from './search'
 import { lookupPhonetic } from './media/phonetic'
 import { getDb } from './db/connection'
+import { clearAiCache } from './db/ai'
 import { testApiKey } from './ai/client'
 import { muteBudgetNotice } from './ai/budget'
 import { aiSettingsInfo } from './ai/info'
@@ -123,6 +124,8 @@ export function registerIpc(): void {
     clearAllApiKeys()
     updateSettings({})
   })
+  // B-02：P-07 决定缓存键不含 model，换模型会复用旧答案；这里给用户一个自救入口
+  ipcMain.handle('settings:clearAiCache', () => clearAiCache())
   ipcMain.handle('settings:testApiKey', (_e, provider?: string, key?: string) =>
     testApiKey(asProviderId(provider), typeof key === 'string' ? key : undefined)
   )
