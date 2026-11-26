@@ -1,4 +1,4 @@
-﻿# WordMemo · 英语笔记背诵工具
+# WordMemo · 英语笔记背诵工具
 
 把老师的英语笔记（图片 / txt / md / docx / xlsx）变成结构化词条库，用 **FSRS** 安排长期复习，用**听写日期倒排**生成冲刺计划，用 **DeepSeek / OpenAI / Gemini / GLM** 做识别、校验、语义判分和搭配补充，发音自动抓取并缓存到本地。
 
@@ -211,8 +211,16 @@ npm run dist         # 打包便携版：release/WordMemo-<ver>-portable.zip + .
 npm run dist:app     # 只出 release/win-unpacked
 npm run launcher     # 只重编便携版启动器（Windows 自带 csc.exe，不需要 SDK）
 npm run typecheck
-npm test             # Vitest：SQLite / FSRS / 判分 / 计划器 / 更新逻辑
+npm test             # Vitest：SQLite / FSRS / 判分 / 计划器 / 更新逻辑 / 同步
 ```
+
+**冒烟/多实例测试不要碰真实数据**：打包版现在认 `--data-dir=<绝对路径>`（0.7 起），所有模块（设置、密钥、发音缓存、日志、数据库）都会落到那一个目录：
+
+```powershell
+release\win-unpacked\WordMemo.exe --data-dir=%TEMP%\wordmemo-smoke
+```
+
+开发模式默认用仓库里的 `.data/`；`--data-dir` 对两种模式都生效，优先级最高。
 
 技术栈：Electron 38.8.6（Chromium 140 / Node 22）、React 19、TypeScript、`ts-fsrs` 6（FSRS-7）、`node:sqlite`（零原生编译）、Vite。
 
