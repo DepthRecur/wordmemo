@@ -32,16 +32,18 @@
 | G-01 / G-02 全部、G-03 大部分 | ✅ | 两份 handoff 的进度、分支、测试数；README 启动章节、`--no-sandbox` 口径、日志路径、测试条数 |
 | G-04 / G-05 / G-06 | ✅ | PLAN-UPDATE（CI 断言、首个可更新版本、备份 3 份作废、手动清单）；PLAN-SYNC（§7 对策表加 0.7 状态、§8 建议升已定、§4 记 A-06 格式变化、§10 末尾加「与 §3 不一致」表）；GITHUB-SELECTION 依赖表、BUGS-DECKS:28、PLAN-DECKS lastDeckId、test-package 设备名 |
 | D-05 删除影子 30 天清理（方案 B） | ✅ | `e08bda2 feat(sync): purge deletion shadows after 30 days`；回收站 UI 留后续版本 |
+| D-05 方案 A 第一刀：schema v5 + 删除快照（4a） | ✅（2026-11-26 下午，另开分支） | `16f839c feat(sync): snapshot deleted rows so the recycle bin can restore them`；分支 `feat/0.7.1-recycle` |
 | D-08 截图 | ⬜ | 你手动补图 |
 | 0.7.0 发版 | ✅ | `8c36342 merge: 0.7.0（BACKLOG 勾选的 16 条改进）`；tag `v0.7.0`，CI run `45753172826` |
 
 **当前基线**：`npm run typecheck` 0 错误；`npm test` **41 文件 / 324 项（313 通过 + 11 跳过）**（以 `npm test` 输出为准），开工前是 32 文件 / 285 项。
 
-### 断点（2026-11-26 12:20，0.7.0 已发布）
+### 断点（2026-11-26 13:20，0.7.0 已发布，4a 已落地）
 
-- **0.7.0 已发布**：`master` = `8c36342`，tag `v0.7.0`，CI run `45753172826`；Release 三件套核对结果见 [PLAN-SYNC.md](PLAN-SYNC.md) §10「发布 v0.7.0」。
-- 本地分支 `feat/0.7-backlog` 仍保留（可留作这次改动的整体回退点），没有删除。
-- 剩下没做的只有两件，都不阻塞：① D-05 的回收站（要升 schema v5 + payload 快照，独立一轮做）；② D-08 的 4 张截图（你补，README 里留了占位）。
+- **0.7.0 已发布**：`master` = `0fb6bb2`，tag `v0.7.0`（→ `8c36342`），CI run `45753172826`；Release 三件套核对结果见 [PLAN-SYNC.md](PLAN-SYNC.md) §10「发布 v0.7.0」。
+- **D-05 方案 A 的 4a 已完成**：分支 `feat/0.7.1-recycle`（从 `master` 开），一个提交 `16f839c`：`sync_tombstones` 加 `payload`、`SCHEMA_VERSION 4 → 5`、四个删除入口带快照、`tests/tombstone-payload.test.ts`（5 项）。**没有合入 master，也没有发版。**
+- **下一步（18:00 之后）**：4b（`sync:tombstones` / `sync:restore` IPC + 恢复逻辑 + 双设备测试）→ 4c（设置 → 同步 →「最近删除」UI）→ 再决定 0.7.1 怎么发（这次要真的迁移 schema，release notes 必须写「首次启动会迁移并自动备份」）。
+- 还剩 D-08 的 4 张截图（你补，README 里留了占位）。
 - 这次的「明确不做」清单已写进 [BACKLOG.md](BACKLOG.md) 与各 PLAN 文档，下一轮不要重新讨论。
 
 ---
@@ -151,6 +153,11 @@
 **方案 B（若选它，2 小时）**：启动时清理 30 天前的 tombstone + 日志；文档写「不提供恢复」。
 
 **方案 A（你勾的全做，约 2~3 天）**，分三步，每步可停：
+
+> **进度（2026-11-26 下午）**：4a 已完成，提交在**另一个分支** `feat/0.7.1-recycle`
+> （`16f839c`），没有和 0.7.0 混在一起。4b/4c 待做，18:00 之后继续。
+> 实现和计划的差别：笔记快照多存了 `raw_markdown`（计划只写标题+库+词条 uid，
+> 但正文才是「内容」）；远端 delete op 不带字段，所以那种影子仍然没有 payload。
 
 1. **4a 快照（schema v5）**
    - `sync_tombstones` 加 `payload TEXT`、`deleted_at_label TEXT`；`recordTombstone()` 增加可选 `payload`。
