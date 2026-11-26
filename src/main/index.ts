@@ -9,6 +9,7 @@ import { APP_ICON, TRAY_ICON } from './icon-data'
 import { countDue } from './db/cards'
 import { currentDeckId, getDeck } from './db/decks'
 import { countDrafts } from './db/importDrafts'
+import { purgeOldTombstones } from './db/sync'
 import { getDb } from './db/connection'
 import { localDate } from './db/connection'
 import { getDiagnostics, getIntegrity, log, setTrayState } from './diagnostics'
@@ -439,6 +440,14 @@ async function bootstrap(): Promise<void> {
     return
   }
   initSettings()
+  // D-05（方案 B）：删除影子只保留 30 天，启动时清一次，别让表无限长。
+  // 还等着推出去的删除不动（见 purgeOldTombstones 的注释）。
+  try {
+    const purged = purgeOldTombstones()
+    if (purged > 0) log('tombstone-purge', { purged })
+  } catch (err) {
+    log('tombstone-purge-failed', { error: err instanceof Error ? err.message : String(err) })
+  }
   log('app-start', { ...getDiagnostics() })
   log('sandbox-start', {
     compatMode: sandboxBoot.state.compatMode,
