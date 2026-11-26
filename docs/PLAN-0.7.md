@@ -30,19 +30,19 @@
 | E-02 发布材料（文字） | ✅ | README「常见现象 / 被拦截怎么加白」+ `.github/ISSUE_TEMPLATE/bug_report.yml`；4 张截图留占位 |
 | 「不做」的 23 条落档 | ✅ | 分别写进 PLAN.md §14.1 / PLAN-SYNC §9 / PLAN-PROVIDERS / PLAN-DECKS / PLAN-UPDATE / README 已知限制 |
 | G-01 / G-02 全部、G-03 大部分 | ✅ | 两份 handoff 的进度、分支、测试数；README 启动章节、`--no-sandbox` 口径、日志路径、测试条数 |
+| G-04 / G-05 / G-06 | ✅ | PLAN-UPDATE（CI 断言、首个可更新版本、备份 3 份作废、手动清单）；PLAN-SYNC（§7 对策表加 0.7 状态、§8 建议升已定、§4 记 A-06 格式变化、§10 末尾加「与 §3 不一致」表）；GITHUB-SELECTION 依赖表、BUGS-DECKS:28、PLAN-DECKS lastDeckId、test-package 设备名 |
 | D-05 回收站 | ⬜ 等下一条 | 需要你选 A（升 v5）/ B（只清理）→ 见 §0.1② |
-| G-03 剩余 / G-04 / G-05 / G-06 | ⬜ | 阶段 6（PLAN-UPDATE / PLAN-SYNC / GITHUB-SELECTION / BUGS-DECKS / PLAN-DECKS / test-package） |
 | D-08 截图 | ⬜ | 你手动补图 |
+| 0.7.0 发版 | ⬜ | 版本号 + release notes 三行 + `npm run dist` + `--data-dir` 冒烟 + 合 master + tag + 核对 Release |
 
 **当前基线**：`npm run typecheck` 0 错误；`npm test` **37 文件 / 315 项（304 通过 + 11 跳过）**，开工前是 32 文件 / 285 项。
 
 ### 断点（2026-11-26 08:30 停手，12:00 续）
 
-- 全部已提交到 `feat/0.7-backlog`（16 个提交），工作区干净，**未推送**（不需要网络）。
-- 12:00 的第一件事：**D-05**。先问用户选 A 还是 B；没答复就做 **G-04 / G-05 / G-06**（三份 plan 文档的对齐 + `test-package/README.md`），这些不依赖 D-05。
-- D-05 方案定下后 → 代码 → 然后 0.7.0 发版（改版本号 + `release-notes/v0.7.0.md` 三行 + `npm run dist` + 用 `--data-dir` 冒烟 + 合 master + tag + CI 核对）。
-- A-06 引入的传输形态变化（`note_uids` / `item_uids`）要在 **PLAN-SYNC §4** 补一句：0.6.0 读到 0.7 写的考试会看不到「指定笔记」，退化成整库范围（仅升级窗口）。
-- 提醒：写文档时别再用「37 文件 / 315 项」这类硬编码——现在以 `npm test` 输出为准（基线 40 文件 / 318 项）。
+- 全部已提交到 `feat/0.7-backlog`（25 个提交），工作区干净，**未推送**（不需要网络）。
+- **12:00 只剩两件事**：① 你定 D-05 的 A/B；② 0.7.0 发版（版本号 + `release-notes/v0.7.0.md` 三行 + `npm run dist` + 用 `--data-dir` 冒烟 + 合 master + tag + 核对三件套）。
+- 如果 12:00 你还没定 D-05：先按「方案 B（只做 30 天清理）」推进发版，把恢复 UI 留到 0.7.1——它需要 schema v5，和发版混在一起风险更高。
+- 截图（E-02 / D-08）等你补：README 里 4 个 `shots/smartscreen-*.png` 占位。
 
 ---
 
