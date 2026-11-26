@@ -66,10 +66,27 @@ export function getDiagnostics(): {
   }
 }
 
+/** 日志超过这个大小就滚一份（F-04）；只留一份备份，别让日志无限长 */
+export const LOG_MAX_BYTES = 2 * 1024 * 1024
+
+/** 需要滚动就返回 true（抽出来方便单测） */
+export function shouldRotateLog(sizeBytes: number, maxBytes = LOG_MAX_BYTES): boolean {
+  return Number.isFinite(sizeBytes) && sizeBytes >= maxBytes
+}
+
+function rotateIfNeeded(file: string): void {
+  try {
+    if (shouldRotateLog(fs.statSync(file).size)) fs.renameSync(file, `${file}.1`)
+  } catch {
+    /* 文件还不存在 / 没权限：照常追加 */
+  }
+}
+
 /** 追加写入 <userData>/diagnostics.log，方便出问题时直接看 */
 export function log(event: string, data: Record<string, unknown> = {}): void {
   try {
     const file = path.join(app.getPath('userData'), 'diagnostics.log')
+    rotateIfNeeded(file)
     fs.appendFileSync(
       file,
       `${JSON.stringify({ at: new Date().toISOString(), event, ...data })}\n`,

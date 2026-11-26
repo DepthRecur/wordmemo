@@ -400,6 +400,40 @@ export function registerIpc(): void {
     return target
   })
   ipcMain.handle('system:appVersion', () => app.getVersion())
+  // F-04：把诊断信息打成一个 txt，用户直接发给我排错（日志本身已轮转，不会无限长）
+  ipcMain.handle('system:exportDiagnostics', async () => {
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '-')
+      .replace('T', '_')
+      .slice(0, 19)
+    const picked = await dialog.showSaveDialog({
+      title: '导出诊断信息',
+      defaultPath: `wordmemo-diagnostics-${stamp}.txt`,
+      filters: [{ name: '文本文件', extensions: ['txt'] }]
+    })
+    if (picked.canceled || !picked.filePath) return { ok: false, path: null as string | null }
+    const parts: string[] = []
+    parts.push(`WordMemo 诊断信息  ${new Date().toISOString()}`)
+    parts.push(`版本            ${app.getVersion()}`)
+    parts.push(`平台            ${process.platform} ${process.arch}`)
+    parts.push(`数据目录        ${dataDir()}`)
+    try {
+      parts.push(`运行状态        ${JSON.stringify(getDiagnostics())}`)
+    } catch {
+      /* ignore */
+    }
+    for (const name of ['diagnostics.log.1', 'diagnostics.log']) {
+      const file = path.join(dataDir(), name)
+      if (!fs.existsSync(file)) continue
+      parts.push('', `=== ${name}（末尾 300 行）===`)
+      // 只取末尾：日志可能已经有 2 MB
+      const lines = fs.readFileSync(file, 'utf8').trimEnd().split('\n')
+      parts.push(...lines.slice(-300))
+    }
+    fs.writeFileSync(picked.filePath, parts.join('\n'), 'utf8')
+    return { ok: true, path: picked.filePath }
+  })
   ipcMain.handle('system:buildInfo', () => {
     let buildTime: string | null = null
     try {

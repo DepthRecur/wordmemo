@@ -139,6 +139,7 @@ const api: WordmemoApi = {
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),
     backup: () => ipcRenderer.invoke('system:backup'),
+    exportDiagnostics: () => ipcRenderer.invoke('system:exportDiagnostics'),
     appVersion: () => ipcRenderer.invoke('system:appVersion'),
     buildInfo: () => ipcRenderer.invoke('system:buildInfo'),
     reloadWindow: () => ipcRenderer.invoke('system:reloadWindow'),

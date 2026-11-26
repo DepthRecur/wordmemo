@@ -892,6 +892,8 @@ export interface WordmemoApi {
   system: {
     openDataDir(): Promise<void>
     backup(): Promise<string>
+    /** 把版本/沙箱状态/日志末尾打成 txt（取消时 path=null） */
+    exportDiagnostics(): Promise<{ ok: boolean; path: string | null }>
     appVersion(): Promise<string>
     buildInfo(): Promise<BuildInfo>
     /** 只刷新渲染层（主进程不重启） */

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, Database, FolderOpen, Volume2 } from 'lucide-react'
+import { ArrowDown, ArrowUp, Database, FileText, FolderOpen, Volume2 } from 'lucide-react'
 import type {
   AiPriceInfo,
   AiProviderConfig,
@@ -367,6 +367,16 @@ export default function SettingsPage({
       await loadInfo()
     } catch (error) {
       notify(`清空缓存失败：${error instanceof Error ? error.message : String(error)}`, 'err')
+    }
+  }
+
+  const exportDiagnostics = async () => {
+    try {
+      const res = await window.api.system.exportDiagnostics()
+      if (!res.ok || !res.path) return
+      notify(`已导出诊断信息：${res.path}`, 'ok')
+    } catch (error) {
+      notify(`导出失败：${error instanceof Error ? error.message : String(error)}`, 'err')
     }
   }
 
@@ -1234,6 +1244,9 @@ export default function SettingsPage({
               <Button onClick={() => void backup()}>立即备份</Button>
               <Button onClick={() => void window.api.system.openDataDir()}>
                 <FolderOpen size={15} /> 打开数据目录
+              </Button>
+              <Button onClick={() => void exportDiagnostics()}>
+                <FileText size={15} /> 导出诊断
               </Button>
             </div>
             <div className="row-between" style={{ marginTop: 8 }}>
