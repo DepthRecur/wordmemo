@@ -1,7 +1,7 @@
-﻿# 交接文档（给下一个会话 / 未来的自己）
+# 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-26（0.6.0 已发布；0.7 改进进行中，见 [PLAN-0.7.md](PLAN-0.7.md)）　当前分支：`feat/0.7-backlog`（同步与 0.6.0 已在 `master`）　仓库：`DepthRecur/wordmemo`（public）
-> **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过两次（各约 3 分钟），Release 三件套由 CI 生成。
+> 最后更新：2026-11-26（**0.7.0 已发布**，tag `v0.7.0`；本轮改进记录见 [PLAN-0.7.md](PLAN-0.7.md)）　当前分支：`master`　仓库：`DepthRecur/wordmemo`（public）
+> **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1`、`v0.6.0`、`v0.7.0` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过多次（各约 3 分钟），Release 三件套由 CI 生成。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---
@@ -21,7 +21,7 @@
 
 **3500 压力测试（2026-11-20，只测不改）**：3500 份笔记的列表 **不需要虚拟化**（IPC 89ms / 首屏 274ms / 滚动 60fps）；3500 个词条的**笔记详情**是热点（首屏 802ms / 滚动 ~30fps / 10 万 DOM 节点），这次没改代码，方案记在 [PLAN-DECKS §15.7](PLAN-DECKS.md)。
 
-下一个要做的：**同步 S0**（[PLAN-SYNC.md](PLAN-SYNC.md)）：`uid` + `replayCards()` + golden test。**S0 不通过就别往下做**，退路是「以卡为准 + 冲突副本」。
+下一个要做的：**0.7.1 / 后续版本**。0.7.0 已发布，剩下的是 [BACKLOG.md](BACKLOG.md) 里没勾的条目——最明确的两件是 D-05 的回收站（要升 schema v5 存删除快照）和 D-08 的 4 张截图（用户补）。**同步的格式与合并规则已冻结**，要动先看 [PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
 
 ---
 
@@ -31,13 +31,13 @@
 cd D:\ymh\Code\tools\wordmemo
 npm install          # 只有删过 node_modules 才需要
 npm run typecheck    # tsc --noEmit，必须 0 错误
-npm test             # vitest：以实际输出为准（2026-11-26 基线 40 文件 / 318 项，307 通过 + 11 跳过）
+npm test             # vitest：以实际输出为准（2026-11-26 基线 41 文件 / 324 项，313 通过 + 11 跳过）
 npm run dev          # 开发模式启动（脚本已带 --noSandbox）
 ```
 
 - **`npm test` 报 `spawn EPERM`**：说明你处在受限沙箱里（esbuild 要 spawn 命名管道）。**在普通 PowerShell / CMD 里跑**就没问题。
 - 只跑一个测试：`npx vitest run tests/providers.test.ts`
-- 打包（便携版）：`npm run dist` → `release/WordMemo-0.4.0-portable.zip`（+ `.sha256` + `latest.json`）；只想出 `win-unpacked` 用 `npm run dist:app`；只编译启动器用 `npm run launcher`。
+- 打包（便携版）：`npm run dist` → `release/WordMemo-<version>-portable.zip`（+ `.sha256` + `latest.json`，当前 `0.7.0`）；只想出 `win-unpacked` 用 `npm run dist:app`；只编译启动器用 `npm run launcher`。
 - 应用是单实例的：改完代码要先真退出（托盘右键 → 退出），再重新启动，否则加载的还是旧代码。
 - **手动启动主进程**（真机冒烟用）：`Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue; .\node_modules\electron\dist\electron.exe . --no-sandbox`。环境里若留着 `ELECTRON_RUN_AS_NODE=1`（DSH 这类工具会设），Electron 会被当成 node 跑，报 `Cannot read properties of undefined (reading 'isPackaged')`。
 

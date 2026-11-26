@@ -1,7 +1,7 @@
-﻿# 交接文档：同步（Sync）板块
+# 交接文档：同步（Sync）板块
 
 > 写给**新会话**：读这一份就能直接开工，不用重读旧对话。
-> 生成时间：2026-11-24（同步验收完成）　分支：`feat/sync`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
+> 生成时间：2026-11-24（同步验收完成）／2026-11-26 更新到 0.7.0　分支：`master`（最新提交以 `git log -1` 为准）　仓库：`D:\ymh\Code\tools\wordmemo`（远端 `DepthRecur/wordmemo`，已公开）
 > 前置阅读（按顺序）：本文 → [PLAN-SYNC.md](PLAN-SYNC.md) §1–§5 与 §10 → [HANDOFF.md](HANDOFF.md) §1（命令）/§8（坑）/§10（纪律）。
 > 文案规则：[MESSAGES.md](MESSAGES.md)。同步里任何用户可见的字都按它定级。
 
@@ -9,17 +9,17 @@
 
 ## 0. 一句话现状
 
-**v0.6.0 已发布（2026-11-24）。** 同步 S0–S4 全部实现并合入 `master`（`ad3a400`），tag `v0.6.0`
-由 GitHub Actions 发出，Release 三件套齐全。同步代码已冻结；后续改动按新版本走，格式变更规则见
-[PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
+**v0.7.0 已发布（2026-11-26）。** 同步 S0–S4 在 0.6.0 全部实现（`ad3a400`），0.7.0 又修了 6 个
+同步正确性问题（见 §3 末尾与 [PLAN-0.7.md](PLAN-0.7.md) §0.2），合入 `master`（`8c36342`），
+tag `v0.7.0` 由 GitHub Actions 发出。格式变更规则见 [PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
 
-- 发布记录（过程、产物、sha、核对结果）在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 的「发布 v0.6.0」
-- `npm run typecheck` → 0 错误；`npm test` → **32 文件 / 274 项通过 + 2 份手动测试跳过**；`build` / `dist` 通过
-- 验收期间一共修了 **5 个真 bug**（清单在 §3）
+- 发布记录（过程、产物、sha、核对结果）在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 的「发布 v0.7.0」
+- `npm run typecheck` → 0 错误；`npm test` → **41 文件 / 324 项（313 通过 + 11 跳过）**，以实际输出为准；`build` / `dist` 通过
+- 验收期间一共修了 **5 个真 bug**（清单在 §3）；0.7.0 又修了 6 个（A-01/A-03/A-04/A-06/D-02/D-06）
 - 测试仓库 `DepthRecur/wordmemo-sync-test` 现在是「本机 A + 你的 VM」两台设备的正常状态，
   密码 `wordmemo-vm-test-parrot`；不用再清
 
-**发版步骤已完成**（§3 保留作复现手册）：合 `master` → 跑检查 → tag `v0.6.0` → push tag → 核对 Release。
+**发版步骤已完成**（§3 保留作复现手册）：合 `master` → 跑检查 → tag `v0.7.0` → push tag → 核对 Release。
 下一个版本发版时照 §3 做即可。
 
 **当前环境（接手时看一眼）**
@@ -36,10 +36,10 @@
 
 ```powershell
 cd D:\ymh\Code\tools\wordmemo
-git checkout feat/sync          # 已经在上面
+git checkout master            # 0.7.0 已合入
 npm install                     # 只有删过 node_modules 才需要
 npm run typecheck
-npm test                        # 32 文件 274 项通过（+2 份手动测试跳过）
+npm test                        # 41 文件 324 项（313 通过 + 11 跳过），以实际输出为准
 npm run build
 npm run dev                     # 开发模式（脚本自带 --noSandbox）
 ```
@@ -307,24 +307,22 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 ## 9. 新会话开场提示词（直接复制）
 
 ```
-继续 WordMemo（D:\ymh\Code\tools\wordmemo）。同步已在 0.6.0 发布，当前主线是 0.7 的改进计划。
-先确认状态：git branch --show-current、git log --oneline -5（同步代码已在 master）。
-然后读 docs/PLAN-0.7.md（§0.2 有进度与断点）与 docs/BACKLOG.md（已勾选的决策）。
-同步的实现记录在 docs/PLAN-SYNC.md §10；这本 HANDOFF-SYNC 是同步板块的交接与避坑清单。
+继续 WordMemo（D:\ymh\Code\tools\wordmemo）。0.7.0 已于 2026-11-26 发布（tag v0.7.0），主线在 master。
+先确认状态：git branch --show-current、git log --oneline -5。
+然后读 docs/PLAN-0.7.md（§0.2 是 0.7 的进度与断点）与 docs/BACKLOG.md（已勾选 / 明确不做的决策）。
+同步的实现记录在 docs/PLAN-SYNC.md §10（含发布记录）；这本 HANDOFF-SYNC 是同步板块的交接与避坑清单。
 
-现状（2026-11-26）：分支 feat/0.7-backlog，typecheck 0 错误、npm test 40 文件 318 项
-（304 通过 + 11 跳过：真实库迁移、真仓库同步按设计跳过）。
-0.7 已完成：A-01 同步假成功、A-03 时钟夹取、A-04 skipped 上报、A-02 旧库闸门、
-C-04 迁移失败提示、E-04 --data-dir、D-01 checkpoint 归档、D-02 额度降级、D-05 待定、
-D-06 作废在飞同步、B-02 清 AI 缓存、C-02 删库刷新、C-05② 考试标签、A-06 考试范围按 uid、
-F-04 日志轮转+导出诊断、F-06 粘贴图片、E-02 发布材料文字部分。
+现状（2026-11-26）：master，typecheck 0 错误、npm test 41 文件 324 项
+（313 通过 + 11 跳过：真实库迁移、真仓库同步按设计跳过）。
+0.7.0 做了什么：同步 6 个真问题（A-01 假成功、A-03 时钟夹取、A-04 skipped 上报、
+A-06 考试范围按 uid、D-02 额度降级、D-06 作废在飞同步），A-02 旧库闸门、C-04 迁移失败提示、
+E-04 --data-dir、D-01 checkpoint 归档、D-05 删除影子 30 天清理、B-02 清 AI 缓存、
+C-02 删库刷新、C-05② 考试标签、F-04 日志轮转+导出诊断、F-06 粘贴图片。
+数据库仍是 v4，没有迁移。
 
-下一件事：D-05（等用户选「升 schema v5 做回收站」还是「只做 30 天清理」）→ 然后阶段 6
-的文档对齐（G-01~G-06）与 0.7.0 发版。
+下一步候选：D-05 的回收站（要升 schema v5 + payload 快照）、D-08 的 4 张截图（用户补）。
 注意：这台机器到 github.com:443 时通时断，push 用 .data/push-retry.ps1。
-```
-
-硬约束见 HANDOFF-SYNC §8；用户可见文案按 docs/MESSAGES.md 定级。
+硬约束见 §8；用户可见文案按 docs/MESSAGES.md 定级。
 每做完一步在 PLAN-SYNC §10 或 PLAN-0.7 §0.2 记一笔，git commit -s。
 ```
 
@@ -332,8 +330,8 @@ F-04 日志轮转+导出诊断、F-06 粘贴图片、E-02 发布材料文字部�
 
 ## 10. 交接自检（新会话花两分钟确认）
 
-- [ ] `git branch --show-current` → `feat/0.7-backlog`（0.7 期间）或 `master`
-- [ ] `npm test` → 以实际输出为准（2026-11-26 基线：40 文件 318 项，307 通过 + 11 跳过）
+- [ ] `git branch --show-current` → `master`（0.7.0 已合入；下一轮改进另开分支）
+- [ ] `npm test` → 以实际输出为准（2026-11-26 基线：41 文件 324 项，313 通过 + 11 跳过）
 - [ ] `npm run typecheck` → 0 错误
 - [ ] `git log --oneline -8` → 能看到 `feat(sync): manage sync devices`、
       `feat(sync): add the sync settings panel`、`feat(sync): schedule sync runs`、
@@ -345,7 +343,8 @@ F-04 日志轮转+导出诊断、F-06 粘贴图片、E-02 发布材料文字部�
 - [ ] `grep -n "changePassphrase\|removeDevice" src/main/sync/engine.ts` → 都在
 - [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` / `sync_files` / `sync_devices` / `sync_runs`
 - [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码
-- [ ] `package.json` 版本是 `0.6.0`，`release-notes/v0.6.0.md` 存在
+- [ ] `package.json` 版本是 `0.7.0`，`release-notes/v0.7.0.md` 存在
+- [ ] `grep -n "purgeOldTombstones" src/main/db/sync.ts src/main/index.ts` → 都在（D-05 的 30 天清理）
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`、`sync-ui-smoke.mjs`），已被 gitignore
 
 
