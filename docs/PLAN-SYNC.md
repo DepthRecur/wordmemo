@@ -871,6 +871,34 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
   已在 `.github/workflows/release.yml` 改成先剥掉行尾标点再拼（下一版起生效；已发出的 v0.7.0
   notes 保持原样，不影响安装）。
 
+### 发布 v0.7.1（2026-11-26）
+
+0.7.0 之后两小时发的补丁版：补上 D-05 的回收站，**动了 schema（v4 → v5）**。
+这是同步板块第一次带迁移发版，记录得细一点：
+
+- **做了什么**：4a `16f839c`（`sync_tombstones.payload` + `SCHEMA_VERSION 5` + 四个删除入口带快照）、
+  4b `d1ecf5e`（`listDeleted` / `restoreDeleted` + `sync:deleted` / `sync:restore`）、
+  4c `f53072d`（设置 → 同步 →「最近删除」，没连接同步也能用）。
+- **发版前检查**：`typecheck` 0 错误；`npm test` 41 文件 / 324 项（313 通过 + 11 跳过）；
+  `build` / `dist` 通过，`release/WordMemo-0.7.1-portable.zip` 142.7 MB。
+- **冒烟**：打包版 + `--data-dir=%TEMP%\wordmemo-smoke-071\data`，8 项全 PASS
+  （版本 0.7.1、8 个分区、同步面板、**回收站入口**、导出诊断、清空缓存、无控制台错误）；
+  另跑了一次真实界面流程（建笔记 → 删 → 回收站出现 → 恢复 → 回到列表），10 项全 PASS；
+  新建的临时库确认 `user_version = 5`、`sync_tombstones` 有 `payload` 列；
+  真实 `%APPDATA%` 库哈希未变。
+- **合并**：`git merge --no-ff feat/0.7.1-recycle` → `b88de51`；merge 后 `npm test` 仍 324 项。
+- **tag**：`v0.7.1`（annotated）→ `b88de51`；`master` 与 tag 第 1 次 push 就成功。
+- **CI**：run `45758959353` 成功。Release 三件套：`latest.json` 769 B、
+  `WordMemo-0.7.1-portable.zip` 149683895 B、`.sha256` 94 B；声明 sha256 `d7a6388f…`
+  （与本地 `18240206…` 不同，CI 重新构建）。
+- **核对**：7 项全 PASS（version / zip 名 / sha 与 `.sha256` 一致 / 文件名 / notes 非空 / 三件套 / 正文）。
+  第一次拉 `latest.json` 时 curl 报 SSL 35，重试一次就好了——这台机器的网络问题，不是资产缺失。
+- **发版后补了一刀**：`831acfd fix(sync): make restore atomic`——恢复的四条语句包进 `tx()`，
+  避免「内容插了一半、影子还在」的半成品状态。它在 tag 之后，随下一个版本发出去；
+  已发布的 0.7.1 在这条路径上只会返回「恢复失败」，不会写坏数据。
+- **没做**：0.7.0 → 0.7.1 的实机更新链路验证（0.7.0 已支持 `--data-dir`，可以做，
+  但要先下载 150 MB 的旧包；留给 18:00 以后）。
+
 ### 0.7 与 §3 描述不一致的地方（2026-11-26 复核）
 
 实现时有几处设计被改了或没做，**以这里为准**（§3 的正文保留为当时的设想）：
