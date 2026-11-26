@@ -17,6 +17,7 @@ import { scheduleCatalogRefresh } from './ai/catalog'
 import { onBudgetExhausted } from './ai/budget'
 import { schedulePricingRefresh } from './ai/pricing'
 import { printSmokeTable, runAiSmoke } from './ai/smoke'
+import { resolveDataDir } from './dataDir'
 import { beginProbe, evaluateSandboxOnStart, markReady } from './sandbox'
 import { initUpdater } from './updater'
 import { flushBeforeQuit, initSyncManager, setSyncStatusSink } from './sync/manager'
@@ -30,14 +31,18 @@ let trayHintShown = false
 
 // 数据目录必须在读 sandbox-state.json 之前定下来：
 // 源码模式用项目内 .data，便携版固定 %APPDATA%\WordMemo（PLAN-UPDATE §3.11）。
-const dataRoot = (() => {
-  if (!app.isPackaged) {
-    const devData = process.env.WORDMEMO_DATA_DIR || path.join(app.getAppPath(), '.data')
-    fs.mkdirSync(devData, { recursive: true })
-    return devData
-  }
-  return path.join(app.getPath('appData'), 'WordMemo')
-})()
+// E-04：唯一的例外是 CLI `--data-dir=<路径>`（冒烟/多实例测试用），
+// 解析结果统一写回 WORDMEMO_DATA_DIR，settings/tts/secretStore/diagnostics 都读同一个值。
+const dataRootInfo = resolveDataDir({
+  argv: process.argv,
+  isPackaged: app.isPackaged,
+  appDataDir: app.getPath('appData'),
+  appPath: app.getAppPath(),
+  envDir: process.env.WORDMEMO_DATA_DIR
+})
+const dataRoot = dataRootInfo.dir
+process.env.WORDMEMO_DATA_DIR = dataRoot
+fs.mkdirSync(dataRoot, { recursive: true })
 app.setPath('userData', dataRoot)
 
 // U1：必须在 app.whenReady() 之前 appendSwitch；直接双击 app\WordMemo.exe 时没有启动器帮忙。
