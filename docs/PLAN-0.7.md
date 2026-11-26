@@ -8,31 +8,37 @@
 
 ## 0.2 进度（每做完一条勾一笔）
 
-分支：`feat/0.7-backlog`（2026-11-26 早上开工）
+分支：`feat/0.7-backlog`（2026-11-26 早上开工，上午一轮）
 
 | 条目 | 状态 | 提交 |
 |---|---|---|
 | 计划与决策归档 | ✅ | `f9bc295 docs: record the 0.7 backlog decisions and execution plan` |
 | A-01 同步静默假成功 | ✅ | `d0a93ca fix(sync): join an in-flight run instead of faking success` |
 | A-04 skipped 上报 | ✅ | `cd6f45b fix(sync): surface skipped records instead of dropping them silently` |
-| A-03 时钟夹取 | ⬜ 下一步 | — |
-| D-06 边界测试 | ⬜ | A-01 已带 `tests/sync-manager.test.ts`（5 项）；剩余「断开连接时不中止在飞同步」的行为未改 |
-| A-02 / C-04 / E-04 | ⬜ | 阶段 2 |
-| D-01 / D-02 | ⬜ | 阶段 3 |
-| D-05 | ⬜ | 阶段 4（待定 A/B，见 §0.1②） |
-| B-02 / C-02 / C-05②(+A-06) / F-04 / F-06 | ⬜ | 阶段 5 |
-| E-02 / G-01~G-06 / 不做落档 | ⬜ | 阶段 6 |
+| A-03 时钟夹取 | ✅ | `4bbb393 fix(sync): clamp remote timestamps so a fast clock cannot win forever` |
+| A-02 旧库闸门 + C-04 迁移失败提示 | ✅ | `c2f3db3 fix(db): refuse a database newer than this build, and report the backup` |
+| E-04 `--data-dir` | ✅ | `…feat(app): one --data-dir switch so smoke runs never touch real data` |
+| D-02 额度降级 | ✅ | `…feat(sync): pause auto sync when the GitHub quota is nearly gone` |
+| D-01 checkpoint 双份归档 | ✅ | `…feat(sync): keep two monthly checkpoint archives` |
+| B-02 清空 AI 缓存 | ✅ | `…feat(ai): clear the answer cache from settings` |
+| C-02 删库后刷新列表 | ✅ | `…fix(ui): refresh the library list after deck changes in settings` |
+| F-04 日志轮转 + 导出诊断 | ✅ | `…feat(diag): rotate the log and export a diagnostics bundle` |
+| F-06 粘贴图片 | ✅ | `…feat(import): paste an image straight into the import page` |
+| A-06 考试范围按 uid 同步 | ✅（勾选后新增那条） | `…fix(sync): send exam note/item scope as uids, not local ids` |
+| C-05② 考试页标签筛选 | ✅ | `…feat(exam): filter the exam scope by tags` |
+| D-06 边界测试 | 🟡 部分 | A-01 已带 `tests/sync-manager.test.ts`（5 项）；**断开连接不中止在飞同步**仍未改 |
+| D-05 回收站 | ⬜ 等下一条 | 需要你选 A（升 v5）/ B（只清理）→ 见 §0.1② |
+| E-02 / D-08 截图 | ⬜ | 阶段 6（文字我来写，图你后补） |
+| G-01~G-06 / 23 条「不做」落档 | ⬜ | 阶段 6，最后做（代码定稿后再改文档） |
 
-**当前基线**：`npm run typecheck` 0 错误；`npm test` **31 文件 / 290 项（279 通过 + 11 跳过）**。
+**当前基线**：`npm run typecheck` 0 错误；`npm test` **37 文件 / 315 项（304 通过 + 11 跳过）**，开工前是 32 文件 / 285 项。
 
-### 断点（2026-11-26 08:30 停手，12:00 续）
+### 断点（2026-11-26 08:25 停手，12:00 续）
 
-- 已提交到 `feat/0.7-backlog`，**未推送**（不需要网络）。
-- 下一步就是 **A-03 时钟夹取**：在 `checkpoint.ts` 里加 `CLOCK_SKEW_LIMIT_MS = 5 * 60_000` 与 `clampRemoteTs()`，
-  **必须夹在 ts 的推导点**（`applyRemoteOp` 的 `op.tsUtc`、`mergeCheckpoint` 的 `createdAtMs`），
-  这样后面 `recordSyncOp({tsUtc: ts})` 写进 `sync_ops` 的也是夹过的值——否则字段时钟会留在未来，
-  本机后续修改会一直输给那个未来时间戳。偏差 > 5 分钟时写一条 `logDiagnostic('sync-clock-skew')`，不打断同步。
-- A-03 完成后补测试：给一条 `tsUtc = now + 2h` 的 op → 应用后 `sync_ops` 里记的 ts 被夹到 now+5min。
+- 全部已提交到 `feat/0.7-backlog`，工作区干净，**未推送**（不需要网络）。
+- 12:00 的第一件事：**D-05**。先问用户选 A 还是 B；若没答复就跳到 **E-02 文字部分**（README「常见现象/加白」+ Issue 模板 + 4 个截图占位）与 **G-01/G-02**（两份 handoff 对齐），把需要等代码定稿的 G-03~G-06 留到最后。
+- 还欠着的一件事（代码）：`disconnectSync()` 不中止在飞同步（engine 引用丢了，promise 继续跑、仍会写远端）。做法：给 `SyncEngine` 加 `AbortSignal`（github 客户端 `fetch` 的 signal），或简单点——先在 manager 里标 `detached`，在 `doRunSync` 的每次 await 之后检查并提前返回；补一个测试。
+- A-06 引入的传输形态变化（`note_uids` / `item_uids`）要在 **PLAN-SYNC §4** 补一句：0.6.0 读到 0.7 写的考试会看不到「指定笔记」，退化成整库范围（仅升级窗口）。
 
 ---
 
