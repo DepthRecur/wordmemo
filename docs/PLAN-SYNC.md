@@ -861,6 +861,12 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
   （与本地 `npm run dist` 的 `5d5e0936…` 不同是正常的：CI 重新构建，字节本来就不会一样）。
 - **核对**：`latest.json` 的 `version` / `zip` / `sha256` 与 `.sha256` 一致，Release 正文就是
   `release-notes/v0.7.0.md` 三行。
+- **没做：0.6.0 → 0.7.0 的实机更新验证**。0.6.0 不认 `--data-dir`（`index.ts` 只在开发模式读
+  `WORDMEMO_DATA_DIR`，而 settings/tts 却无条件读，正是 E-04 修的那个分裂），要跑它只能靠 APPDATA
+  重定向，而 0.6.0 那次已经证明它不可靠、会写进真库。更新器本身在 0.5.0/0.5.1 时代已实机验证过，
+  这次跳过；替代证据是按 `updater.parseLatestInfo` 的 7 条规则逐条校验线上 `latest.json`
+  （`.data/check-latest-070.mjs`）：version / zip 纯文件名 / sha256 64 位 / notes 284 字符 / 下载地址
+  可拼 / 比 0.6.0 新，全部 PASS。0.6.0 的用户会看到更新提示，0.7.0 自己不会重复提示。
 - **发版后小修**：CI 用「；」把三行 notes 拼起来，行尾本来就有「。」，用户会在更新提示里看到「。；」。
   已在 `.github/workflows/release.yml` 改成先剥掉行尾标点再拼（下一版起生效；已发出的 v0.7.0
   notes 保持原样，不影响安装）。
