@@ -32,18 +32,18 @@
 | G-01 / G-02 全部、G-03 大部分 | ✅ | 两份 handoff 的进度、分支、测试数；README 启动章节、`--no-sandbox` 口径、日志路径、测试条数 |
 | G-04 / G-05 / G-06 | ✅ | PLAN-UPDATE（CI 断言、首个可更新版本、备份 3 份作废、手动清单）；PLAN-SYNC（§7 对策表加 0.7 状态、§8 建议升已定、§4 记 A-06 格式变化、§10 末尾加「与 §3 不一致」表）；GITHUB-SELECTION 依赖表、BUGS-DECKS:28、PLAN-DECKS lastDeckId、test-package 设备名 |
 | D-05 删除影子 30 天清理（方案 B） | ✅ | `e08bda2 feat(sync): purge deletion shadows after 30 days`；回收站 UI 留后续版本 |
-| D-05 方案 A 第一刀：schema v5 + 删除快照（4a） | ✅（2026-11-26 下午，另开分支） | `16f839c feat(sync): snapshot deleted rows so the recycle bin can restore them`；分支 `feat/0.7.1-recycle` |
+| D-05 方案 A：回收站（schema v5 + 快照 + 恢复 UI） | ✅（2026-11-26 下午，随 0.7.1 发布） | `16f839c` 快照 + `d1ecf5e` 接口 + `f53072d` UI；分支 `feat/0.7.1-recycle` 已合入 |
 | D-08 截图 | ⬜ | 你手动补图 |
 | 0.7.0 发版 | ✅ | `8c36342 merge: 0.7.0（BACKLOG 勾选的 16 条改进）`；tag `v0.7.0`，CI run `45753172826` |
 
 **当前基线**：`npm run typecheck` 0 错误；`npm test` **41 文件 / 324 项（313 通过 + 11 跳过）**（以 `npm test` 输出为准），开工前是 32 文件 / 285 项。
 
-### 断点（2026-11-26 13:20，0.7.0 已发布，4a 已落地）
+### 断点（2026-11-26 13:05，0.7.0 与 0.7.1 都已发布）
 
-- **0.7.0 已发布**：`master` = `0fb6bb2`，tag `v0.7.0`（→ `8c36342`），CI run `45753172826`；Release 三件套核对结果见 [PLAN-SYNC.md](PLAN-SYNC.md) §10「发布 v0.7.0」。
-- **D-05 方案 A 的 4a 已完成**：分支 `feat/0.7.1-recycle`（从 `master` 开），一个提交 `16f839c`：`sync_tombstones` 加 `payload`、`SCHEMA_VERSION 4 → 5`、四个删除入口带快照、`tests/tombstone-payload.test.ts`（5 项）。**没有合入 master，也没有发版。**
-- **下一步（18:00 之后）**：4b（`sync:tombstones` / `sync:restore` IPC + 恢复逻辑 + 双设备测试）→ 4c（设置 → 同步 →「最近删除」UI）→ 再决定 0.7.1 怎么发（这次要真的迁移 schema，release notes 必须写「首次启动会迁移并自动备份」）。
-- 还剩 D-08 的 4 张截图（你补，README 里留了占位）。
+- **0.7.0**：`8c36342`，tag `v0.7.0`，CI run `45753172826`。
+- **0.7.1（回收站）**：`b88de51`，tag `v0.7.1`，CI run `45758959353`；D-05 方案 A 的 4a/4b/4c 全部落地（`16f839c` / `d1ecf5e` / `f53072d`）。
+- **数据库升到 v5**：首次启动先备份再迁移；迁移后旧版会拒绝打开（release notes 里写了）。新建库与 v4→v5 迁移都有测试。
+- **剩下没做的**：① D-08 的 4 张截图（你补，README 里留了占位）；② 0.7.0 → 0.7.1 的**实机更新链路验证**（0.7.0 已经支持 `--data-dir`，可以安全地跑一次「旧版查到新版本 → 下载 → 下次启动生效」，留给 18:00 以后）。
 - 这次的「明确不做」清单已写进 [BACKLOG.md](BACKLOG.md) 与各 PLAN 文档，下一轮不要重新讨论。
 
 ---

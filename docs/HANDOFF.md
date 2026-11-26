@@ -1,7 +1,7 @@
 # 交接文档（给下一个会话 / 未来的自己）
 
-> 最后更新：2026-11-26（**0.7.0 已发布**，tag `v0.7.0`；本轮改进记录见 [PLAN-0.7.md](PLAN-0.7.md)）　当前分支：`master`　仓库：`DepthRecur/wordmemo`（public）
-> **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1`、`v0.6.0`、`v0.7.0` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过多次（各约 3 分钟），Release 三件套由 CI 生成。
+> 最后更新：2026-11-26（**0.7.1 已发布**，tag `v0.7.1`：新增删除恢复；本轮改进记录见 [PLAN-0.7.md](PLAN-0.7.md)）　当前分支：`master`　仓库：`DepthRecur/wordmemo`（public）
+> **推送状态**：`master` 与 tag `v0.5.0`、`v0.5.1`、`v0.6.0`、`v0.7.0`、`v0.7.1` 都已推上 GitHub；默认分支已改成 `master`。这台机器到 `github.com:443` 时通时断（`Connection was reset`），push 失败就重试几次；`api.github.com` 一直可用。GitHub Actions 的 `release` 工作流已真跑过多次（各约 3 分钟），Release 三件套由 CI 生成。
 > 这份文档的目的：**新会话读完它就能直接干活**，不需要重新讨论已经定过的事，也不需要重新调研。
 
 ---

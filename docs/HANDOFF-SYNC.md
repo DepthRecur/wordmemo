@@ -9,17 +9,18 @@
 
 ## 0. 一句话现状
 
-**v0.7.0 已发布（2026-11-26）。** 同步 S0–S4 在 0.6.0 全部实现（`ad3a400`），0.7.0 又修了 6 个
-同步正确性问题（见 §3 末尾与 [PLAN-0.7.md](PLAN-0.7.md) §0.2），合入 `master`（`8c36342`），
-tag `v0.7.0` 由 GitHub Actions 发出。格式变更规则见 [PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
+**v0.7.1 已发布（2026-11-26）。** 同步 S0–S4 在 0.6.0 全部实现（`ad3a400`），0.7.0 修了 6 个
+同步正确性问题，0.7.1 补上回收站（删除 30 天内可恢复内容，`SCHEMA_VERSION 5`）。主线
+`master` = `b88de51`，tag `v0.7.1` 由 GitHub Actions 发出。格式变更规则见
+[PLAN-SYNC.md](PLAN-SYNC.md) §4 的 `formatVersion`。
 
-- 发布记录（过程、产物、sha、核对结果）在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 的「发布 v0.7.0」
+- 发布记录（过程、产物、sha、核对结果）在 [PLAN-SYNC.md](PLAN-SYNC.md) §10 的「发布 v0.7.0」「发布 v0.7.1」
 - `npm run typecheck` → 0 错误；`npm test` → **41 文件 / 324 项（313 通过 + 11 跳过）**，以实际输出为准；`build` / `dist` 通过
 - 验收期间一共修了 **5 个真 bug**（清单在 §3）；0.7.0 又修了 6 个（A-01/A-03/A-04/A-06/D-02/D-06）
 - 测试仓库 `DepthRecur/wordmemo-sync-test` 现在是「本机 A + 你的 VM」两台设备的正常状态，
   密码 `wordmemo-vm-test-parrot`；不用再清
 
-**发版步骤已完成**（§3 保留作复现手册）：合 `master` → 跑检查 → tag `v0.7.0` → push tag → 核对 Release。
+**发版步骤已完成**（§3 保留作复现手册）：合 `master` → 跑检查 → tag → push tag → 核对 Release。
 下一个版本发版时照 §3 做即可。
 
 **当前环境（接手时看一眼）**
