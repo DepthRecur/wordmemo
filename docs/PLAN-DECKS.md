@@ -277,7 +277,7 @@ DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items);  -- 与 dele
 
 ### 7.3 导入页（`ImportPage.tsx`）
 
-- 顶部「导入到：[库 ▾]」，默认记住上次选择（`settings.lastDeckId`）。
+- 顶部「导入到：[库 ▾]」，默认记住上次选择（**实际实现用 `settings.currentDeckId`**；计划里写的 `lastDeckId` 从未存在，`ImportPage` 直接读当前库）。
 - 草稿落盘时写入 `deck_id`；`commitDraft` / `commitAll` 按草稿的库入库，不再需要用户二次选。
 - 若用户在导入过程中切换库，只影响之后新解析的文件，已落盘草稿不变（横幅提示）。
 

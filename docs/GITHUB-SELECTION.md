@@ -7,6 +7,8 @@
 
 ## 1. 直接依赖（写进 `package.json`）
 
+> **2026-11-26 核对（这张表是选型阶段的计划，不是现状）**：实际运行时依赖只有 `age-encryption`、`chardet`、`exceljs`、`iconv-lite`、`lucide-react`、`mammoth`、`react`、`react-dom`、`ts-fsrs`、`turndown`（devDeps 只有 electron / electron-builder / electron-vite / vite / vitest / typescript 与类型包）。**没有**引入 tailwindcss、shadcn/ui、react-md-editor、react-markdown、recharts、dayjs、openai-node —— 样式是手写 CSS，Markdown 渲染是自己写的轻量组件，图表用 SVG 手绘。分发形态也早已从 NSIS 改成便携版 zip。
+
 | 类别 | 项目 | 许可证 | 采用方式 | 说明 |
 |---|---|---|---|---|
 | 记忆算法 | [open-spaced-repetition/ts-fsrs](https://github.com/open-spaced-repetition/ts-fsrs) | MIT | **核心依赖** | 官方 TS 实现，v6 默认 FSRS-7；提供 `DefaultScheduler`、`review/preview/nextInterval/reschedule`，另有 WASM 参数优化器 |
