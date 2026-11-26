@@ -1,6 +1,6 @@
 import type { DeletedEntry, ExamScope, RestoreResult } from '@shared/types'
 import { normalizeEn } from '@shared/normalize'
-import { getDb, localIso, toInt } from './connection'
+import { getDb, localIso, toInt, tx } from './connection'
 import { ensureCards } from './items'
 import { scopeForSync } from './exams'
 import { listTombstones, noteItemUid, recordSyncOp, type SyncEntity } from './sync'
@@ -82,10 +82,14 @@ export function restoreDeleted(entity: string, uid: string): RestoreResult {
   const payload = row.payload
   const ts = Date.now()
   try {
-    if (target === 'note') return restoreNote(uid, payload, ts)
-    if (target === 'item') return restoreItem(uid, payload, ts)
-    if (target === 'deck') return restoreDeck(uid, payload, ts)
-    return restoreExam(uid, payload, ts)
+    // 一个事务：插入、重建关联/卡片、记 op、删影子要么全成要么全回滚。
+    // 半成品状态比「恢复失败」更糟——影子还在、内容却插了一半，再点一次会撞唯一索引。
+    return tx(() => {
+      if (target === 'note') return restoreNote(uid, payload, ts)
+      if (target === 'item') return restoreItem(uid, payload, ts)
+      if (target === 'deck') return restoreDeck(uid, payload, ts)
+      return restoreExam(uid, payload, ts)
+    })
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) }
   }
