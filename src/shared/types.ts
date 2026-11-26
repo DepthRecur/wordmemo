@@ -795,6 +795,8 @@ export interface WordmemoApi {
   }
   importer: {
     pickFiles(): Promise<string[]>
+    /** 粘贴进来的图片没有本地路径：先把 data URL 落成临时文件，返回路径（F-06） */
+    savePastedImage(dataUrl: string): Promise<string>
     /** 传入本地绝对路径：解析 + AI 校验后立刻落盘成草稿，返回草稿 id；deckId = 这份草稿入库时进的库 */
     parse(paths: string[], deckId?: number): Promise<ImportResult[]>
     /** 未入库草稿摘要列表（不含 payload，可以放心一次拉全） */

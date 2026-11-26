@@ -80,7 +80,8 @@ const api: WordmemoApi = {
     draftBytes: () => ipcRenderer.invoke('importer:draftBytes'),
     draftIssues: () => ipcRenderer.invoke('importer:draftIssues'),
     draftThumb: (id: number) => ipcRenderer.invoke('importer:draftThumb', id),
-    pathForFile: (file: File) => webUtils.getPathForFile(file)
+    pathForFile: (file: File) => webUtils.getPathForFile(file),
+    savePastedImage: (dataUrl: string) => ipcRenderer.invoke('importer:savePastedImage', dataUrl)
   },
   review: {
     daily: (deckId?: number | null) => ipcRenderer.invoke('review:daily', deckId),

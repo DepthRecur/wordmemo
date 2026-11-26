@@ -260,6 +260,18 @@ export function registerIpc(): void {
     return phonetic
   })
 
+  // F-06：粘贴进来的图片没有本地路径（webUtils 拿不到），先落成临时文件再走同一条导入路径
+  ipcMain.handle('importer:savePastedImage', (_e, dataUrl: string) => {
+    const match = /^data:image\/(png|jpeg|jpg);base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl ?? ''))
+    if (!match) throw new Error('只接受 PNG / JPEG 图片')
+    const ext = match[1] === 'png' ? 'png' : 'jpg'
+    const dir = path.join(app.getPath('temp'), 'wordmemo-paste')
+    fs.mkdirSync(dir, { recursive: true })
+    const file = path.join(dir, `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`)
+    fs.writeFileSync(file, Buffer.from(match[2], 'base64'))
+    return file
+  })
+
   ipcMain.handle('importer:pickFiles', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择英语笔记',
