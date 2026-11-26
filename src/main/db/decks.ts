@@ -265,8 +265,10 @@ export function removeDeck(
   }
 
   const wasCurrent = getSettings().currentDeckId === id
-  const deckRow = getDb().prepare('SELECT uid FROM decks WHERE id = ?').get(id) as
-    | { uid?: string | null }
+  const deckRow = getDb()
+    .prepare('SELECT uid, name, color, new_per_day FROM decks WHERE id = ?')
+    .get(id) as
+    | { uid?: string | null; name: string; color: string | null; new_per_day: number | null }
     | undefined
   const result = tx(() => {
     const before = count('SELECT COUNT(*) AS c FROM notes WHERE deck_id = ?', [id])
@@ -314,7 +316,15 @@ export function removeDeck(
       }
     }
     getDb().prepare('DELETE FROM decks WHERE id = ?').run(id)
-    recordSyncOp({ entity: 'deck', uid: deckRow?.uid ?? '', op: 'delete' })
+    recordSyncOp({
+      entity: 'deck',
+      uid: deckRow?.uid ?? '',
+      op: 'delete',
+      // D-05：恢复出来是一个空库（笔记已经被移走，不会跟着回来）
+      payload: deckRow
+        ? { name: deckRow.name, color: deckRow.color, new_per_day: deckRow.new_per_day }
+        : undefined
+    })
     return { moved: before, unassigned: moveTo === null ? before : 0 }
   })
   // 当前库就是被删的这个：别把悬空 id 留给托盘/提醒（D-05）。

@@ -147,7 +147,41 @@ export function updateExam(id: number, patch: Partial<ExamInput> & { status?: st
 
 export function deleteExam(id: number): void {
   const uid = examUid(id)
-  withSync({ entity: 'exam', uid: uid ?? '', op: 'delete' }, () => {
-    getDb().prepare('DELETE FROM exams WHERE id = ?').run(id)
-  })
+  // D-05：删之前把整行读出来，回收站要靠这份快照恢复（schema v5 的 payload）
+  const row = getDb()
+    .prepare(
+      'SELECT title, exam_date, scope, level, target_retention, daily_minutes, status FROM exams WHERE id = ?'
+    )
+    .get(id) as
+    | {
+        title: string
+        exam_date: string
+        scope: string
+        level: string
+        target_retention: number
+        daily_minutes: number
+        status: string
+      }
+    | undefined
+  withSync(
+    {
+      entity: 'exam',
+      uid: uid ?? '',
+      op: 'delete',
+      payload: row
+        ? {
+            title: row.title,
+            exam_date: row.exam_date,
+            scope: parseJson<ExamScope>(row.scope, {}),
+            level: row.level,
+            target_retention: row.target_retention,
+            daily_minutes: row.daily_minutes,
+            status: row.status
+          }
+        : undefined
+    },
+    () => {
+      getDb().prepare('DELETE FROM exams WHERE id = ?').run(id)
+    }
+  )
 }

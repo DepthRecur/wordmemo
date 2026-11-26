@@ -373,9 +373,50 @@ export function updateItem(
 
 export function deleteItem(id: number): void {
   const uid = itemUid(id)
-  withSync({ entity: 'item', uid: uid ?? '', op: 'delete' }, () => {
-    getDb().prepare('DELETE FROM items WHERE id = ?').run(id)
-  })
+  // D-05：整行快照进 tombstone.payload，回收站按它重建词条与卡片
+  const row = getDb()
+    .prepare(
+      `SELECT kind, headword, pos, phonetic, meanings, collocations, examples, extra,
+              accepted_zh, learned_at FROM items WHERE id = ?`
+    )
+    .get(id) as
+    | {
+        kind: string
+        headword: string
+        pos: string | null
+        phonetic: string | null
+        meanings: string
+        collocations: string
+        examples: string
+        extra: string | null
+        accepted_zh: string
+        learned_at: string | null
+      }
+    | undefined
+  withSync(
+    {
+      entity: 'item',
+      uid: uid ?? '',
+      op: 'delete',
+      payload: row
+        ? {
+            kind: row.kind,
+            headword: row.headword,
+            pos: row.pos,
+            phonetic: row.phonetic,
+            meanings: parseJson<unknown[]>(row.meanings, []),
+            collocations: parseJson<unknown[]>(row.collocations, []),
+            examples: parseJson<unknown[]>(row.examples, []),
+            extra: row.extra,
+            accepted_zh: parseJson<string[]>(row.accepted_zh, []),
+            learned_at: row.learned_at
+          }
+        : undefined
+    },
+    () => {
+      getDb().prepare('DELETE FROM items WHERE id = ?').run(id)
+    }
+  )
 }
 
 export function findExistingItemId(headword: string, _pos: string | null, _kind: ItemKind): number | null {

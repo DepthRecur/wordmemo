@@ -29,6 +29,11 @@ export interface SyncMeta {
   origin?: string
   /** 事件时间（epoch ms）；复习/卡片标志用复习发生的时刻，不传取当前时间 */
   tsUtc?: number
+  /**
+   * 只对 `op: 'delete'` 有意义：删除瞬间的整行快照，写进 `sync_tombstones.payload`。
+   * 回收站靠它恢复内容（D-05 / schema v5）。不传就是「恢复不出来」。
+   */
+  payload?: Record<string, unknown>
 }
 
 export interface SyncOpRow {
@@ -102,21 +107,35 @@ export function recordSyncOp(meta: SyncMeta): void {
       }
     }
   }
-  if (op === 'delete') recordTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now())
+  if (op === 'delete') {
+    recordTombstone(meta.entity, meta.uid, meta.tsUtc ?? Date.now(), meta.payload)
+  }
 }
 
 /**
  * 删除的影子（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要能比 ts，
  * 同一 uid 只保留最新的那次删除。合并远端快照时也用它落影子。
+ *
+ * v5 起带 `payload`（删除瞬间的整行快照），回收站用它恢复；远端 op 的 delete 不带
+ * fields，所以那种删除的影子没有 payload，UI 会标成「无法恢复」。
  */
-export function recordTombstone(entity: SyncEntity, uid: string, tsUtc: number): void {
+export function recordTombstone(
+  entity: SyncEntity,
+  uid: string,
+  tsUtc: number,
+  payload?: Record<string, unknown>
+): void {
+  const json = payload ? JSON.stringify(payload) : null
   getDb()
     .prepare(
-      `INSERT INTO sync_tombstones (entity, uid, ts_utc) VALUES (?, ?, ?)
-       ON CONFLICT(entity, uid) DO UPDATE SET ts_utc = excluded.ts_utc
+      `INSERT INTO sync_tombstones (entity, uid, ts_utc, payload) VALUES (?, ?, ?, ?)
+       ON CONFLICT(entity, uid) DO UPDATE SET
+         ts_utc = excluded.ts_utc,
+         -- 新的一次删除没有快照时，别把旧快照冲掉
+         payload = COALESCE(excluded.payload, sync_tombstones.payload)
        WHERE excluded.ts_utc > sync_tombstones.ts_utc`
     )
-    .run(entity, uid, Math.trunc(tsUtc))
+    .run(entity, uid, Math.trunc(tsUtc), json)
 }
 
 /**
@@ -155,16 +174,19 @@ export interface SyncTombstone {
   entity: SyncEntity
   uid: string
   tsUtc: number
+  /** 删除瞬间的快照；v4 及更早的删除、以及远端来的删除都没有（恢复不出来） */
+  payload: Record<string, unknown> | null
 }
 
 export function listTombstones(): SyncTombstone[] {
   const rows = getDb()
-    .prepare('SELECT entity, uid, ts_utc FROM sync_tombstones ORDER BY ts_utc ASC')
-    .all() as unknown as { entity: string; uid: string; ts_utc: number }[]
+    .prepare('SELECT entity, uid, ts_utc, payload FROM sync_tombstones ORDER BY ts_utc ASC')
+    .all() as unknown as { entity: string; uid: string; ts_utc: number; payload: string | null }[]
   return rows.map((row) => ({
     entity: row.entity as SyncEntity,
     uid: row.uid,
-    tsUtc: toInt(row.ts_utc)
+    tsUtc: toInt(row.ts_utc),
+    payload: row.payload ? parseJson<Record<string, unknown>>(row.payload, {}) : null
   }))
 }
 

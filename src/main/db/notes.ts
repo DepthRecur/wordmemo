@@ -371,22 +371,100 @@ export function deleteNotes(ids: unknown): { removed: number } {
   if (!list.length) return { removed: 0 }
   return tx(() => {
     const d = getDb()
-    // 先捞出 uid：删完就查不到了，而其他设备要靠 delete op 才知道该删哪条
+    const marks = list.map(() => '?').join(',')
+    // 先捞出整行：删完就查不到了，而其他设备要靠 delete op 才知道该删哪条；
+    // D-05 起还要把快照写进 tombstone.payload，回收站按它恢复内容。
     const targets = d
-      .prepare(`SELECT id, uid FROM notes WHERE id IN (${list.map(() => '?').join(',')})`)
-      .all(...list) as unknown as { id: number; uid: string | null }[]
+      .prepare(
+        `SELECT id, uid, title, deck_id, note_date, tags, raw_markdown, status
+           FROM notes WHERE id IN (${marks})`
+      )
+      .all(...list) as unknown as {
+      id: number
+      uid: string | null
+      title: string
+      deck_id: number
+      note_date: string | null
+      tags: string
+      raw_markdown: string
+      status: string
+    }[]
+    // 关联的词条 uid：恢复笔记时只重建「词条还在」的那些关联
+    const linkRows = d
+      .prepare(
+        `SELECT ni.note_id AS note_id, i.uid AS item_uid
+           FROM note_items ni JOIN items i ON i.id = ni.item_id
+          WHERE ni.note_id IN (${marks})`
+      )
+      .all(...list) as unknown as { note_id: number; item_uid: string | null }[]
+    // 库 uid：本机 deck_id 换成跨设备稳定的 deck_uid
+    const deckRows = d.prepare('SELECT id, uid FROM decks').all() as unknown as {
+      id: number
+      uid: string | null
+    }[]
+    const deckUids = new Map(deckRows.map((row) => [toInt(row.id), row.uid ?? null]))
     const stmt = d.prepare('DELETE FROM notes WHERE id = ?')
     let removed = 0
     for (const id of list) removed += Number(stmt.run(id).changes ?? 0)
     // 清掉不再被任何笔记引用的词条，卡片会级联删除，避免词库留下孤儿。
     // 这些词条也要发 delete op，否则别的设备上会永远留着它们。
+    // 注意顺序：必须先删笔记（note_items 随之级联），再算孤儿——否则这条词还被
+    // 刚删掉的笔记引用着，一个孤儿都查不出来。
     const orphans = d
-      .prepare('SELECT uid FROM items WHERE id NOT IN (SELECT item_id FROM note_items)')
-      .all() as unknown as { uid: string | null }[]
+      .prepare(
+        `SELECT uid, kind, headword, pos, phonetic, meanings, collocations, examples, extra,
+                accepted_zh, learned_at
+           FROM items WHERE id NOT IN (SELECT item_id FROM note_items)`
+      )
+      .all() as unknown as {
+      uid: string | null
+      kind: string
+      headword: string
+      pos: string | null
+      phonetic: string | null
+      meanings: string
+      collocations: string
+      examples: string
+      extra: string | null
+      accepted_zh: string
+      learned_at: string | null
+    }[]
     d.prepare('DELETE FROM items WHERE id NOT IN (SELECT item_id FROM note_items)').run()
-    for (const note of targets) recordSyncOp({ entity: 'note', uid: note.uid ?? '', op: 'delete' })
+
+    for (const note of targets) {
+      recordSyncOp({
+        entity: 'note',
+        uid: note.uid ?? '',
+        op: 'delete',
+        payload: {
+          title: note.title,
+          deck_uid: deckUids.get(toInt(note.deck_id)) ?? null,
+          note_date: note.note_date,
+          tags: parseJson<string[]>(note.tags, []),
+          raw_markdown: note.raw_markdown,
+          status: note.status,
+          item_uids: linkRows.filter((row) => toInt(row.note_id) === toInt(note.id)).map((row) => row.item_uid)
+        }
+      })
+    }
     for (const item of orphans) {
-      recordSyncOp({ entity: 'item', uid: item.uid ?? '', op: 'delete' })
+      recordSyncOp({
+        entity: 'item',
+        uid: item.uid ?? '',
+        op: 'delete',
+        payload: {
+          kind: item.kind,
+          headword: item.headword,
+          pos: item.pos,
+          phonetic: item.phonetic,
+          meanings: parseJson<unknown[]>(item.meanings, []),
+          collocations: parseJson<unknown[]>(item.collocations, []),
+          examples: parseJson<unknown[]>(item.examples, []),
+          extra: item.extra,
+          accepted_zh: parseJson<string[]>(item.accepted_zh, []),
+          learned_at: item.learned_at
+        }
+      })
     }
     return { removed }
   })
