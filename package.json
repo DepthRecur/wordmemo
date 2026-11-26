@@ -1,6 +1,6 @@
 {
   "name": "wordmemo",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "WordMemo - 英语笔记背诵工具",
   "main": "./out/main/index.js",
   "author": "ymh",

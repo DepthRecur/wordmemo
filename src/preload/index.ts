@@ -135,7 +135,9 @@ const api: WordmemoApi = {
     removeDevice: (deviceId: string) => ipcRenderer.invoke('sync:removeDevice', deviceId),
     changePassphrase: (passphrase: string) =>
       ipcRenderer.invoke('sync:changePassphrase', passphrase),
-    log: () => ipcRenderer.invoke('sync:log')
+    log: () => ipcRenderer.invoke('sync:log'),
+    deleted: () => ipcRenderer.invoke('sync:deleted'),
+    restore: (entity: string, uid: string) => ipcRenderer.invoke('sync:restore', entity, uid)
   },
   system: {
     openDataDir: () => ipcRenderer.invoke('system:openDataDir'),

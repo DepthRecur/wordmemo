@@ -99,6 +99,10 @@ function migrate(database: SqliteDatabase): void {
   // 只能重建表；ai_cache 是纯缓存，重建不会影响任何用户数据
   migrateAiCacheUnique(database)
 
+  // v5（D-05）：删除影子加 payload，回收站要拿它恢复内容。
+  // 老行补 NULL = 「这条删除发生在 0.7.1 之前，恢复不出来」，不是数据损坏。
+  addColumnIfMissing(database, 'sync_tombstones', 'payload', 'TEXT')
+
   // 旧的 (headword, pos, kind) 唯一键会阻止合并不同词性/类型的重复词条
   database.exec('DROP INDEX IF EXISTS ux_items')
   dedupeItems(database)

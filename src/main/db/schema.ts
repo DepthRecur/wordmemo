@@ -1,5 +1,5 @@
 /** 当前数据库结构版本；迁移函数据此判断是否需要先备份（PRAGMA user_version） */
-export const SCHEMA_VERSION = 4
+export const SCHEMA_VERSION = 5
 
 /**
  * 「多个库」是从这个版本开始的结构版本。
@@ -151,11 +151,13 @@ CREATE INDEX IF NOT EXISTS ix_sync_ops_pending ON sync_ops(origin, pushed, seq);
 
 -- 删除的影子表（PLAN-SYNC §3.9）：合并时「删除比更早的 upsert 优先」要有 ts 可比。
 -- 一次删除一行，同 uid 保留最新的 ts；启动时清掉 30 天前的（purgeOldTombstones）。
--- 只存 uid 和 ts、不存内容，所以**不提供恢复**（D-05 方案 B）。
+-- payload 是删除瞬间的整行快照（JSON，v5 起），回收站要靠它才能把内容恢复回来；
+-- v4 及更早的行没有 payload，只能显示「无法恢复」。
 CREATE TABLE IF NOT EXISTS sync_tombstones (
   entity TEXT NOT NULL,
   uid TEXT NOT NULL,
   ts_utc INTEGER NOT NULL,
+  payload TEXT,
   PRIMARY KEY (entity, uid)
 );
 
