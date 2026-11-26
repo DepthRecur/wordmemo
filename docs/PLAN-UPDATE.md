@@ -122,7 +122,7 @@ export function quitAndInstall(): void
 | 高级选项（默认关） | 「下载并在退出时安装」：`autoDownload=false`，用户点「下载」才下；装前先 `app.removeAllListeners('window-all-closed')`，装后启 **20 秒退出看门狗**（到点 `app.exit(0)`） | 只有明确选择才承担静默安装的风险；看门狗解决"主进程挂住导致装不上" |
 | 下载完成 | 托盘气泡 + 设置页徽标 + 「立即重启安装」 | 不打断学习 |
 | 安装时机 | 用户点「立即」；或（仅高级选项）下次退出时 `autoInstallOnAppQuit = true` | 绝不静默重启 |
-| 安装前 | WAL checkpoint + 备份 DB 为 `wordmemo-pre-update-<from>-<to>.db`（保留 3 份） | 出事能退 |
+| 安装前 | ~~WAL checkpoint + 备份 DB 为 `wordmemo-pre-update-<from>-<to>.db`（保留 3 份）~~ **已废弃**（2026-11-26 核对）：定稿走「应用只下载、启动器换目录、数据不动」，所以没有「安装前」这一步；实际备份只有迁移前的 `pre-migrate` 与每日 7 份 | 出事能退（靠迁移前备份） |
 | 跳过版本 | 存**数组** `settings.updates.skippedVersions`；**手动检查时无视跳过** | 抄 Mattermost：用户主动问就必须回答，比"永久关更新"温和 |
 | 失败 | 自动检查失败完全静默（`autoUpdater.logger` 的 error 降级成 warn）；手动检查失败也只落到"无更新"+ 人话原因 | 抄 Rocket.Chat：别让日志里全是红色 error，也别用弹窗惩罚用户 |
 | 手动检查 | 设置页「检查更新」按钮，永远可用；加 45s 超时 + 一次重试 | GitHub 的 release metadata 偶发空 body，会报 `ERR_UPDATER_NO_PUBLISHED_VERSIONS` |
@@ -406,14 +406,14 @@ WordMemo-Portable/
   - 跳过版本逻辑；手动/自动检查的节流（24 小时内不重复）；
   - 兼容模式判定函数（给定 `sandbox-state.json` 内容 → 是否降级）；
   - 迁移前备份函数（给定 `user_version` 差异 → 是否备份、备份命名）。
-- **构建冒烟**（CI 里跑）：`npm run dist` 成功 + 产物清单断言（exe / blockmap / latest.yml 存在）。
-- **手动端到端清单**（每次发版照着做，5 分钟）：
+- **构建冒烟**（CI 里跑，2026-11-26 按实际 CI 修正）：`npm run dist` 成功 + **三件套断言**——`WordMemo-<ver>-portable.zip`、同名的 `.sha256`、`latest.json`；并校验 `latest.json.version` / `zip` / `sha256` 与 `.sha256` 文本、与 zip 实际哈希三方一致（`.github/workflows/release.yml`）。**不产出** `blockmap` / `latest.yml`（那是 NSIS 路线，已废弃）。
+- **手动端到端清单**（每次发版照着做，5 分钟；0.6.0 发版时做过第 2/3/4/6 条）：
   1. 装上一版 → 等待/手动检查 → 更新 → 数据完整
   2. 断网时检查更新 → 不崩、提示合理
-  3. 把 `latest.yml` 改成坏地址 → 提示"检查失败"，不影响使用
+  3. 把 `latest.json` 改成坏地址 → 提示"检查失败"，不影响使用
   4. 跳过版本 → 不再提示该版本
-  5. 卸载重装 → 数据还在
-  6. 旧版本打开新库 → 拒绝启动且能打开数据目录
+  5. 解压新版覆盖 `app\` → 数据还在（便携版没有"卸载"，卸载 = 删文件夹）
+  6. 旧版本打开新库 → 拒绝启动且能打开数据目录（**0.7 才实现**：`DatabaseTooNewError` + 弹框）
 
 ---
 
@@ -441,7 +441,7 @@ WordMemo-Portable/
 | 代码签名 | **已定**：不做，连免费 OSS 签名也不申请；SmartScreen 警告通过文档缓解 |
 | 更新组件 | **已定**：不用 `electron-updater`、不用 NSIS、不用 `latest.yml`；自己写 ~250 行启动器 |
 | 全量下载 | **已定**：接受每次 ~100 MB，不做差分 |
-| 首个可更新版本号 | **已定 `v0.3.0`**（2026-11-19，随便携版 U0 落进 `package.json`） |
+| 首个可更新版本号 | **已定 `v0.4.0`**（2026-11-26 更正：0.3.0 只是打出了 zip，`updater.ts` 随 0.4.0 落地；真正从 GitHub Release 更新成功的是 0.5.0/0.5.1） |
 | 是否保留「安装包」路线 | 留作以后可选；本版不发
 
 ## 9. 明确不做
