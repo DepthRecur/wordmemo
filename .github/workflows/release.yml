@@ -68,7 +68,7 @@ jobs:
           $notesFile = "release-notes/v$version.md"
           if (Test-Path $notesFile) {
             # latest.json 里的 notes 只放三行摘要；完整内容写进 Release 正文
-            $lines = @(Get-Content $notesFile | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } | Select-Object -First 3 | ForEach-Object { ($_ -replace '^\s*[-*]\s*', '').Trim() })
+            $lines = @(Get-Content $notesFile | Where-Object { $_.Trim() -and -not $_.Trim().StartsWith('#') } | Select-Object -First 3 | ForEach-Object { ((($_ -replace '^\s*[-*]\s*', '').Trim()) -replace '[。；;，,]\s*$', '') })
             $summary = ($lines -join '；') -replace '\s+', ' '
             if ($summary.Length -gt 300) { $summary = $summary.Substring(0, 300) }
             $env:WORDMEMO_RELEASE_NOTES = $summary
