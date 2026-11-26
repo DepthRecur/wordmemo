@@ -272,6 +272,7 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 
 ## 4. 数据与接口变更
 
+
 | 变更 | 内容 |
 |---|---|
 | 新列 | `notes.uid`、`items.uid`、`reviews.uid`、`exams.uid`（`TEXT UNIQUE`） |
@@ -281,6 +282,9 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 | 新 IPC | `sync:status`、`sync:connect({repo, pat, passphrase})`、`sync:now`、`sync:disconnect`、`sync:export`、`sync:import`、`sync:devices`、`sync:removeDevice` |
 | `settings.json` | 新增 `sync: { enabled, owner, repo, apiBase, intervalMin, lastCursor... }`（**不含 pat/passphrase**） |
 | 版本号 | 远端 `meta.json.formatVersion`；本地 `sync_state.format_version`。**旧客户端读到新版本 → 拒绝并提示升级**；绝不"尽力而为"地半懂半不懂地合并 |
+
+> **0.7 的格式变化（2026-11-26，A-06）**：考试范围的传输形态从「`deck_uid` + 本机 `noteIds/itemIds`」改成「`deck_uid` + `note_uids/item_uids`」。老键（数字 id）不再写出，读到也一律丢弃。
+> **混跑影响**：0.6.0 的设备读到 0.7 写的考试时，因为不认识 `note_uids`、又拿不到 `noteIds`，会把「指定笔记」退化成整库范围（不会写坏数据，只是范围变大）。这个窗口只在升级期出现；如果要长期混跑，需要把 `SYNC_FORMAT_VERSION` 升一版并按上面的规则**拒绝**旧端。
 
 ---
 
@@ -336,18 +340,18 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 
 ## 7. 风险与对策
 
-| 风险 | 影响 | 对策 |
-|---|---|---|
-| **「事件流 + 重放」没有开源先例** | 设计可能不成立，S0 才发现 | S0 先做 golden test；不等价就走"以卡为准 + 冲突副本"的保守路线（§5 S0 的退路） |
-| **GitHub 在国内访问不稳定** | 同步时好时坏，用户以为软件坏了 | 做成"可失败、可重试、不打断学习"：本地永远优先，同步是后台增强；`apiBase` 可改（走代理）；白送快照导出/导入作为退路 |
-| 口令忘记或太弱 | 数据永久不可解 / 等于没加密 | 强度条 + 生成短语按钮 + 连接页明确警告；不提供"找回"（零知识下提供不了） |
-| 仓库体积增长 | 克隆变慢、被 GitHub 提醒 | 增量文件 + 月度 checkpoint 保留 2 份；体积面板；>200 MB 提示 |
-| 时钟错乱导致"永远输" | 某台设备改动丢失 | `(ts, deviceId)` 断平 + 时钟夹取（±5 分钟） |
-| 旧客户端读到新格式 | 静默丢数据 | `formatVersion` 严格校验，不匹配就拒绝并提示升级；这也是必须先把自动更新做掉的原因 |
-| 自增 id 与 uid 双轨混乱 | 外键错乱 | 传输格式只用 uid；落地映射集中在一个 `mapRemoteToLocal()` 里；测试覆盖"远端 uid 已存在/本地 headword 已存在/两者都缺"三种情况 |
-| PAT 权限过大 | 用户账号风险 | 文档强制 fine-grained + 单仓库 + contents only；界面上写清楚"不要用 classic token" |
-| 用户误把仓库设成公开 | 内容泄露（虽然加密） | 连接时检查 `private === true`，公开仓库直接拒绝，并解释原因 |
-| 同步把 AI 缓存/日志带出去 | 隐私 | 白名单制：只列允许同步的表/字段；新增表默认不同步 |
+| 风险 | 影响 | 对策 | 0.7 状态（2026-11-26） |
+|---|---|---|---|
+| **「事件流 + 重放」没有开源先例** | 设计可能不成立，S0 才发现 | S0 先做 golden test；不等价就走"以卡为准 + 冲突副本"的保守路线（§5 S0 的退路） | ✅ 重放成立（`tests/replay.test.ts`），退路未启用 |
+| **GitHub 在国内访问不稳定** | 同步时好时坏，用户以为软件坏了 | 做成"可失败、可重试、不打断学习"：本地永远优先，同步是后台增强；`apiBase` 可改（走代理）；白送快照导出/导入作为退路 | 🟡 退避/抖动、快照退路都有；`apiBase` 决定不做界面（§9），改 settings.json |
+| 口令忘记或太弱 | 数据永久不可解 / 等于没加密 | 强度条 + 生成短语按钮 + 连接页明确警告；不提供"找回"（零知识下提供不了） | ✅ |
+| 仓库体积增长 | 克隆变慢、被 GitHub 提醒 | 增量文件 + 月度 checkpoint 保留 2 份；体积面板；>200 MB 提示 | ✅ 0.7 补上「保留 2 份」（D-01） |
+| 时钟错乱导致"永远输" | 某台设备改动丢失 | `(ts, deviceId)` 断平 + 时钟夹取（±5 分钟） | ✅ 0.7 补上夹取（A-03），在 ts 推导点夹、并记 `sync-clock-skew`；**未做** `(ts, deviceId)` 断平（同秒冲突仍按先到先得） |
+| 旧客户端读到新格式 | 静默丢数据 | `formatVersion` 严格校验，不匹配就拒绝并提示升级；这也是必须先把自动更新做掉的原因 | ✅ |
+| 自增 id 与 uid 双轨混乱 | 外键错乱 | 传输格式只用 uid；落地映射集中在一个 `mapRemoteToLocal()` 里；测试覆盖"远端 uid 已存在/本地 headword 已存在/两者都缺"三种情况 | 🟡 没有集中的 `mapRemoteToLocal`（映射分散在 `resolveAlias` 等函数）；0.7 补了「考试范围按 uid」（A-06），「本地 headword 已存在」仍无专项测试 |
+| PAT 权限过大 | 用户账号风险 | 文档强制 fine-grained + 单仓库 + contents only；界面上写清楚"不要用 classic token" | ✅ |
+| 用户误把仓库设成公开 | 内容泄露（虽然加密） | 连接时检查 `private === true`，公开仓库直接拒绝，并解释原因 | ✅ 有测试 |
+| 同步把 AI 缓存/日志带出去 | 隐私 | 白名单制：只列允许同步的表/字段；新增表默认不同步 | ✅ |
 
 ---
 
@@ -358,8 +362,8 @@ devices/<deviceId>/info.json.age          设备别名、最后活跃时间（�
 | 同步范围 | **已定**：只有结构化数据；**图片/文件永不同步**（不是 v1 限制，是产品边界） |
 | 快照导出/导入 | **已定**：做，作为正式功能（备份 + 换机 + 离线同步） |
 | 同步密钥形态 | **已定：用户口令**（age passphrase + `kdfVerifier` 校验 + 强度条）；不做恢复密钥 |
-| 默认同步间隔 | 建议 10 分钟 |
-| 远端布局 | 建议「每台设备一个目录」（这是本方案简单的根源） |
+| 默认同步间隔 | **已定：10 分钟**（选项 0 / 5 / 10 / 30 / 60，0 = 只手动；`types.ts` 的默认值） |
+| 远端布局 | **已定：`devices/<deviceId>/{checkpoint,ops,info}`**，另加月度归档 `checkpoint-<YYYYMM>.json.age`（D-01） |
 
 ## 9. 明确不做
 
