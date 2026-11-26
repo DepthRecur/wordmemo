@@ -1,4 +1,4 @@
-﻿import {
+import {
   applyRemoteOps,
   exportCheckpoint,
   mergeCheckpoint,
@@ -20,6 +20,7 @@ import {
   DEFAULT_SCRYPT_WORK_FACTOR
 } from './crypto'
 import { GitHubClient, SyncApiError } from './github'
+import { monthStamp, pickObsoleteArchives } from './checkpointKeep'
 
 /**
  * 同步引擎（PLAN-SYNC S2）：一次 `syncNow()` = 连上仓库 → 推本地变更 → 拉别的设备。
@@ -116,6 +117,10 @@ function cacheUpdatedAt(path: string): number {
     | undefined
   const ts = row?.updated_at ? Date.parse(row.updated_at) : NaN
   return Number.isFinite(ts) ? ts : 0
+}
+
+function cacheDrop(path: string): void {
+  getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(path)
 }
 
 function dayRange(now = new Date()): { start: number; end: number; day: string } {
@@ -433,19 +438,61 @@ export class SyncEngine {
 
   private async pushCheckpoint(deviceId: string, path: string): Promise<void> {
     const checkpoint: SyncCheckpoint = exportCheckpoint('checkpoint')
-    const file = await encryptEnvelope(
-      {
-        formatVersion: SYNC_FORMAT_VERSION,
-        kind: 'checkpoint',
-        path,
-        deviceId,
-        createdAt: checkpoint.createdAt
-      },
-      checkpoint,
-      this.settings.passphrase,
-      this.workFactor
-    )
+    const seal = (target: string): Promise<Buffer> =>
+      encryptEnvelope(
+        {
+          formatVersion: SYNC_FORMAT_VERSION,
+          kind: 'checkpoint',
+          path: target,
+          deviceId,
+          createdAt: checkpoint.createdAt
+        },
+        checkpoint,
+        this.settings.passphrase,
+        this.workFactor
+      )
+    const file = await seal(path)
     await this.putFileSafe(path, file, `sync: ${deviceId.slice(0, 6)} checkpoint`)
+    // D-01：规范路径每次都写（旧客户端只认它），另外每月留一份归档、只保留最近 2 份。
+    // 本月已经归档过就不再加密一遍（scrypt 不便宜），归档失败也不影响这次同步。
+    const archivePath = `devices/${deviceId}/checkpoint-${monthStamp(new Date())}.json.age`
+    if (!cacheGet(archivePath)?.sha) {
+      try {
+        const archive = await seal(archivePath)
+        await this.putFileSafe(archivePath, archive, `sync: ${deviceId.slice(0, 6)} checkpoint archive`)
+        await this.pruneCheckpointArchives(deviceId)
+      } catch {
+        /* 归档只是额外保险：失败不拖累本次同步 */
+      }
+    }
+  }
+
+  /** 只保留最近 2 份月度归档（D-01） */
+  private async pruneCheckpointArchives(deviceId: string): Promise<void> {
+    let entries: { name: string; type: string; path: string; sha: string }[] = []
+    try {
+      entries = (await this.client.listDir(`devices/${deviceId}`)) as unknown as {
+        name: string
+        type: string
+        path: string
+        sha: string
+      }[]
+    } catch (error) {
+      if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      return
+    }
+    const obsolete = pickObsoleteArchives(entries.filter((e) => e.type === 'file').map((e) => e.name))
+    for (const name of obsolete) {
+      const target = entries.find((e) => e.name === name)
+      if (!target) continue
+      try {
+        await this.client.deleteFile(target.path, target.sha, `sync: prune ${deviceId.slice(0, 6)}`)
+      } catch (error) {
+        if (!(error instanceof SyncApiError) || error.code !== 'not_found') throw error
+      }
+      getDb().prepare('DELETE FROM sync_files WHERE path = ?').run(target.path)
+      cacheDrop(target.path)
+    }
   }
 
   /* ------------------------------ 拉取 ------------------------------ */
