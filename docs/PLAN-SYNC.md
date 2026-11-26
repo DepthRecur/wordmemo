@@ -840,6 +840,31 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 
 
 
+### 发布 v0.7.0（2026-11-26）
+
+0.6.0 之后没有动同步格式，这次发的是「同步正确性修复 + 一批启动/界面改进」。
+记录实际过程与结果：
+
+- **发版前检查**：`typecheck` 0 错误；`npm test` 41 文件 / 324 项（313 通过 + 11 跳过，后两份是
+  真实库迁移与真仓库同步，按设计跳过）；`build` / `dist` 通过，`release/WordMemo-0.7.0-portable.zip` 142.7 MB。
+- **便携版冒烟（这次是真隔离）**：解压真 zip，带 `--data-dir=%TEMP%\wordmemo-smoke-070\data` 启动，
+  CDP 检查 7 项全 PASS（版本 0.7.0、设置页 8 个分区、同步面板渲染、高级与诊断有「导出诊断」、
+  AI 供应商有「清空回答缓存」、无控制台错误）；临时目录里出现 `wordmemo.db`，而真实
+  `%APPDATA%\WordMemo\wordmemo.db` 的 sha256 前后一致（`212A6B15729E…`）。0.6.0 那次 APPDATA
+  重定向没生效、误迁移了真库，E-04 的 `--data-dir` 就是为这件事加的，这次实测有效。
+- **合并**：`git merge --no-ff feat/0.7-backlog` 无冲突（27 个提交 / 45 文件 / +2343 / −152）；
+  merge 后 `npm test` 仍 324 项；merge commit `8c36342`。
+- **tag**：`v0.7.0`（annotated）→ `8c36342`；`master` 与 tag 都是第 1 次 push 就成功
+  （用 `.data/push-retry.ps1`，这台机器时通时断）。
+- **CI**：run `45753172826` 成功。Release `v0.7.0` 三件套齐全：`latest.json` 896 B、
+  `WordMemo-0.7.0-portable.zip` 149680139 B、`.sha256` 94 B；声明 sha256 `7f372b23…`
+  （与本地 `npm run dist` 的 `5d5e0936…` 不同是正常的：CI 重新构建，字节本来就不会一样）。
+- **核对**：`latest.json` 的 `version` / `zip` / `sha256` 与 `.sha256` 一致，Release 正文就是
+  `release-notes/v0.7.0.md` 三行。
+- **发版后小修**：CI 用「；」把三行 notes 拼起来，行尾本来就有「。」，用户会在更新提示里看到「。；」。
+  已在 `.github/workflows/release.yml` 改成先剥掉行尾标点再拼（下一版起生效；已发出的 v0.7.0
+  notes 保持原样，不影响安装）。
+
 ### 0.7 与 §3 描述不一致的地方（2026-11-26 复核）
 
 实现时有几处设计被改了或没做，**以这里为准**（§3 的正文保留为当时的设想）：
