@@ -896,22 +896,23 @@ tombstone 删除优先、同词不同 uid 走 `sync_aliases`）；S3 补的是**
 - **发版后补了一刀**：`831acfd fix(sync): make restore atomic`——恢复的四条语句包进 `tx()`，
   避免「内容插了一半、影子还在」的半成品状态。它在 tag 之后，随下一个版本发出去；
   已发布的 0.7.1 在这条路径上只会返回「恢复失败」，不会写坏数据。
-- **18:00 补验（结论：迁移链路本身没问题，是这台机器在拦打包版 exe）**
-  - 先复跑 `.data\smoke-071.ps1`：打包版照常起来，8 项全 PASS（回收站入口、无控制台错误）。
-  - 但随后同一个 exe、同一个临时目录，只要里面放着一个 **v4 库**，启动就崩（`0x80000003`，
-    STATUS_BREAKPOINT，连 `diagnostics.log` 都来不及建）；再试连**空目录**也挂住（>120s）。
-    所以不是「v4 库让 0.7.1 崩」，是这台机器在拦未签名 exe（15:37 起还有一个 dev 实例在跑，
-    Defender 也可能在扫描）。不能把这当成迁移的结论。
-  - 换成 **dev 版**（`out/` 是 0.7.1 的代码，main 完全同一份，只是没有打包壳）打开真的 v4 库：
-    备份 `backups\wordmemo-pre-migrate-v4.db` 生成、`user_version` 4 → 5、
-    `sync_tombstones` 多出 `payload` 列，`diagnostics.log` 里有 `pre-migrate-backup`；
-    迁移前后行数一致（decks=1，其余为空）。**这是生产代码路径的端到端验证。**
-  - 迁移只做 `ALTER TABLE ADD COLUMN` + 改 `user_version`，不重建任何业务表，所以内容不会被动。
-- **更新链路：没做端到端下载，改用真实 latest.json 验决策**。打包版启动不稳，跑不了「0.7.0
-  自动查到 0.7.1 → 下载 → 换目录」。用线上的 `latest.json` 喂给**同一份** `parseLatestInfo` /
-  `decideUpdate`：0.7.0 → `action: 'download'`，0.7.1 → `none` / `up-to-date`，解析出的下载地址
-  就是 `…/releases/latest/download/WordMemo-0.7.1-portable.zip`。下载、流式校验、解压、
-  启动器换目录那段代码在 0.5.1 → 0.6.0 已经实机跑通过，0.7.x 没改过它。
+- **18:00 补验：更新链路端到端跑通了**（这台机器下午启动打包版 exe 时好时坏，晚上又正常了）
+  - 解压本机 `release\WordMemo-0.7.0-portable.zip` 到临时目录，起一个本地 HTTP 源
+    （`127.0.0.1:8099` 提供 `latest.json` + 0.7.1 的 zip，sha 用本地 dist 的 `18240206…`），
+    用 `WORDMEMO_UPDATE_URL` 指过去。
+  - 0.7.0 启动后通过 CDP 调 `updates:check`：下载 → 流式 sha256 校验 → 解压到**程序根目录的
+    `app-new`**（不是 `update\app-new`，README 已改）→ `update\state.json` 写 `ready:true`，
+    提示「已下载 v0.7.1，退出后重新双击 WordMemo.exe 生效」。
+  - 退出 0.7.0 → 双击启动器：`app` 换成 0.7.1、旧版留在 `app-old`、`state.json` 回落 `ready:false`。
+  - 用换完的 `app\WordMemo.exe --data-dir=<0.7.0 用过的临时目录>` 启动：**v4 → v5 迁移成功**，
+    `backups\wordmemo-pre-migrate-v4.db` 生成，`sync_tombstones` 有 `payload`。
+    检查 → 下载 → 校验 → 解压 → 换目录 → 迁移，整条链路都真跑过了。
+- **踩了一次坑（已恢复，写下来免得再犯）**：启动器不转发命令行参数，打包版也不认
+  `WORDMEMO_DATA_DIR`（那个只对开发模式生效），所以「用启动器验证更新」那一步拉起的新版
+  打开了**真实** `%APPDATA%\WordMemo`，把真库从 v2 迁到了 v5。已从
+  `backups\wordmemo-pre-migrate-v2.db` 恢复回 v2（`notes=2 / items=14 / decks=2 / cards=42`
+  都在），删掉多出来的两份备份和 sidecar，`settings.json` 没动。README「开发」一节已写明：
+  **验证更新链路要直接启动 `app\WordMemo.exe --data-dir=…`**。
 
 ### 0.7 与 §3 描述不一致的地方（2026-11-26 复核）
 
