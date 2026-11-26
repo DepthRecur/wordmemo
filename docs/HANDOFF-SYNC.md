@@ -92,7 +92,7 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 必须记住的结论：
 
 1. **`enableFuzz: false`** 是重放成立的前提，别再打开。
-2. **`uid` 已就位**：`notes` / `items` / `reviews` / `exams` / `decks`，`SCHEMA_VERSION = 4`，迁移前自动备份；
+2. **`uid` 已就位**：`notes` / `items` / `reviews` / `exams` / `decks`，`SCHEMA_VERSION = 5`（0.7.1 起；0.6.0 时是 4），迁移前自动备份；
    新行由各自写入口生成 uid。迁移会回填老行（只加列不回填 = 没有 uid）。
 3. **写数据只走写入口**：`sync_ops` 由 `sync.ts` 的 `withSync` / `recordSyncOp` 在写事务里追加；
    在别处直接 `INSERT`/`UPDATE` 会漏队列。`cards` 的四个标志走 `cardFlag` 事件（`<item uid>:<direction>`）。
@@ -215,7 +215,7 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 
 | 路径 | 作用 / 这次要动什么 |
 |---|---|
-| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 4`；各表 uid、`sync_ops` / `sync_tombstones` / `sync_state` / `sync_aliases` |
+| `src/main/db/schema.ts` | 全表 DDL + `SCHEMA_VERSION = 4`（0.7.1 起 5）；各表 uid、`sync_ops` / `sync_tombstones` / `sync_state` / `sync_aliases` |
 | `src/main/db/connection.ts` | `openDb` / `migrate` / 可重入的 `tx` / `localIso` / `addColumnIfMissing` / `backupBeforeMigrate`；`migrateUids()`（补列 + 回填 + 唯一索引） |
 | `src/main/db/sync.ts` | **同步层入口**：`withSync` / `recordSyncOp` / `pendingSyncOps` / `recordTombstone` / `getSyncState` / uid 映射 / `cardFlagUid` / `noteItemUid` |
 | `src/main/db/checkpoint.ts` | **快照与合并引擎**：`exportCheckpoint` / `mergeCheckpoint` / `applyRemoteOp` / 加密快照；S2 的 age 加在它的读写边界上 |
@@ -323,20 +323,23 @@ S0（数据模型 + 重放）与 S1（本地队列 + 快照）**都做完并验�
 ## 9. 新会话开场提示词（直接复制）
 
 ```
-继续 WordMemo（D:\ymh\Code\tools\wordmemo）。0.7.0 已于 2026-11-26 发布（tag v0.7.0），主线在 master。
+继续 WordMemo（D:\ymh\Code\tools\wordmemo）。0.7.0 与 0.7.1 已于 2026-11-26 发布，主线在 master。
 先确认状态：git branch --show-current、git log --oneline -5。
-然后读 docs/PLAN-0.7.md（§0.2 是 0.7 的进度与断点）与 docs/BACKLOG.md（已勾选 / 明确不做的决策）。
-同步的实现记录在 docs/PLAN-SYNC.md §10（含发布记录）；这本 HANDOFF-SYNC 是同步板块的交接与避坑清单。
+然后读 docs/PLAN-0.7.md（§0.2 是进度与断点）与 docs/BACKLOG.md（已勾选 / 明确不做的决策）。
+同步的实现记录在 docs/PLAN-SYNC.md §10（含两次发布记录）；这本 HANDOFF-SYNC 是同步板块的交接与避坑清单。
 
 现状（2026-11-26）：master，typecheck 0 错误、npm test 41 文件 324 项
 （313 通过 + 11 跳过：真实库迁移、真仓库同步按设计跳过）。
-0.7.0 做了什么：同步 6 个真问题（A-01 假成功、A-03 时钟夹取、A-04 skipped 上报、
-A-06 考试范围按 uid、D-02 额度降级、D-06 作废在飞同步），A-02 旧库闸门、C-04 迁移失败提示、
-E-04 --data-dir、D-01 checkpoint 归档、D-05 删除影子 30 天清理、B-02 清 AI 缓存、
-C-02 删库刷新、C-05② 考试标签、F-04 日志轮转+导出诊断、F-06 粘贴图片。
-数据库仍是 v4，没有迁移。
+0.7.0：同步 6 个真问题（A-01 假成功、A-03 时钟夹取、A-04 skipped 上报、A-06 考试范围按 uid、
+D-02 额度降级、D-06 作废在飞同步）+ A-02 旧库闸门、C-04 迁移失败提示、E-04 --data-dir、
+D-01 checkpoint 归档、D-05 影子 30 天清理、B-02 清 AI 缓存、C-02 删库刷新、C-05② 考试标签、
+F-04 日志轮转+导出诊断、F-06 粘贴图片。数据库仍是 v4。
+0.7.1：D-05 回收站——`sync_tombstones.payload` 存删除快照、SCHEMA_VERSION 4→5、
+设置 → 同步 →「最近删除」可恢复 30 天内的内容（复习进度不回来；只恢复本机删除）。
+这是同步板块第一次带迁移发版：首次启动先备份再迁移，之后旧版会拒绝打开（version 闸门）。
 
-下一步候选：D-05 的回收站（要升 schema v5 + payload 快照）、D-08 的 4 张截图（用户补）。
+下一步：D-08 的 4 张截图（用户补）；0.7.0 → 0.7.1 的实机更新链路还没验（这台机器 13:15 后
+启动未签名 exe 会被拦，18:00 用本地 HTTP 源再试）。
 注意：这台机器到 github.com:443 时通时断，push 用 .data/push-retry.ps1。
 硬约束见 §8；用户可见文案按 docs/MESSAGES.md 定级。
 每做完一步在 PLAN-SYNC §10 或 PLAN-0.7 §0.2 记一笔，git commit -s。
@@ -346,7 +349,7 @@ C-02 删库刷新、C-05② 考试标签、F-04 日志轮转+导出诊断、F-06
 
 ## 10. 交接自检（新会话花两分钟确认）
 
-- [ ] `git branch --show-current` → `master`（0.7.0 已合入；下一轮改进另开分支）
+- [ ] `git branch --show-current` → `master`（0.7.0 / 0.7.1 都已合入；下一轮改进另开分支）
 - [ ] `npm test` → 以实际输出为准（2026-11-26 基线：41 文件 324 项，313 通过 + 11 跳过）
 - [ ] `npm run typecheck` → 0 错误
 - [ ] `git log --oneline -8` → 能看到 `feat(sync): manage sync devices`、
@@ -358,9 +361,10 @@ C-02 删库刷新、C-05② 考试标签、F-04 日志轮转+导出诊断、F-06
 - [ ] `grep -n "class SyncEngine" src/main/sync/engine.ts` → 在
 - [ ] `grep -n "changePassphrase\|removeDevice" src/main/sync/engine.ts` → 都在
 - [ ] 开库能查到 `sync_ops` / `sync_tombstones` / `sync_aliases` / `sync_state` / `sync_files` / `sync_devices` / `sync_runs`
-- [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码
-- [ ] `package.json` 版本是 `0.7.0`，`release-notes/v0.7.0.md` 存在
+- [ ] 设置页能打开「同步」一节（`SyncPanel.tsx`），里面有设备、日志、换密码、**回收站（最近删除）**
+- [ ] `package.json` 版本是 `0.7.1`，`release-notes/v0.7.1.md` 存在
 - [ ] `grep -n "purgeOldTombstones" src/main/db/sync.ts src/main/index.ts` → 都在（D-05 的 30 天清理）
+- [ ] `grep -n "payload" src/main/db/schema.ts` → `sync_tombstones` 有 payload（v5），`grep -n "restoreDeleted" src/main/db/trash.ts` 在
 - [ ] 知道 `.data/` 里有本机辅助脚本（CDP 驱动、发版重试、查 CI、`sync-e2e.ps1`、`sync-ui-smoke.mjs`），已被 gitignore
 
 
